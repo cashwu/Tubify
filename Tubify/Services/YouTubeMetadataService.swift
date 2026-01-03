@@ -217,6 +217,11 @@ actor YouTubeMetadataService {
 
     /// 從 URL 提取影片 ID
     func extractVideoId(from url: String) -> String? {
+        Self.extractVideoIdSync(from: url)
+    }
+
+    /// 從 URL 提取影片 ID（靜態方法，不需要 actor 隔離）
+    static func extractVideoIdSync(from url: String) -> String? {
         // 支援多種 YouTube URL 格式
         let patterns = [
             #"(?:v=|\/)([\w-]{11})(?:\?|&|$)"#,
@@ -233,5 +238,10 @@ actor YouTubeMetadataService {
         }
 
         return nil
+    }
+
+    /// 檢查 URL 是否為播放清單（靜態方法，不需要 actor 隔離）
+    static func isPlaylistSync(url: String) -> Bool {
+        url.contains("list=") || url.contains("/playlist")
     }
 }

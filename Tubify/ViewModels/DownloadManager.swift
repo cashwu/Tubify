@@ -66,63 +66,68 @@ class DownloadManager {
             return
         }
 
-        Task {
-            await processURL(urlString)
-        }
-    }
+        // 使用靜態方法檢查是否為播放清單（不需要 await）
+        let isPlaylist = YouTubeMetadataService.isPlaylistSync(url: urlString)
 
-    /// 處理 URL（單一影片或播放清單）
-    private func processURL(_ urlString: String) async {
-        let metadataService = YouTubeMetadataService.shared
+        if isPlaylist {
+            // 播放清單：先建立佔位任務，然後異步展開
+            let task = DownloadTask(url: urlString, title: "載入播放清單中...")
+            task.status = .fetchingInfo
+            tasks.append(task)
+            PersistenceService.shared.saveTasks(tasks)
 
-        if await metadataService.isPlaylist(url: urlString) {
-            // 處理播放清單
-            await processPlaylist(urlString)
+            Task {
+                await expandPlaylist(placeholderTask: task, urlString: urlString)
+            }
         } else {
-            // 處理單一影片
-            await processSingleVideo(urlString)
+            // 單一影片：先同步建立任務並加入列表
+            let task = DownloadTask(url: urlString)
+            task.status = .fetchingInfo
+
+            // 使用靜態方法提取 video ID 來獲取縮圖（不需要 await）
+            if let videoId = YouTubeMetadataService.extractVideoIdSync(from: urlString) {
+                task.thumbnailURL = "https://i.ytimg.com/vi/\(videoId)/mqdefault.jpg"
+            }
+
+            tasks.append(task)
+            PersistenceService.shared.saveTasks(tasks)
+
+            // 異步獲取資訊（不阻塞新 URL 的加入）
+            Task {
+                await fetchMetadataForTask(task)
+            }
         }
-
-        // 儲存任務
-        PersistenceService.shared.saveTasks(tasks)
-
-        // 開始下載
-        startDownloadQueue()
     }
 
-    /// 處理單一影片
-    private func processSingleVideo(_ urlString: String) async {
-        let task = DownloadTask(url: urlString)
-        tasks.append(task)
-
-        task.status = .fetchingInfo
-
-        // 從下載命令中提取 cookies 參數
-        let cookiesArgs = await YouTubeMetadataService.shared.extractCookiesArguments(from: downloadCommand)
+    /// 獲取單一影片的元資料
+    private func fetchMetadataForTask(_ task: DownloadTask) async {
+        let metadataService = YouTubeMetadataService.shared
+        let cookiesArgs = await metadataService.extractCookiesArguments(from: downloadCommand)
 
         do {
-            let videoInfo = try await YouTubeMetadataService.shared.fetchVideoInfo(url: urlString, cookiesArguments: cookiesArgs)
+            let videoInfo = try await metadataService.fetchVideoInfo(url: task.url, cookiesArguments: cookiesArgs)
             task.title = videoInfo.title
             task.thumbnailURL = videoInfo.thumbnail
             task.status = .pending
         } catch {
             task.title = "無法獲取標題"
             task.status = .pending
-
-            // 嘗試從 URL 提取 video ID 來獲取縮圖
-            if let videoId = await YouTubeMetadataService.shared.extractVideoId(from: urlString) {
-                task.thumbnailURL = await YouTubeMetadataService.shared.getThumbnailURL(videoId: videoId)
-            }
         }
+
+        PersistenceService.shared.saveTasks(tasks)
+        startDownloadQueue()
     }
 
-    /// 處理播放清單
-    private func processPlaylist(_ urlString: String) async {
-        // 從下載命令中提取 cookies 參數
-        let cookiesArgs = await YouTubeMetadataService.shared.extractCookiesArguments(from: downloadCommand)
+    /// 展開播放清單
+    private func expandPlaylist(placeholderTask: DownloadTask, urlString: String) async {
+        let metadataService = YouTubeMetadataService.shared
+        let cookiesArgs = await metadataService.extractCookiesArguments(from: downloadCommand)
 
         do {
-            let videos = try await YouTubeMetadataService.shared.fetchPlaylistInfo(url: urlString, cookiesArguments: cookiesArgs)
+            let videos = try await metadataService.fetchPlaylistInfo(url: urlString, cookiesArguments: cookiesArgs)
+
+            // 移除佔位任務
+            tasks.removeAll { $0.id == placeholderTask.id }
 
             for video in videos {
                 // 檢查是否已存在
@@ -142,10 +147,13 @@ class DownloadManager {
         } catch {
             TubifyLogger.download.error("處理播放清單失敗: \(error.localizedDescription)")
 
-            // 即使獲取播放清單失敗，也新增一個任務
-            let task = DownloadTask(url: urlString, title: "播放清單（無法獲取詳細資訊）")
-            tasks.append(task)
+            // 播放清單獲取失敗，將佔位任務轉為可下載狀態
+            placeholderTask.title = "播放清單（無法獲取詳細資訊）"
+            placeholderTask.status = .pending
         }
+
+        PersistenceService.shared.saveTasks(tasks)
+        startDownloadQueue()
     }
 
     /// 開始下載佇列
