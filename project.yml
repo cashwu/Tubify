@@ -37,3 +37,17 @@ targets:
           - "@executable_path/../Frameworks"
     entitlements:
       path: Tubify/Tubify.entitlements
+
+  TubifyTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: TubifyTests
+    dependencies:
+      - target: Tubify
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.tubify.tests
+        PRODUCT_NAME: TubifyTests
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Tubify.app/Contents/MacOS/Tubify"
+        BUNDLE_LOADER: "$(TEST_HOST)"
