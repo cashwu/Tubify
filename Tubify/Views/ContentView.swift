@@ -42,11 +42,9 @@ struct ContentView: View {
         .sheet(isPresented: $showingSettings) {
             SettingsView()
         }
-        .onPasteCommand(of: [.url, .plainText]) { providers in
-            handlePaste(providers: providers)
-        }
         .onAppear {
             checkPermissions()
+            setupPasteShortcut()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             checkPermissions()
@@ -89,6 +87,25 @@ struct ContentView: View {
         let usesSafariCookies = PermissionService.shared.commandUsesSafariCookies(command)
         let hasAccess = PermissionService.shared.hasFullDiskAccess()
         needsFullDiskAccess = usesSafariCookies && !hasAccess
+    }
+
+    // MARK: - 貼上快捷鍵設定
+
+    private func setupPasteShortcut() {
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            // 檢查是否為 ⌘V
+            if event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == "v" {
+                pasteFromClipboard()
+                return nil // 消耗此事件
+            }
+            return event
+        }
+    }
+
+    /// 從剪貼簿貼上
+    private func pasteFromClipboard() {
+        guard let string = NSPasteboard.general.string(forType: .string) else { return }
+        processTextInput(string)
     }
 
     // MARK: - 任務列表
@@ -155,6 +172,7 @@ struct ContentView: View {
                 Image(systemName: "gearshape")
             }
             .buttonStyle(.borderless)
+            .focusable(false)
             .help("設定")
 
             Spacer()
@@ -174,6 +192,7 @@ struct ContentView: View {
                     Image(systemName: "checkmark.circle")
                 }
                 .buttonStyle(.borderless)
+                .focusable(false)
                 .help("清除已完成")
             }
 
@@ -185,6 +204,7 @@ struct ContentView: View {
                     Image(systemName: "trash")
                 }
                 .buttonStyle(.borderless)
+                .focusable(false)
                 .help("清除全部")
             }
         }
@@ -218,41 +238,6 @@ struct ContentView: View {
         }
 
         return parts.isEmpty ? "\(total) 個任務" : parts.joined(separator: " · ")
-    }
-
-    // MARK: - 貼上處理
-
-    private func handlePaste(providers: [NSItemProvider]) {
-        for provider in providers {
-            // 嘗試載入 URL
-            if provider.hasItemConformingToTypeIdentifier(UTType.url.identifier) {
-                provider.loadItem(forTypeIdentifier: UTType.url.identifier) { item, _ in
-                    if let url = item as? URL {
-                        Task { @MainActor in
-                            downloadManager.addURL(url.absoluteString)
-                        }
-                    } else if let data = item as? Data, let url = URL(dataRepresentation: data, relativeTo: nil) {
-                        Task { @MainActor in
-                            downloadManager.addURL(url.absoluteString)
-                        }
-                    }
-                }
-            }
-            // 嘗試載入文字
-            else if provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier) {
-                provider.loadItem(forTypeIdentifier: UTType.plainText.identifier) { item, _ in
-                    if let text = item as? String {
-                        Task { @MainActor in
-                            processTextInput(text)
-                        }
-                    } else if let data = item as? Data, let text = String(data: data, encoding: .utf8) {
-                        Task { @MainActor in
-                            processTextInput(text)
-                        }
-                    }
-                }
-            }
-        }
     }
 
     // MARK: - 拖放處理
