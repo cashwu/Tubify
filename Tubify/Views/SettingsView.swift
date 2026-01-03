@@ -119,6 +119,7 @@ struct SettingsView: View {
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 60)
                             .multilineTextAlignment(.trailing)
+                            .font(.system(size: 18))
 
                         Text("秒")
                             .foregroundStyle(.secondary)
