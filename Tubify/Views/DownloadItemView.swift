@@ -9,6 +9,12 @@ struct DownloadItemView: View {
 
     @State private var isHovering = false
 
+    /// 檢查是否為權限相關錯誤
+    private var isPermissionError: Bool {
+        guard let error = task.errorMessage else { return false }
+        return error.contains("Operation not permitted") || error.contains("Permission denied")
+    }
+
     var body: some View {
         HStack(spacing: 12) {
             // 縮圖
@@ -124,7 +130,16 @@ struct DownloadItemView: View {
             case .failed:
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(.red)
-                Text("失敗")
+                if isPermissionError {
+                    Text("權限不足")
+                    Button("前往設定") {
+                        PermissionService.shared.openFullDiskAccessSettings()
+                    }
+                    .buttonStyle(.link)
+                    .font(.caption)
+                } else {
+                    Text("失敗")
+                }
             case .cancelled:
                 Image(systemName: "xmark.circle.fill")
                     .foregroundStyle(.orange)

@@ -15,6 +15,7 @@ struct SettingsView: View {
 
     @State private var showingFolderPicker = false
     @State private var ytdlpStatus: YTDLPStatus = .checking
+    @State private var hasFullDiskAccess: Bool = false
 
     enum YTDLPStatus {
         case checking
@@ -43,15 +44,26 @@ struct SettingsView: View {
 
             // 設定內容
             Form {
-                // yt-dlp 狀態
+                // 系統狀態
                 Section {
                     HStack {
                         Text("yt-dlp 狀態")
                         Spacer()
                         ytdlpStatusView
                     }
+
+                    HStack {
+                        Text("完整磁碟存取")
+                        Spacer()
+                        fullDiskAccessStatusView
+                    }
                 } header: {
                     Text("系統")
+                } footer: {
+                    if !hasFullDiskAccess && PermissionService.shared.commandUsesSafariCookies(downloadCommand) {
+                        Text("使用 Safari cookies 需要完整磁碟存取權限")
+                            .foregroundStyle(.orange)
+                    }
                 }
 
                 // 下載設定
@@ -144,6 +156,11 @@ struct SettingsView: View {
         .background(Color(nsColor: .windowBackgroundColor))
         .task {
             await checkYTDLP()
+            checkFullDiskAccess()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            // 當 App 重新獲得焦點時，重新檢查權限（用戶可能剛從系統設定回來）
+            checkFullDiskAccess()
         }
     }
 
@@ -174,6 +191,29 @@ struct SettingsView: View {
                     .foregroundStyle(.red)
                 Text("未安裝")
                     .foregroundStyle(.red)
+            }
+        }
+    }
+
+    // MARK: - 完整磁碟存取狀態視圖
+
+    @ViewBuilder
+    private var fullDiskAccessStatusView: some View {
+        if hasFullDiskAccess {
+            HStack(spacing: 4) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                Text("已授權")
+                    .foregroundStyle(.secondary)
+            }
+        } else {
+            HStack(spacing: 4) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Button("前往授權") {
+                    PermissionService.shared.openFullDiskAccessSettings()
+                }
+                .buttonStyle(.link)
             }
         }
     }
@@ -219,6 +259,12 @@ struct SettingsView: View {
         } else {
             ytdlpStatus = .notFound
         }
+    }
+
+    // MARK: - 檢查完整磁碟存取權限
+
+    private func checkFullDiskAccess() {
+        hasFullDiskAccess = PermissionService.shared.hasFullDiskAccess()
     }
 
     // MARK: - 打開日誌資料夾

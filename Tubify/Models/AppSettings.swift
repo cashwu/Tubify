@@ -9,7 +9,9 @@ enum AppSettingsKeys {
 
 /// App 預設設定值
 enum AppSettingsDefaults {
-    static let downloadCommand = "yt-dlp -f mp4 --cookies-from-browser safari \"$youtubeUrl\""
+    // 使用 Safari cookies 下載（需要完整磁碟存取權限）
+    // 使用 -S ext:mp4 以獲得最佳 mp4 品質
+    static let downloadCommand = "yt-dlp -S ext:mp4 --cookies-from-browser safari \"$youtubeUrl\""
     static let downloadFolder = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first?.path ?? "~/Downloads"
     static let downloadInterval: Double = 2.0 // 秒
 }
