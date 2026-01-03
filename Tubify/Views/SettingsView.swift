@@ -31,8 +31,7 @@ struct SettingsView: View {
             // 標題
             HStack {
                 Text("設定")
-                    .font(.title2)
-                    .fontWeight(.semibold)
+                    .font(.system(size: 33, weight: .semibold))
 
                 Spacer()
 
@@ -65,6 +64,7 @@ struct SettingsView: View {
                 } footer: {
                     if !hasFullDiskAccess && PermissionService.shared.commandUsesSafariCookies(downloadCommand) {
                         Text("使用 Safari cookies 需要完整磁碟存取權限")
+                            .font(.system(size: 18))
                             .foregroundStyle(.orange)
                     }
                 }
@@ -86,14 +86,14 @@ struct SettingsView: View {
                             }
 
                         Text("使用 $youtubeUrl 作為 URL 佔位符")
-                            .font(.caption)
+                            .font(.system(size: 18))
                             .foregroundStyle(.secondary)
 
                         Button("重置為預設值") {
                             downloadCommand = AppSettingsDefaults.downloadCommand
                         }
                         .buttonStyle(.link)
-                        .font(.caption)
+                        .font(.system(size: 18))
                     }
 
                     // 下載資料夾
@@ -125,7 +125,7 @@ struct SettingsView: View {
                     }
 
                     Text("每個下載完成後，等待指定秒數再開始下一個")
-                        .font(.caption)
+                        .font(.system(size: 18))
                         .foregroundStyle(.secondary)
 
                     // 同時下載數量
@@ -143,7 +143,7 @@ struct SettingsView: View {
                     }
 
                     Text("同時進行下載的最大任務數量")
-                        .font(.caption)
+                        .font(.system(size: 18))
                         .foregroundStyle(.secondary)
                 } header: {
                     Text("下載")
@@ -171,6 +171,7 @@ struct SettingsView: View {
                 }
             }
             .formStyle(.grouped)
+            .font(.system(size: 20)) // Apply base font size to form
             .scrollContentBackground(.hidden)
         }
         .frame(width: 500, height: 500)
@@ -218,6 +219,7 @@ struct SettingsView: View {
                     }
                 }
                 .buttonStyle(.link)
+                .font(.system(size: 18))
             }
         }
     }
@@ -241,6 +243,7 @@ struct SettingsView: View {
                     PermissionService.shared.openFullDiskAccessSettings()
                 }
                 .buttonStyle(.link)
+                .font(.system(size: 18))
             }
         }
     }

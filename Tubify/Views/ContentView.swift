@@ -79,14 +79,14 @@ struct ContentView: View {
     private var permissionBanner: some View {
         HStack(spacing: 12) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.title2)
+                .font(.system(size: 33))
                 .foregroundStyle(.orange)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("完整磁碟存取")
-                    .font(.headline)
+                    .font(.system(size: 26, weight: .bold))
                 Text("使用 Safari cookies 需要完整磁碟存取權限")
-                    .font(.caption)
+                    .font(.system(size: 18))
                     .foregroundStyle(.secondary)
             }
 
@@ -96,7 +96,8 @@ struct ContentView: View {
                 PermissionService.shared.openFullDiskAccessSettings()
             }
             .buttonStyle(.borderedProminent)
-            .controlSize(.small)
+            .controlSize(.large)
+            .font(.system(size: 18))
         }
         .padding(12)
         .background(Color(nsColor: .controlBackgroundColor))
@@ -107,14 +108,14 @@ struct ContentView: View {
     private var ytdlpBanner: some View {
         HStack(spacing: 12) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.title2)
+                .font(.system(size: 33))
                 .foregroundStyle(.red)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("yt-dlp 未安裝")
-                    .font(.headline)
+                    .font(.system(size: 26, weight: .bold))
                 Text("需要安裝 yt-dlp 才能下載影片")
-                    .font(.caption)
+                    .font(.system(size: 18))
                     .foregroundStyle(.secondary)
             }
 
@@ -126,7 +127,8 @@ struct ContentView: View {
                 }
             }
             .buttonStyle(.borderedProminent)
-            .controlSize(.small)
+            .controlSize(.large)
+            .font(.system(size: 18))
         }
         .padding(12)
         .background(Color(nsColor: .controlBackgroundColor))
@@ -207,11 +209,11 @@ struct ContentView: View {
 
             VStack(spacing: 12) {
                 Image(systemName: "arrow.down.circle.fill")
-                    .font(.system(size: 48))
+                    .font(.system(size: 72))
                     .foregroundStyle(Color.accentColor)
 
                 Text("放開以新增下載")
-                    .font(.title2)
+                    .font(.system(size: 33))
                     .foregroundStyle(Color.accentColor)
             }
         }
@@ -230,6 +232,7 @@ struct ContentView: View {
             // 設定按鈕
             Button(action: { showingSettings = true }) {
                 Image(systemName: "gearshape")
+                    .font(.system(size: 21))
             }
             .buttonStyle(.borderless)
             .focusable(false)
@@ -239,7 +242,7 @@ struct ContentView: View {
 
             // 任務計數
             Text(taskCountText)
-                .font(.caption)
+                .font(.system(size: 18))
                 .foregroundStyle(.secondary)
 
             Spacer()
@@ -250,6 +253,7 @@ struct ContentView: View {
                     downloadManager.clearCompletedTasks()
                 }) {
                     Image(systemName: "checkmark.circle")
+                        .font(.system(size: 21))
                 }
                 .buttonStyle(.borderless)
                 .focusable(false)
@@ -262,6 +266,7 @@ struct ContentView: View {
                     downloadManager.clearAllTasks()
                 }) {
                     Image(systemName: "trash")
+                        .font(.system(size: 21))
                 }
                 .buttonStyle(.borderless)
                 .focusable(false)
