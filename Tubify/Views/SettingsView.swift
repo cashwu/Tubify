@@ -199,6 +199,7 @@ struct SettingsView: View {
         .background(Color(nsColor: .windowBackgroundColor))
         .task {
             await checkYTDLP()
+            await checkFFmpeg()
             checkFullDiskAccess()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -241,6 +242,37 @@ struct SettingsView: View {
                 }
                 .buttonStyle(.link)
                 .font(.system(size: 18))
+            }
+        }
+    }
+
+    // MARK: - ffmpeg 狀態視圖
+
+    @ViewBuilder
+    private var ffmpegStatusView: some View {
+        switch ffmpegStatus {
+        case .checking:
+            HStack(spacing: 4) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("檢查中...")
+                    .foregroundStyle(.secondary)
+            }
+        case .found(let path):
+            HStack(spacing: 4) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                Text(path)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        case .notFound:
+            HStack(spacing: 4) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text("未安裝（選用）")
+                    .foregroundStyle(.orange)
             }
         }
     }
@@ -310,6 +342,31 @@ struct SettingsView: View {
         } else {
             ytdlpStatus = .notFound
         }
+    }
+
+    // MARK: - 檢查 ffmpeg
+
+    private func checkFFmpeg() async {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
+        process.arguments = ["ffmpeg"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+
+            if process.terminationStatus == 0 {
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                if let path = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty {
+                    ffmpegStatus = .found(path)
+                    return
+                }
+            }
+        } catch {}
+
+        ffmpegStatus = .notFound
     }
 
     // MARK: - 檢查完整磁碟存取權限
