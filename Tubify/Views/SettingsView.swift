@@ -13,6 +13,9 @@ struct SettingsView: View {
     @AppStorage(AppSettingsKeys.downloadInterval)
     private var downloadInterval: Double = AppSettingsDefaults.downloadInterval
 
+    @AppStorage(AppSettingsKeys.maxConcurrentDownloads)
+    private var maxConcurrentDownloads: Int = AppSettingsDefaults.maxConcurrentDownloads
+
     @State private var showingFolderPicker = false
     @State private var ytdlpStatus: YTDLPStatus = .checking
     @State private var hasFullDiskAccess: Bool = false
@@ -122,6 +125,24 @@ struct SettingsView: View {
                     }
 
                     Text("每個下載完成後，等待指定秒數再開始下一個")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    // 同時下載數量
+                    HStack {
+                        Text("同時下載數量")
+                        Spacer()
+
+                        Picker("", selection: $maxConcurrentDownloads) {
+                            ForEach(1...5, id: \.self) { count in
+                                Text("\(count)").tag(count)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .frame(width: 80)
+                    }
+
+                    Text("同時進行下載的最大任務數量")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } header: {

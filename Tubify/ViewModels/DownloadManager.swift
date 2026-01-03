@@ -13,8 +13,8 @@ class DownloadManager {
     /// 是否正在下載
     var isDownloading: Bool = false
 
-    /// 目前下載中的任務
-    var currentTask: DownloadTask?
+    /// 目前下載中的任務（支援同時多個）
+    var currentTasks: Set<UUID> = []
 
     /// 設定（使用 UserDefaults 直接讀取，避免與 @Observable 衝突）
     var downloadCommand: String {
@@ -30,6 +30,14 @@ class DownloadManager {
     var downloadInterval: Double {
         get { UserDefaults.standard.double(forKey: AppSettingsKeys.downloadInterval).nonZeroOrDefault(AppSettingsDefaults.downloadInterval) }
         set { UserDefaults.standard.set(newValue, forKey: AppSettingsKeys.downloadInterval) }
+    }
+
+    var maxConcurrentDownloads: Int {
+        get {
+            let value = UserDefaults.standard.integer(forKey: AppSettingsKeys.maxConcurrentDownloads).nonZeroOrDefault(AppSettingsDefaults.maxConcurrentDownloads)
+            return min(max(value, 1), 5) // 限制在 1-5 之間
+        }
+        set { UserDefaults.standard.set(min(max(newValue, 1), 5), forKey: AppSettingsKeys.maxConcurrentDownloads) }
     }
 
     private var downloadTask: Task<Void, Never>?
@@ -147,17 +155,48 @@ class DownloadManager {
     private func processQueue() async {
         isDownloading = true
 
-        while let task = tasks.first(where: { $0.status == .pending }) {
-            currentTask = task
-            await downloadTask(task)
+        while tasks.contains(where: { $0.status == .pending }) || !currentTasks.isEmpty {
+            // 找出可以開始的任務數量
+            let availableSlots = maxConcurrentDownloads - currentTasks.count
 
-            // 等待間隔時間
-            if tasks.contains(where: { $0.status == .pending }) {
-                try? await Task.sleep(for: .seconds(downloadInterval))
+            if availableSlots > 0 {
+                // 取得待處理的任務
+                let pendingTasks = tasks.filter { $0.status == .pending }.prefix(availableSlots)
+
+                for task in pendingTasks {
+                    currentTasks.insert(task.id)
+
+                    // 啟動下載任務（不等待完成）
+                    Task {
+                        await self.downloadSingleTask(task)
+
+                        // 下載完成後從 currentTasks 移除
+                        await MainActor.run {
+                            self.currentTasks.remove(task.id)
+                        }
+
+                        // 等待間隔時間後觸發下一個
+                        try? await Task.sleep(for: .seconds(self.downloadInterval))
+
+                        // 繼續處理佇列
+                        await MainActor.run {
+                            if self.downloadTask == nil && self.tasks.contains(where: { $0.status == .pending }) {
+                                self.startDownloadQueue()
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 等待一段時間後再檢查
+            try? await Task.sleep(for: .milliseconds(500))
+
+            // 如果沒有正在下載的任務且沒有待處理的任務，退出循環
+            if currentTasks.isEmpty && !tasks.contains(where: { $0.status == .pending }) {
+                break
             }
         }
 
-        currentTask = nil
         isDownloading = false
         downloadTask = nil
 
@@ -169,7 +208,7 @@ class DownloadManager {
     }
 
     /// 下載單一任務
-    private func downloadTask(_ task: DownloadTask) async {
+    private func downloadSingleTask(_ task: DownloadTask) async {
         task.status = .downloading
         task.progress = 0
 
