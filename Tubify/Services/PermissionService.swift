@@ -7,14 +7,34 @@ class PermissionService {
 
     private init() {}
 
-    /// Safari cookies 路徑
-    private var safariCookiesPath: String {
-        NSHomeDirectory() + "/Library/Containers/com.apple.Safari/Data/Library/Cookies"
+    /// Safari cookies 檔案路徑
+    private var safariCookiesFile: String {
+        NSHomeDirectory() + "/Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies"
     }
 
-    /// 檢測是否有完整磁碟存取權限（透過嘗試讀取 Safari cookies 目錄）
+    /// 檢測是否有完整磁碟存取權限（透過嘗試實際讀取 Safari cookies 檔案）
     func hasFullDiskAccess() -> Bool {
-        return FileManager.default.isReadableFile(atPath: safariCookiesPath)
+        let fileURL = URL(fileURLWithPath: safariCookiesFile)
+
+        // 嘗試打開檔案來確認權限
+        do {
+            let fileHandle = try FileHandle(forReadingFrom: fileURL)
+            fileHandle.closeFile()
+            return true
+        } catch {
+            // 如果是檔案不存在，也視為有權限（Safari 可能尚未建立 cookies）
+            if (error as NSError).code == NSFileReadNoSuchFileError {
+                // 嘗試檢查目錄是否可存取
+                let directoryPath = (safariCookiesFile as NSString).deletingLastPathComponent
+                do {
+                    _ = try FileManager.default.contentsOfDirectory(atPath: directoryPath)
+                    return true
+                } catch {
+                    return false
+                }
+            }
+            return false
+        }
     }
 
     /// 開啟系統設定 - 完整磁碟存取
