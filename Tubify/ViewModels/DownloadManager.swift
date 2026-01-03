@@ -97,8 +97,11 @@ class DownloadManager {
 
         task.status = .fetchingInfo
 
+        // 從下載命令中提取 cookies 參數
+        let cookiesArgs = await YouTubeMetadataService.shared.extractCookiesArguments(from: downloadCommand)
+
         do {
-            let videoInfo = try await YouTubeMetadataService.shared.fetchVideoInfo(url: urlString)
+            let videoInfo = try await YouTubeMetadataService.shared.fetchVideoInfo(url: urlString, cookiesArguments: cookiesArgs)
             task.title = videoInfo.title
             task.thumbnailURL = videoInfo.thumbnail
             task.status = .pending
@@ -115,8 +118,11 @@ class DownloadManager {
 
     /// 處理播放清單
     private func processPlaylist(_ urlString: String) async {
+        // 從下載命令中提取 cookies 參數
+        let cookiesArgs = await YouTubeMetadataService.shared.extractCookiesArguments(from: downloadCommand)
+
         do {
-            let videos = try await YouTubeMetadataService.shared.fetchPlaylistInfo(url: urlString)
+            let videos = try await YouTubeMetadataService.shared.fetchPlaylistInfo(url: urlString, cookiesArguments: cookiesArgs)
 
             for video in videos {
                 // 檢查是否已存在
@@ -229,6 +235,14 @@ class DownloadManager {
             task.progress = 1.0
             task.outputPath = outputPath
             task.completedAt = Date()
+
+            // 如果標題獲取失敗，從檔案名稱提取標題
+            if task.title == "無法獲取標題" || task.title.isEmpty {
+                let fileName = URL(fileURLWithPath: outputPath).deletingPathExtension().lastPathComponent
+                if !fileName.isEmpty {
+                    task.title = fileName
+                }
+            }
 
             // 發送通知
             NotificationService.shared.sendDownloadCompleteNotification(

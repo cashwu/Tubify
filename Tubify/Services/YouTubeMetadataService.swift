@@ -71,7 +71,7 @@ actor YouTubeMetadataService {
     }
 
     /// 獲取單一影片資訊
-    func fetchVideoInfo(url: String) async throws -> VideoInfo {
+    func fetchVideoInfo(url: String, cookiesArguments: [String] = []) async throws -> VideoInfo {
         guard let ytdlpPath = await YTDLPService.shared.findYTDLPPath() else {
             throw MetadataError.ytdlpNotFound
         }
@@ -80,7 +80,7 @@ actor YouTubeMetadataService {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: ytdlpPath)
-        process.arguments = ["-J", "--no-playlist", url]
+        process.arguments = ["-J", "--no-playlist"] + cookiesArguments + [url]
 
         let pipe = Pipe()
         let errorPipe = Pipe()
@@ -114,7 +114,7 @@ actor YouTubeMetadataService {
     }
 
     /// 獲取播放清單資訊
-    func fetchPlaylistInfo(url: String) async throws -> [VideoInfo] {
+    func fetchPlaylistInfo(url: String, cookiesArguments: [String] = []) async throws -> [VideoInfo] {
         guard let ytdlpPath = await YTDLPService.shared.findYTDLPPath() else {
             throw MetadataError.ytdlpNotFound
         }
@@ -123,7 +123,7 @@ actor YouTubeMetadataService {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: ytdlpPath)
-        process.arguments = ["--flat-playlist", "-J", url]
+        process.arguments = ["--flat-playlist", "-J"] + cookiesArguments + [url]
 
         let pipe = Pipe()
         let errorPipe = Pipe()
@@ -176,6 +176,43 @@ actor YouTubeMetadataService {
     /// 獲取縮圖 URL
     func getThumbnailURL(videoId: String) -> String {
         return "https://i.ytimg.com/vi/\(videoId)/mqdefault.jpg"
+    }
+
+    /// 從下載命令中提取 cookies 相關參數
+    func extractCookiesArguments(from commandTemplate: String) -> [String] {
+        var arguments: [String] = []
+
+        // 檢查 --cookies-from-browser
+        if let range = commandTemplate.range(of: #"--cookies-from-browser[=\s]+(\w+)"#, options: .regularExpression) {
+            let match = String(commandTemplate[range])
+            // 轉換為標準格式
+            if match.contains("=") {
+                arguments.append(match)
+            } else {
+                // --cookies-from-browser safari → --cookies-from-browser=safari
+                let parts = match.split(separator: " ", maxSplits: 1)
+                if parts.count == 2 {
+                    arguments.append("--cookies-from-browser")
+                    arguments.append(String(parts[1]))
+                }
+            }
+        }
+
+        // 檢查 --cookies (cookies 檔案路徑)
+        if let range = commandTemplate.range(of: #"--cookies[=\s]+[^\s]+"#, options: .regularExpression) {
+            let match = String(commandTemplate[range])
+            if match.contains("=") {
+                arguments.append(match)
+            } else {
+                let parts = match.split(separator: " ", maxSplits: 1)
+                if parts.count == 2 {
+                    arguments.append("--cookies")
+                    arguments.append(String(parts[1]))
+                }
+            }
+        }
+
+        return arguments
     }
 
     /// 從 URL 提取影片 ID
