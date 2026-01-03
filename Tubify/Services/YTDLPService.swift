@@ -204,8 +204,12 @@ actor YTDLPService {
             throw YTDLPError.executionFailed(error.localizedDescription)
         }
 
-        // 等待完成
-        process.waitUntilExit()
+        // 使用非阻塞方式等待進程完成，以允許並行下載
+        let terminationStatus = await withCheckedContinuation { continuation in
+            process.terminationHandler = { process in
+                continuation.resume(returning: process.terminationStatus)
+            }
+        }
 
         // 清理
         outputPipe.fileHandleForReading.readabilityHandler = nil
@@ -213,8 +217,8 @@ actor YTDLPService {
         runningProcesses.removeValue(forKey: taskId)
 
         // 檢查結果
-        if process.terminationStatus != 0 {
-            let errorMessage = resultHolder.lastError ?? "未知錯誤 (退出碼: \(process.terminationStatus))"
+        if terminationStatus != 0 {
+            let errorMessage = resultHolder.lastError ?? "未知錯誤 (退出碼: \(terminationStatus))"
             LogFileManager.shared.logDownloadError(taskId: taskId, error: errorMessage)
             throw YTDLPError.executionFailed(errorMessage)
         }
