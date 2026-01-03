@@ -89,9 +89,15 @@ actor YouTubeMetadataService {
 
         do {
             try process.run()
-            process.waitUntilExit()
         } catch {
             throw MetadataError.fetchFailed(error.localizedDescription)
+        }
+
+        // 使用異步等待取代同步阻塞
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            process.terminationHandler = { _ in
+                continuation.resume()
+            }
         }
 
         if process.terminationStatus != 0 {
@@ -132,9 +138,15 @@ actor YouTubeMetadataService {
 
         do {
             try process.run()
-            process.waitUntilExit()
         } catch {
             throw MetadataError.fetchFailed(error.localizedDescription)
+        }
+
+        // 使用異步等待取代同步阻塞
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            process.terminationHandler = { _ in
+                continuation.resume()
+            }
         }
 
         if process.terminationStatus != 0 {
