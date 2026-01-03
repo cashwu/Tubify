@@ -39,7 +39,7 @@ struct DownloadItemView: View {
                     if task.status == .downloading {
                         ProgressView(value: task.progress)
                             .progressViewStyle(.linear)
-                            .frame(maxWidth: 200)
+
 
                         Text("\(Int(task.progress * 100))%")
                             .font(.caption)
@@ -49,7 +49,7 @@ struct DownloadItemView: View {
                         statusBadge
                     }
 
-                    Spacer()
+
                 }
             }
 
