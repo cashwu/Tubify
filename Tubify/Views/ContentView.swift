@@ -9,6 +9,7 @@ struct ContentView: View {
     @State private var needsFullDiskAccess = false
     @State private var ytdlpNotInstalled = false
     @State private var urlErrorMessage: String?
+    @State private var showDeleteAllAlert = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -71,6 +72,16 @@ struct ContentView: View {
             }
         } message: {
             Text(urlErrorMessage ?? "")
+        }
+        .alert("清除全部", isPresented: $showDeleteAllAlert) {
+            Button("取消", role: .cancel) {}
+            Button("清除", role: .destructive) {
+                Task {
+                    await downloadManager.clearAllTasks()
+                }
+            }
+        } message: {
+            Text("確定要清除所有下載任務嗎？此操作無法復原。")
         }
     }
 
@@ -180,7 +191,9 @@ struct ContentView: View {
                         DownloadItemView(
                             task: task,
                             onRemove: {
-                                downloadManager.removeTask(task)
+                                Task {
+                                    await downloadManager.removeTask(task)
+                                }
                             },
                             onRetry: {
                                 downloadManager.retryTask(task)
@@ -263,7 +276,7 @@ struct ContentView: View {
             // 清除全部按鈕
             if !downloadManager.tasks.isEmpty {
                 Button(action: {
-                    downloadManager.clearAllTasks()
+                    showDeleteAllAlert = true
                 }) {
                     Image(systemName: "trash")
                         .font(.system(size: 21))

@@ -18,9 +18,16 @@ struct SettingsView: View {
 
     @State private var showingFolderPicker = false
     @State private var ytdlpStatus: YTDLPStatus = .checking
+    @State private var ffmpegStatus: FFmpegStatus = .checking
     @State private var hasFullDiskAccess: Bool = false
 
     enum YTDLPStatus {
+        case checking
+        case found(String)
+        case notFound
+    }
+
+    enum FFmpegStatus {
         case checking
         case found(String)
         case notFound
@@ -52,6 +59,12 @@ struct SettingsView: View {
                         Text("yt-dlp 狀態")
                         Spacer()
                         ytdlpStatusView
+                    }
+
+                    HStack {
+                        Text("ffmpeg 狀態")
+                        Spacer()
+                        ffmpegStatusView
                     }
 
                     HStack {

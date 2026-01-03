@@ -8,6 +8,7 @@ struct DownloadItemView: View {
     let onShowInFinder: () -> Void
 
     @State private var isHovering = false
+    @State private var showDeleteAlert = false
 
     /// 檢查是否為權限相關錯誤
     private var isPermissionError: Bool {
@@ -65,6 +66,14 @@ struct DownloadItemView: View {
         }
         .onHover { hovering in
             isHovering = hovering
+        }
+        .alert("取消下載", isPresented: $showDeleteAlert) {
+            Button("繼續下載", role: .cancel) {}
+            Button("取消下載", role: .destructive) {
+                onRemove()
+            }
+        } message: {
+            Text("確定要取消正在進行的下載嗎？")
         }
     }
 
@@ -176,7 +185,13 @@ struct DownloadItemView: View {
             }
 
             // 移除/取消按鈕
-            Button(action: onRemove) {
+            Button(action: {
+                if task.status == .downloading {
+                    showDeleteAlert = true
+                } else {
+                    onRemove()
+                }
+            }) {
                 Image(systemName: task.status == .downloading ? "xmark.circle" : "trash")
                     .font(.system(size: 21))
                     .foregroundStyle(task.status == .downloading ? .orange : .secondary)

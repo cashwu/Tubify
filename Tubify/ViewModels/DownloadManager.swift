@@ -320,11 +320,9 @@ class DownloadManager {
     }
 
     /// 移除任務
-    func removeTask(_ task: DownloadTask) {
+    func removeTask(_ task: DownloadTask) async {
         if task.status == .downloading {
-            Task {
-                await YTDLPService.shared.cancel(taskId: task.id)
-            }
+            await YTDLPService.shared.cancel(taskId: task.id)
         }
 
         tasks.removeAll { $0.id == task.id }
@@ -347,12 +345,11 @@ class DownloadManager {
     }
 
     /// 清除所有任務
-    func clearAllTasks() {
+    func clearAllTasks() async {
         // 取消所有進行中的下載
-        for task in tasks where task.status == .downloading {
-            Task {
-                await YTDLPService.shared.cancel(taskId: task.id)
-            }
+        let downloadingTasks = tasks.filter { $0.status == .downloading }
+        for task in downloadingTasks {
+            await YTDLPService.shared.cancel(taskId: task.id)
         }
 
         tasks.removeAll()
