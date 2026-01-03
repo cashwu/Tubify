@@ -24,13 +24,13 @@ struct DownloadItemView: View {
             VStack(alignment: .leading, spacing: 4) {
                 // 標題
                 Text(task.title)
-                    .font(.headline)
+                    .font(.system(size: 30, weight: .bold))
                     .lineLimit(2)
                     .foregroundStyle(.primary)
 
                 // URL
                 Text(task.url)
-                    .font(.caption)
+                    .font(.system(size: 20))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
 
@@ -42,7 +42,7 @@ struct DownloadItemView: View {
 
 
                         Text("\(Int(task.progress * 100))%")
-                            .font(.caption)
+                            .font(.system(size: 20))
                             .foregroundStyle(.secondary)
                             .monospacedDigit()
                     } else {
@@ -101,7 +101,7 @@ struct DownloadItemView: View {
             .frame(width: 120, height: 68)
             .overlay {
                 Image(systemName: "play.rectangle")
-                    .font(.title2)
+                    .font(.system(size: 40))
                     .foregroundStyle(.secondary)
             }
     }
@@ -136,7 +136,7 @@ struct DownloadItemView: View {
                         PermissionService.shared.openFullDiskAccessSettings()
                     }
                     .buttonStyle(.link)
-                    .font(.caption)
+                    .font(.system(size: 20))
                 } else {
                     Text("失敗")
                 }
@@ -146,7 +146,7 @@ struct DownloadItemView: View {
                 Text("已取消")
             }
         }
-        .font(.caption)
+        .font(.system(size: 20))
         .foregroundStyle(.secondary)
     }
 
@@ -159,7 +159,7 @@ struct DownloadItemView: View {
             if task.status == .completed {
                 Button(action: onShowInFinder) {
                     Image(systemName: "folder")
-                        .font(.system(size: 14))
+                        .font(.system(size: 24))
                 }
                 .buttonStyle(.borderless)
                 .help("在 Finder 中顯示")
@@ -169,7 +169,7 @@ struct DownloadItemView: View {
             if task.status == .failed || task.status == .cancelled {
                 Button(action: onRetry) {
                     Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 14))
+                        .font(.system(size: 24))
                 }
                 .buttonStyle(.borderless)
                 .help("重試")
@@ -178,7 +178,7 @@ struct DownloadItemView: View {
             // 移除/取消按鈕
             Button(action: onRemove) {
                 Image(systemName: task.status == .downloading ? "xmark.circle" : "trash")
-                    .font(.system(size: 14))
+                    .font(.system(size: 24))
                     .foregroundStyle(task.status == .downloading ? .orange : .secondary)
             }
             .buttonStyle(.borderless)
