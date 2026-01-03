@@ -1,6 +1,14 @@
 import Foundation
 import SwiftUI
 
+/// URL 驗證結果
+enum URLValidationResult {
+    case success
+    case invalidFormat      // 格式不正確（如 markdown 連結）
+    case notYouTubeURL     // 非 YouTube 網址
+    case alreadyExists     // 已在佇列中
+}
+
 /// 下載管理器
 @Observable
 @MainActor
@@ -53,17 +61,24 @@ class DownloadManager {
     }
 
     /// 新增 URL 到下載佇列
-    func addURL(_ urlString: String) {
-        // 驗證 URL
+    @discardableResult
+    func addURL(_ urlString: String) -> URLValidationResult {
+        // 基本格式檢查：必須是有效的 URL 格式，且不是 markdown 連結
+        guard isValidURLFormat(urlString) else {
+            TubifyLogger.download.error("無效的 URL 格式: \(urlString)")
+            return .invalidFormat
+        }
+
+        // 驗證是否為 YouTube URL
         guard isValidYouTubeURL(urlString) else {
-            TubifyLogger.download.error("無效的 YouTube URL: \(urlString)")
-            return
+            TubifyLogger.download.error("非 YouTube URL: \(urlString)")
+            return .notYouTubeURL
         }
 
         // 檢查是否已存在
         if tasks.contains(where: { $0.url == urlString }) {
             TubifyLogger.download.info("URL 已在佇列中: \(urlString)")
-            return
+            return .alreadyExists
         }
 
         // 使用靜態方法檢查是否為播放清單（不需要 await）
@@ -97,6 +112,8 @@ class DownloadManager {
                 await fetchMetadataForTask(task)
             }
         }
+
+        return .success
     }
 
     /// 獲取單一影片的元資料
@@ -322,6 +339,26 @@ class DownloadManager {
 
         tasks.removeAll()
         PersistenceService.shared.clearTasks()
+    }
+
+    /// 驗證 URL 格式是否有效
+    private func isValidURLFormat(_ urlString: String) -> Bool {
+        // 必須以 http:// 或 https:// 開頭
+        guard urlString.hasPrefix("http://") || urlString.hasPrefix("https://") else {
+            return false
+        }
+
+        // 必須是有效的 URL
+        guard URL(string: urlString) != nil else {
+            return false
+        }
+
+        // 拒絕 markdown 連結格式（如 [text](url) 或包含 ]( 的字串）
+        if urlString.contains("](") || urlString.hasPrefix("[") {
+            return false
+        }
+
+        return true
     }
 
     /// 驗證 YouTube URL

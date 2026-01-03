@@ -8,6 +8,7 @@ struct ContentView: View {
     @State private var showingSettings = false
     @State private var needsFullDiskAccess = false
     @State private var ytdlpNotInstalled = false
+    @State private var urlErrorMessage: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -60,6 +61,16 @@ struct ContentView: View {
             Task {
                 await checkYTDLP()
             }
+        }
+        .alert("URL 錯誤", isPresented: Binding(
+            get: { urlErrorMessage != nil },
+            set: { if !$0 { urlErrorMessage = nil } }
+        )) {
+            Button("確定") {
+                urlErrorMessage = nil
+            }
+        } message: {
+            Text(urlErrorMessage ?? "")
         }
     }
 
@@ -298,11 +309,11 @@ struct ContentView: View {
                 provider.loadItem(forTypeIdentifier: UTType.url.identifier) { item, _ in
                     if let url = item as? URL {
                         Task { @MainActor in
-                            downloadManager.addURL(url.absoluteString)
+                            handleURLValidationResult(downloadManager.addURL(url.absoluteString))
                         }
                     } else if let data = item as? Data, let url = URL(dataRepresentation: data, relativeTo: nil) {
                         Task { @MainActor in
-                            downloadManager.addURL(url.absoluteString)
+                            handleURLValidationResult(downloadManager.addURL(url.absoluteString))
                         }
                     }
                 }
@@ -324,15 +335,33 @@ struct ContentView: View {
         }
     }
 
+    /// 處理 URL 驗證結果
+    private func handleURLValidationResult(_ result: URLValidationResult) {
+        switch result {
+        case .success, .alreadyExists:
+            break
+        case .invalidFormat:
+            urlErrorMessage = "URL 格式不正確"
+        case .notYouTubeURL:
+            urlErrorMessage = "僅支援 YouTube 網址"
+        }
+    }
+
     /// 處理文字輸入（可能包含多個 URL）
     private func processTextInput(_ text: String) {
         // 分割可能的多個 URL
         let lines = text.components(separatedBy: .newlines)
         for line in lines {
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty && (trimmed.contains("youtube.com") || trimmed.contains("youtu.be")) {
-                downloadManager.addURL(trimmed)
+            guard !trimmed.isEmpty else { continue }
+
+            // 只處理看起來像 URL 的文字
+            guard trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") ||
+                  trimmed.contains("youtube.com") || trimmed.contains("youtu.be") else {
+                continue
             }
+
+            handleURLValidationResult(downloadManager.addURL(trimmed))
         }
     }
 
