@@ -75,10 +75,17 @@ struct SettingsView: View {
                 } header: {
                     Text("系統")
                 } footer: {
-                    if !hasFullDiskAccess && PermissionService.shared.commandUsesSafariCookies(downloadCommand) {
-                        Text("使用 Safari cookies 需要完整磁碟存取權限")
-                            .font(.system(size: 18))
-                            .foregroundStyle(.orange)
+                    VStack(alignment: .leading, spacing: 4) {
+                        if case .notFound = ffmpegStatus {
+                            Text("ffmpeg 用於合併高畫質影音串流、格式轉換及後製處理。安裝指令：brew install ffmpeg")
+                                .font(.system(size: 18))
+                                .foregroundStyle(.orange)
+                        }
+                        if !hasFullDiskAccess && PermissionService.shared.commandUsesSafariCookies(downloadCommand) {
+                            Text("使用 Safari cookies 需要完整磁碟存取權限")
+                                .font(.system(size: 18))
+                                .foregroundStyle(.orange)
+                        }
                     }
                 }
 
