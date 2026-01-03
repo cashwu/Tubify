@@ -171,7 +171,7 @@ class DownloadManager {
                         await self.downloadSingleTask(task)
 
                         // 下載完成後從 currentTasks 移除
-                        await MainActor.run {
+                        _ = await MainActor.run {
                             self.currentTasks.remove(task.id)
                         }
 

@@ -9,7 +9,7 @@ struct EmptyStateView: View {
                 .font(.system(size: 64))
                 .foregroundStyle(.secondary.opacity(0.5))
 
-            Text("拖放 YouTube 連結到這裡")
+            Text("拖放或貼上 YouTube 連結")
                 .font(.title3)
                 .foregroundStyle(.secondary)
 

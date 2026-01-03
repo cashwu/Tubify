@@ -6,9 +6,15 @@ struct ContentView: View {
     @State private var downloadManager = DownloadManager.shared
     @State private var isTargeted = false
     @State private var showingSettings = false
+    @State private var needsFullDiskAccess = false
 
     var body: some View {
         VStack(spacing: 0) {
+            // 權限提示橫幅
+            if needsFullDiskAccess {
+                permissionBanner
+            }
+
             // 主要內容區域
             if downloadManager.tasks.isEmpty {
                 EmptyStateView()
@@ -36,6 +42,53 @@ struct ContentView: View {
         .sheet(isPresented: $showingSettings) {
             SettingsView()
         }
+        .onPasteCommand(of: [.url, .plainText]) { providers in
+            handlePaste(providers: providers)
+        }
+        .onAppear {
+            checkPermissions()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            checkPermissions()
+        }
+    }
+
+    // MARK: - 權限提示橫幅
+
+    private var permissionBanner: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.title2)
+                .foregroundStyle(.orange)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("完整磁碟存取")
+                    .font(.headline)
+                Text("使用 Safari cookies 需要完整磁碟存取權限")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Button("前往授權") {
+                PermissionService.shared.openFullDiskAccessSettings()
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+        }
+        .padding(12)
+        .background(Color(nsColor: .controlBackgroundColor))
+    }
+
+    // MARK: - 權限檢查
+
+    private func checkPermissions() {
+        let command = UserDefaults.standard.string(forKey: AppSettingsKeys.downloadCommand)
+            ?? AppSettingsDefaults.downloadCommand
+        let usesSafariCookies = PermissionService.shared.commandUsesSafariCookies(command)
+        let hasAccess = PermissionService.shared.hasFullDiskAccess()
+        needsFullDiskAccess = usesSafariCookies && !hasAccess
     }
 
     // MARK: - 任務列表
@@ -97,13 +150,6 @@ struct ContentView: View {
 
     private var bottomToolbar: some View {
         HStack {
-            // 新增按鈕
-            Button(action: addFromClipboard) {
-                Image(systemName: "plus")
-            }
-            .buttonStyle(.borderless)
-            .help("從剪貼簿新增")
-
             // 設定按鈕
             Button(action: { showingSettings = true }) {
                 Image(systemName: "gearshape")
@@ -174,6 +220,41 @@ struct ContentView: View {
         return parts.isEmpty ? "\(total) 個任務" : parts.joined(separator: " · ")
     }
 
+    // MARK: - 貼上處理
+
+    private func handlePaste(providers: [NSItemProvider]) {
+        for provider in providers {
+            // 嘗試載入 URL
+            if provider.hasItemConformingToTypeIdentifier(UTType.url.identifier) {
+                provider.loadItem(forTypeIdentifier: UTType.url.identifier) { item, _ in
+                    if let url = item as? URL {
+                        Task { @MainActor in
+                            downloadManager.addURL(url.absoluteString)
+                        }
+                    } else if let data = item as? Data, let url = URL(dataRepresentation: data, relativeTo: nil) {
+                        Task { @MainActor in
+                            downloadManager.addURL(url.absoluteString)
+                        }
+                    }
+                }
+            }
+            // 嘗試載入文字
+            else if provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier) {
+                provider.loadItem(forTypeIdentifier: UTType.plainText.identifier) { item, _ in
+                    if let text = item as? String {
+                        Task { @MainActor in
+                            processTextInput(text)
+                        }
+                    } else if let data = item as? Data, let text = String(data: data, encoding: .utf8) {
+                        Task { @MainActor in
+                            processTextInput(text)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // MARK: - 拖放處理
 
     private func handleDrop(providers: [NSItemProvider]) {
@@ -221,11 +302,6 @@ struct ContentView: View {
         }
     }
 
-    /// 從剪貼簿新增
-    private func addFromClipboard() {
-        guard let string = NSPasteboard.general.string(forType: .string) else { return }
-        processTextInput(string)
-    }
 }
 
 #Preview {
