@@ -54,8 +54,18 @@ class DownloadManager {
         // 載入已儲存的任務
         tasks = PersistenceService.shared.loadTasks()
 
+        // 處理卡在 fetchingInfo 狀態的任務（可能是上次啟動時中斷的）
+        for task in tasks where task.status == .fetchingInfo {
+            TubifyLogger.download.info("重置卡住的任務: \(task.url)")
+            task.status = .pending
+            if task.title == "載入中..." {
+                task.title = "無法獲取標題"
+            }
+        }
+
         // 如果有待處理的任務，開始下載
         if tasks.contains(where: { $0.status == .pending }) {
+            PersistenceService.shared.saveTasks(tasks)
             startDownloadQueue()
         }
     }
@@ -118,15 +128,22 @@ class DownloadManager {
 
     /// 獲取單一影片的元資料
     private func fetchMetadataForTask(_ task: DownloadTask) async {
+        TubifyLogger.download.info("獲取影片元資料: \(task.url)")
         let metadataService = YouTubeMetadataService.shared
-        let cookiesArgs = await metadataService.extractCookiesArguments(from: downloadCommand)
+
+        // 注意：不使用 cookies 來獲取元資料，因為：
+        // 1. 公開影片不需要認證就可以獲取元資料
+        // 2. 使用 Safari cookies 需要 Full Disk Access 權限，沒有權限會導致 yt-dlp 無限期掛起
+        // 3. Cookies 只在下載時使用（下載私人影片時）
 
         do {
-            let videoInfo = try await metadataService.fetchVideoInfo(url: task.url, cookiesArguments: cookiesArgs)
+            let videoInfo = try await metadataService.fetchVideoInfo(url: task.url, cookiesArguments: [])
+            TubifyLogger.download.info("成功獲取影片資訊: \(videoInfo.title)")
             task.title = videoInfo.title
             task.thumbnailURL = videoInfo.thumbnail
             task.status = .pending
         } catch {
+            TubifyLogger.download.error("獲取影片資訊失敗: \(error.localizedDescription)")
             task.title = "無法獲取標題"
             task.status = .pending
         }
@@ -138,10 +155,11 @@ class DownloadManager {
     /// 展開播放清單
     private func expandPlaylist(placeholderTask: DownloadTask, urlString: String) async {
         let metadataService = YouTubeMetadataService.shared
-        let cookiesArgs = await metadataService.extractCookiesArguments(from: downloadCommand)
+
+        // 注意：不使用 cookies 來獲取播放清單元資料（原因同 fetchMetadataForTask）
 
         do {
-            let videos = try await metadataService.fetchPlaylistInfo(url: urlString, cookiesArguments: cookiesArgs)
+            let videos = try await metadataService.fetchPlaylistInfo(url: urlString, cookiesArguments: [])
 
             // 移除佔位任務
             tasks.removeAll { $0.id == placeholderTask.id }

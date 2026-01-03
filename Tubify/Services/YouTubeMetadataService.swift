@@ -93,20 +93,50 @@ actor YouTubeMetadataService {
             throw MetadataError.fetchFailed(error.localizedDescription)
         }
 
-        // 使用異步等待取代同步阻塞
+        // 在背景讀取 stdout（避免管道緩衝區滿導致死鎖）
+        // 如果不先讀取數據，當 yt-dlp 輸出超過管道緩衝區（約 64KB）時會阻塞
+        let outputHandle = pipe.fileHandleForReading
+        let errorHandle = errorPipe.fileHandleForReading
+
+        // 使用異步方式讀取數據
+        let outputData = await withCheckedContinuation { (continuation: CheckedContinuation<Data, Never>) in
+            DispatchQueue.global().async {
+                let data = outputHandle.readDataToEndOfFile()
+                continuation.resume(returning: data)
+            }
+        }
+
+        let errorData = await withCheckedContinuation { (continuation: CheckedContinuation<Data, Never>) in
+            DispatchQueue.global().async {
+                let data = errorHandle.readDataToEndOfFile()
+                continuation.resume(returning: data)
+            }
+        }
+
+        // 等待程序結束
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            process.terminationHandler = { _ in
+            var resumed = false
+            let resumeOnce = {
+                guard !resumed else { return }
+                resumed = true
                 continuation.resume()
+            }
+
+            process.terminationHandler = { _ in
+                resumeOnce()
+            }
+
+            if !process.isRunning {
+                resumeOnce()
             }
         }
 
         if process.terminationStatus != 0 {
-            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
             let errorMessage = String(data: errorData, encoding: .utf8) ?? "未知錯誤"
             throw MetadataError.fetchFailed(errorMessage)
         }
 
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let data = outputData
 
         do {
             let decoder = JSONDecoder()
@@ -142,20 +172,48 @@ actor YouTubeMetadataService {
             throw MetadataError.fetchFailed(error.localizedDescription)
         }
 
-        // 使用異步等待取代同步阻塞
+        // 在背景讀取 stdout（避免管道緩衝區滿導致死鎖）
+        let outputHandle = pipe.fileHandleForReading
+        let errorHandle = errorPipe.fileHandleForReading
+
+        let outputData = await withCheckedContinuation { (continuation: CheckedContinuation<Data, Never>) in
+            DispatchQueue.global().async {
+                let data = outputHandle.readDataToEndOfFile()
+                continuation.resume(returning: data)
+            }
+        }
+
+        let errorData = await withCheckedContinuation { (continuation: CheckedContinuation<Data, Never>) in
+            DispatchQueue.global().async {
+                let data = errorHandle.readDataToEndOfFile()
+                continuation.resume(returning: data)
+            }
+        }
+
+        // 等待程序結束
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            process.terminationHandler = { _ in
+            var resumed = false
+            let resumeOnce = {
+                guard !resumed else { return }
+                resumed = true
                 continuation.resume()
+            }
+
+            process.terminationHandler = { _ in
+                resumeOnce()
+            }
+
+            if !process.isRunning {
+                resumeOnce()
             }
         }
 
         if process.terminationStatus != 0 {
-            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
             let errorMessage = String(data: errorData, encoding: .utf8) ?? "未知錯誤"
             throw MetadataError.fetchFailed(errorMessage)
         }
 
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let data = outputData
 
         do {
             let decoder = JSONDecoder()
