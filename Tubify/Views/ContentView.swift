@@ -7,12 +7,18 @@ struct ContentView: View {
     @State private var isTargeted = false
     @State private var showingSettings = false
     @State private var needsFullDiskAccess = false
+    @State private var ytdlpNotInstalled = false
 
     var body: some View {
         VStack(spacing: 0) {
             // 權限提示橫幅
             if needsFullDiskAccess {
                 permissionBanner
+            }
+
+            // yt-dlp 安裝提示橫幅
+            if ytdlpNotInstalled {
+                ytdlpBanner
             }
 
             // 主要內容區域
@@ -45,9 +51,15 @@ struct ContentView: View {
         .onAppear {
             checkPermissions()
             setupPasteShortcut()
+            Task {
+                await checkYTDLP()
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             checkPermissions()
+            Task {
+                await checkYTDLP()
+            }
         }
     }
 
@@ -79,6 +91,36 @@ struct ContentView: View {
         .background(Color(nsColor: .controlBackgroundColor))
     }
 
+    // MARK: - yt-dlp 安裝提示橫幅
+
+    private var ytdlpBanner: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.title2)
+                .foregroundStyle(.red)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("yt-dlp 未安裝")
+                    .font(.headline)
+                Text("需要安裝 yt-dlp 才能下載影片")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Button("前往安裝") {
+                if let url = URL(string: "https://github.com/yt-dlp/yt-dlp") {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+        }
+        .padding(12)
+        .background(Color(nsColor: .controlBackgroundColor))
+    }
+
     // MARK: - 權限檢查
 
     private func checkPermissions() {
@@ -87,6 +129,13 @@ struct ContentView: View {
         let usesSafariCookies = PermissionService.shared.commandUsesSafariCookies(command)
         let hasAccess = PermissionService.shared.hasFullDiskAccess()
         needsFullDiskAccess = usesSafariCookies && !hasAccess
+    }
+
+    // MARK: - 檢查 yt-dlp
+
+    private func checkYTDLP() async {
+        let path = await YTDLPService.shared.findYTDLPPath()
+        ytdlpNotInstalled = (path == nil)
     }
 
     // MARK: - 貼上快捷鍵設定

@@ -212,6 +212,12 @@ struct SettingsView: View {
                     .foregroundStyle(.red)
                 Text("未安裝")
                     .foregroundStyle(.red)
+                Button("前往安裝") {
+                    if let url = URL(string: "https://github.com/yt-dlp/yt-dlp") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                .buttonStyle(.link)
             }
         }
     }
