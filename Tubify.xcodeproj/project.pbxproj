@@ -8,14 +8,18 @@
 
 /* Begin PBXBuildFile section */
 		02C4CE0B1320A67BBF578263 /* TubifyApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A44ECF8881FAB3E657F8FCAD /* TubifyApp.swift */; };
+		060C5193E130325111314B69 /* YouTubeMetadataServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F614B343FA3EF55C77F02A1 /* YouTubeMetadataServiceTests.swift */; };
 		212AAF34444F4E7456F50B21 /* DownloadItemView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92F4011B6FFCBC1F7193FDD3 /* DownloadItemView.swift */; };
 		25F7A1662ED3A48695BB3824 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 345AA1EE74AF5EFA1829B291 /* SettingsView.swift */; };
 		6160F89C21556B3D4731DDBD /* YouTubeMetadataService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E3CBC495E00CB65FBBB39DC /* YouTubeMetadataService.swift */; };
 		65CB75E79E8A5D2A50D70F41 /* PermissionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD110BD56C1F54E7333B92DA /* PermissionService.swift */; };
 		74417089AD46AB141DDD3AF5 /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B1861C7487DDFADC5E6A40B /* AppSettings.swift */; };
 		77F48A65E13C25E4269ABF0E /* YTDLPService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 644BFB8F58A30DF3B66C8E4E /* YTDLPService.swift */; };
+		8BA95BA87A60E31C7644B309 /* YTDLPServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 551DBCC97D37881B53AA3F66 /* YTDLPServiceTests.swift */; };
 		902E79E3B4284B909393FB2C /* DownloadTask.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A9847C5AD0C41FEB8563FC3 /* DownloadTask.swift */; };
 		94F2DB927CAD21242C8680BF /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44C08970ACCDAA7691461E10 /* ContentView.swift */; };
+		96781B6921245C33C992D231 /* URLValidationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27FA3E7C8810E2DD3D783593 /* URLValidationTests.swift */; };
+		A5133C8B045F8477AD986E02 /* DownloadTaskTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C99522A3C5241F5B0BB160A /* DownloadTaskTests.swift */; };
 		BD1FE5AAA01D463DA43E76B2 /* DownloadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D4F49C12534415A645F3C44 /* DownloadManager.swift */; };
 		C71926994535505153FC4AEF /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E899875AB33A3557093ED50B /* NotificationService.swift */; };
 		D348C0FAAA322EADA614BA14 /* Logger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C5FE8EA69573F2FB899C4F1 /* Logger.swift */; };
@@ -23,16 +27,31 @@
 		FC58597FD186D9CF84D07939 /* PersistenceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92B5992FEF733EEB5117091F /* PersistenceService.swift */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		6FF2A0BABB30ECDE2590887A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 32414C707DB10641C87556C0 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = C668974EDFC52C683AA28284;
+			remoteInfo = Tubify;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		0D4F49C12534415A645F3C44 /* DownloadManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadManager.swift; sourceTree = "<group>"; };
+		27FA3E7C8810E2DD3D783593 /* URLValidationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = URLValidationTests.swift; sourceTree = "<group>"; };
 		345AA1EE74AF5EFA1829B291 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		3F614B343FA3EF55C77F02A1 /* YouTubeMetadataServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YouTubeMetadataServiceTests.swift; sourceTree = "<group>"; };
 		44C08970ACCDAA7691461E10 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		4C5FE8EA69573F2FB899C4F1 /* Logger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Logger.swift; sourceTree = "<group>"; };
+		551DBCC97D37881B53AA3F66 /* YTDLPServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YTDLPServiceTests.swift; sourceTree = "<group>"; };
 		5E3CBC495E00CB65FBBB39DC /* YouTubeMetadataService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YouTubeMetadataService.swift; sourceTree = "<group>"; };
 		644BFB8F58A30DF3B66C8E4E /* YTDLPService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YTDLPService.swift; sourceTree = "<group>"; };
 		6BE1AE51AC18C3B14E2D617B /* Tubify.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Tubify.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		7B1861C7487DDFADC5E6A40B /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettings.swift; sourceTree = "<group>"; };
+		80285D6CF9B0E6021ACC8991 /* TubifyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TubifyTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		8A9847C5AD0C41FEB8563FC3 /* DownloadTask.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadTask.swift; sourceTree = "<group>"; };
+		8C99522A3C5241F5B0BB160A /* DownloadTaskTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadTaskTests.swift; sourceTree = "<group>"; };
 		90FDB53F7F4996C674F7E7E2 /* EmptyStateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmptyStateView.swift; sourceTree = "<group>"; };
 		92B5992FEF733EEB5117091F /* PersistenceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceService.swift; sourceTree = "<group>"; };
 		92F4011B6FFCBC1F7193FDD3 /* DownloadItemView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadItemView.swift; sourceTree = "<group>"; };
@@ -46,6 +65,7 @@
 			isa = PBXGroup;
 			children = (
 				6BE1AE51AC18C3B14E2D617B /* Tubify.app */,
+				80285D6CF9B0E6021ACC8991 /* TubifyTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -77,7 +97,6 @@
 				92F4011B6FFCBC1F7193FDD3 /* DownloadItemView.swift */,
 				90FDB53F7F4996C674F7E7E2 /* EmptyStateView.swift */,
 				345AA1EE74AF5EFA1829B291 /* SettingsView.swift */,
-				DA08B7DD769F6C1E83D77AA9 /* Components */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -94,6 +113,7 @@
 			isa = PBXGroup;
 			children = (
 				F00F48984AA878182469C3D3 /* Tubify */,
+				F9A835E124ECFDC87D19F8CC /* TubifyTests */,
 				1142A45E55F4AC9C2402D8C7 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -107,13 +127,6 @@
 			path = Models;
 			sourceTree = "<group>";
 		};
-		DA08B7DD769F6C1E83D77AA9 /* Components */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			path = Components;
-			sourceTree = "<group>";
-		};
 		F00F48984AA878182469C3D3 /* Tubify */ = {
 			isa = PBXGroup;
 			children = (
@@ -125,6 +138,17 @@
 				43563DF4047EA3796EF2F867 /* Views */,
 			);
 			path = Tubify;
+			sourceTree = "<group>";
+		};
+		F9A835E124ECFDC87D19F8CC /* TubifyTests */ = {
+			isa = PBXGroup;
+			children = (
+				8C99522A3C5241F5B0BB160A /* DownloadTaskTests.swift */,
+				27FA3E7C8810E2DD3D783593 /* URLValidationTests.swift */,
+				3F614B343FA3EF55C77F02A1 /* YouTubeMetadataServiceTests.swift */,
+				551DBCC97D37881B53AA3F66 /* YTDLPServiceTests.swift */,
+			);
+			path = TubifyTests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -147,6 +171,24 @@
 			productReference = 6BE1AE51AC18C3B14E2D617B /* Tubify.app */;
 			productType = "com.apple.product-type.application";
 		};
+		F2D5259281E64D46211CA0A0 /* TubifyTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 71EE8E1A76A1E2A34F7528BE /* Build configuration list for PBXNativeTarget "TubifyTests" */;
+			buildPhases = (
+				0D4AEA32A492B43DB29D8AC7 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				00366E0F062E0B8A3D0C32FD /* PBXTargetDependency */,
+			);
+			name = TubifyTests;
+			packageProductDependencies = (
+			);
+			productName = TubifyTests;
+			productReference = 80285D6CF9B0E6021ACC8991 /* TubifyTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -157,6 +199,9 @@
 				LastUpgradeCheck = 1500;
 				TargetAttributes = {
 					C668974EDFC52C683AA28284 = {
+						ProvisioningStyle = Automatic;
+					};
+					F2D5259281E64D46211CA0A0 = {
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -176,11 +221,23 @@
 			projectRoot = "";
 			targets = (
 				C668974EDFC52C683AA28284 /* Tubify */,
+				F2D5259281E64D46211CA0A0 /* TubifyTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXSourcesBuildPhase section */
+		0D4AEA32A492B43DB29D8AC7 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A5133C8B045F8477AD986E02 /* DownloadTaskTests.swift in Sources */,
+				96781B6921245C33C992D231 /* URLValidationTests.swift in Sources */,
+				8BA95BA87A60E31C7644B309 /* YTDLPServiceTests.swift in Sources */,
+				060C5193E130325111314B69 /* YouTubeMetadataServiceTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		1BA066688CEA8F9C12CC62F4 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -203,6 +260,14 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		00366E0F062E0B8A3D0C32FD /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = C668974EDFC52C683AA28284 /* Tubify */;
+			targetProxy = 6FF2A0BABB30ECDE2590887A /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		077C37DAF5FD4CFDAE121B4C /* Debug */ = {
@@ -270,6 +335,24 @@
 			};
 			name = Debug;
 		};
+		2DD312B4736E8651F56CE512 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.tubify.tests;
+				PRODUCT_NAME = TubifyTests;
+				SDKROOT = macosx;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Tubify.app/Contents/MacOS/Tubify";
+			};
+			name = Debug;
+		};
 		41C91CD24DB165D08B4738F2 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -328,6 +411,24 @@
 			};
 			name = Release;
 		};
+		8F30EAC892CBA39A0D6D8107 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.tubify.tests;
+				PRODUCT_NAME = TubifyTests;
+				SDKROOT = macosx;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Tubify.app/Contents/MacOS/Tubify";
+			};
+			name = Release;
+		};
 		BDB0DDCC0E88915F392BF4B4 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -374,6 +475,15 @@
 			buildConfigurations = (
 				CCC91ACC527737F912BCF3E7 /* Debug */,
 				BDB0DDCC0E88915F392BF4B4 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		71EE8E1A76A1E2A34F7528BE /* Build configuration list for PBXNativeTarget "TubifyTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				2DD312B4736E8651F56CE512 /* Debug */,
+				8F30EAC892CBA39A0D6D8107 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

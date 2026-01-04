@@ -8,27 +8,32 @@ final class YTDLPServiceTests: XCTestCase {
 
     func testParseProgressFromStandardOutput() {
         let progress = parseProgress(from: "[download]  45.2% of 100.00MiB at 5.00MiB/s ETA 00:11")
-        XCTAssertEqual(progress, 0.452, accuracy: 0.001)
+        XCTAssertNotNil(progress)
+        XCTAssertEqual(progress!, 0.452, accuracy: 0.001)
     }
 
     func testParseProgressFromOutputWithoutDecimal() {
         let progress = parseProgress(from: "[download]  50% of 100.00MiB at 5.00MiB/s ETA 00:10")
-        XCTAssertEqual(progress, 0.5, accuracy: 0.001)
+        XCTAssertNotNil(progress)
+        XCTAssertEqual(progress!, 0.5, accuracy: 0.001)
     }
 
     func testParseProgressAt100Percent() {
         let progress = parseProgress(from: "[download] 100% of 100.00MiB in 00:20")
-        XCTAssertEqual(progress, 1.0, accuracy: 0.001)
+        XCTAssertNotNil(progress)
+        XCTAssertEqual(progress!, 1.0, accuracy: 0.001)
     }
 
     func testParseProgressAtZeroPercent() {
         let progress = parseProgress(from: "[download]   0.0% of 100.00MiB at Unknown speed ETA Unknown")
-        XCTAssertEqual(progress, 0.0, accuracy: 0.001)
+        XCTAssertNotNil(progress)
+        XCTAssertEqual(progress!, 0.0, accuracy: 0.001)
     }
 
     func testParseProgressFromSmallPercentage() {
         let progress = parseProgress(from: "[download]   1.5% of 50.00MiB at 2.00MiB/s ETA 00:24")
-        XCTAssertEqual(progress, 0.015, accuracy: 0.001)
+        XCTAssertNotNil(progress)
+        XCTAssertEqual(progress!, 0.015, accuracy: 0.001)
     }
 
     func testParseProgressReturnsNilForNonProgressLine() {

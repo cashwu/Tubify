@@ -35,8 +35,6 @@ targets:
         LD_RUNPATH_SEARCH_PATHS:
           - $(inherited)
           - "@executable_path/../Frameworks"
-    entitlements:
-      path: Tubify/Tubify.entitlements
 
   TubifyTests:
     type: bundle.unit-test
@@ -51,3 +49,4 @@ targets:
         PRODUCT_NAME: TubifyTests
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Tubify.app/Contents/MacOS/Tubify"
         BUNDLE_LOADER: "$(TEST_HOST)"
+        GENERATE_INFOPLIST_FILE: YES
