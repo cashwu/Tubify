@@ -16,7 +16,7 @@ struct SettingsView: View {
     @State private var showingFolderPicker = false
     @State private var ytdlpStatus: YTDLPStatus = .checking
     @State private var ffmpegStatus: FFmpegStatus = .checking
-    @State private var hasFullDiskAccess: Bool = false
+    @State private var fullDiskAccessStatus: FullDiskAccessStatus = .checking
 
     enum YTDLPStatus {
         case checking
@@ -28,6 +28,12 @@ struct SettingsView: View {
         case checking
         case found(String)
         case notFound
+    }
+
+    enum FullDiskAccessStatus {
+        case checking
+        case granted
+        case notGranted
     }
 
     var body: some View {
@@ -78,7 +84,7 @@ struct SettingsView: View {
                                 .font(.system(size: 18))
                                 .foregroundStyle(.orange)
                         }
-                        if !hasFullDiskAccess && PermissionService.shared.commandUsesSafariCookies(downloadCommand) {
+                        if case .notGranted = fullDiskAccessStatus, PermissionService.shared.commandUsesSafariCookies(downloadCommand) {
                             Text("使用 Safari cookies 需要完整磁碟存取權限。請在系統設定 > 隱私與安全性 > 完整磁碟存取 中加入 Tubify。")
                                 .font(.system(size: 18))
                                 .foregroundStyle(.orange)
@@ -260,14 +266,22 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var fullDiskAccessStatusView: some View {
-        if hasFullDiskAccess {
+        switch fullDiskAccessStatus {
+        case .checking:
+            HStack(spacing: 4) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("檢查中...")
+                    .foregroundStyle(.secondary)
+            }
+        case .granted:
             HStack(spacing: 4) {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(.green)
                 Text("已授權")
                     .foregroundStyle(.secondary)
             }
-        } else {
+        case .notGranted:
             HStack(spacing: 4) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
@@ -366,7 +380,7 @@ struct SettingsView: View {
     // MARK: - 檢查完整磁碟存取權限
 
     private func checkFullDiskAccess() {
-        hasFullDiskAccess = PermissionService.shared.hasFullDiskAccess()
+        fullDiskAccessStatus = PermissionService.shared.hasFullDiskAccess() ? .granted : .notGranted
     }
 
     // MARK: - 打開日誌資料夾
