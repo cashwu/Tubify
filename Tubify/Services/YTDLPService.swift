@@ -153,6 +153,17 @@ actor YTDLPService {
         process.arguments = finalArguments
         process.currentDirectoryURL = URL(fileURLWithPath: outputDirectory)
 
+        // 設定環境變數，確保子進程可以找到 ffmpeg 等工具
+        // macOS app 從 Finder 啟動時不會繼承 shell 的 PATH
+        var environment = ProcessInfo.processInfo.environment
+        let additionalPaths = ["/opt/homebrew/bin", "/usr/local/bin"]
+        if let existingPath = environment["PATH"] {
+            environment["PATH"] = additionalPaths.joined(separator: ":") + ":" + existingPath
+        } else {
+            environment["PATH"] = additionalPaths.joined(separator: ":") + ":/usr/bin:/bin"
+        }
+        process.environment = environment
+
         let outputPipe = Pipe()
         let errorPipe = Pipe()
         process.standardOutput = outputPipe
