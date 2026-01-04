@@ -208,12 +208,17 @@ class DownloadManager {
             // 找出可以開始的任務數量
             let availableSlots = maxConcurrentDownloads - currentTasks.count
 
+            TubifyLogger.download.debug("佇列狀態: maxConcurrent=\(self.maxConcurrentDownloads), currentTasks=\(self.currentTasks.count), availableSlots=\(availableSlots)")
+
             if availableSlots > 0 {
                 // 取得待處理的任務
                 let pendingTasks = tasks.filter { $0.status == .pending }.prefix(availableSlots)
 
+                TubifyLogger.download.debug("準備啟動 \(pendingTasks.count) 個下載任務")
+
                 for task in pendingTasks {
                     currentTasks.insert(task.id)
+                    TubifyLogger.download.info("啟動並行下載: \(task.title) (目前進行中: \(self.currentTasks.count))")
 
                     // 啟動下載任務（不等待完成）
                     Task {
