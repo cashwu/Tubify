@@ -8,6 +8,7 @@ enum DownloadStatus: String, Codable {
     case completed = "completed"       // 完成
     case failed = "failed"             // 失敗
     case cancelled = "cancelled"       // 已取消
+    case scheduled = "scheduled"       // 尚未首播
 
     var displayText: String {
         switch self {
@@ -17,6 +18,7 @@ enum DownloadStatus: String, Codable {
         case .completed: return "完成"
         case .failed: return "失敗"
         case .cancelled: return "已取消"
+        case .scheduled: return "尚未首播"
         }
     }
 }
@@ -34,10 +36,11 @@ class DownloadTask: Identifiable, Codable {
     var outputPath: String?
     var createdAt: Date
     var completedAt: Date?
+    var premiereDate: Date?  // 首播時間（僅適用於 scheduled 狀態）
 
     enum CodingKeys: String, CodingKey {
         case id, url, title, thumbnailURL, status, progress
-        case errorMessage, outputPath, createdAt, completedAt
+        case errorMessage, outputPath, createdAt, completedAt, premiereDate
     }
 
     init(
@@ -50,7 +53,8 @@ class DownloadTask: Identifiable, Codable {
         errorMessage: String? = nil,
         outputPath: String? = nil,
         createdAt: Date = Date(),
-        completedAt: Date? = nil
+        completedAt: Date? = nil,
+        premiereDate: Date? = nil
     ) {
         self.id = id
         self.url = url
@@ -62,6 +66,7 @@ class DownloadTask: Identifiable, Codable {
         self.outputPath = outputPath
         self.createdAt = createdAt
         self.completedAt = completedAt
+        self.premiereDate = premiereDate
     }
 
     required init(from decoder: Decoder) throws {
@@ -76,6 +81,7 @@ class DownloadTask: Identifiable, Codable {
         outputPath = try container.decodeIfPresent(String.self, forKey: .outputPath)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         completedAt = try container.decodeIfPresent(Date.self, forKey: .completedAt)
+        premiereDate = try container.decodeIfPresent(Date.self, forKey: .premiereDate)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -90,6 +96,7 @@ class DownloadTask: Identifiable, Codable {
         try container.encodeIfPresent(outputPath, forKey: .outputPath)
         try container.encode(createdAt, forKey: .createdAt)
         try container.encodeIfPresent(completedAt, forKey: .completedAt)
+        try container.encodeIfPresent(premiereDate, forKey: .premiereDate)
     }
 }
 

@@ -290,14 +290,23 @@ class DownloadManager {
                 outputPath: outputPath
             )
         } catch {
-            task.status = .failed
-            task.errorMessage = error.localizedDescription
+            let errorMsg = error.localizedDescription
 
-            // 發送失敗通知
-            NotificationService.shared.sendDownloadFailedNotification(
-                title: task.title,
-                error: error.localizedDescription
-            )
+            // 檢查是否為首播影片
+            if let premiereDate = PremiereErrorParser.parsePremiereDate(from: errorMsg) {
+                task.status = .scheduled
+                task.premiereDate = premiereDate
+                task.errorMessage = errorMsg
+            } else {
+                task.status = .failed
+                task.errorMessage = errorMsg
+
+                // 發送失敗通知
+                NotificationService.shared.sendDownloadFailedNotification(
+                    title: task.title,
+                    error: errorMsg
+                )
+            }
         }
 
         // 儲存任務

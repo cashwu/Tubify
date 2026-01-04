@@ -17,6 +17,7 @@ final class DownloadTaskTests: XCTestCase {
         XCTAssertNil(task.errorMessage)
         XCTAssertNil(task.outputPath)
         XCTAssertNil(task.completedAt)
+        XCTAssertNil(task.premiereDate)
         XCTAssertNotNil(task.createdAt)
     }
 
@@ -79,6 +80,19 @@ final class DownloadTaskTests: XCTestCase {
         XCTAssertEqual(task.status, .cancelled)
     }
 
+    func testScheduledStatus() {
+        let task = DownloadTask(url: "https://www.youtube.com/watch?v=abc123")
+        let premiereDate = Date().addingTimeInterval(3600) // 1 小時後
+
+        task.status = .scheduled
+        task.premiereDate = premiereDate
+        task.errorMessage = "Premieres in 60 minutes"
+
+        XCTAssertEqual(task.status, .scheduled)
+        XCTAssertEqual(task.premiereDate, premiereDate)
+        XCTAssertEqual(task.errorMessage, "Premieres in 60 minutes")
+    }
+
     // MARK: - DownloadStatus displayText 測試
 
     func testStatusDisplayText() {
@@ -88,6 +102,7 @@ final class DownloadTaskTests: XCTestCase {
         XCTAssertEqual(DownloadStatus.completed.displayText, "完成")
         XCTAssertEqual(DownloadStatus.failed.displayText, "失敗")
         XCTAssertEqual(DownloadStatus.cancelled.displayText, "已取消")
+        XCTAssertEqual(DownloadStatus.scheduled.displayText, "尚未首播")
     }
 
     // MARK: - 進度測試
@@ -231,6 +246,7 @@ final class DownloadTaskTests: XCTestCase {
         XCTAssertEqual(DownloadStatus.completed.rawValue, "completed")
         XCTAssertEqual(DownloadStatus.failed.rawValue, "failed")
         XCTAssertEqual(DownloadStatus.cancelled.rawValue, "cancelled")
+        XCTAssertEqual(DownloadStatus.scheduled.rawValue, "scheduled")
     }
 
     func testStatusFromRawValue() {
@@ -240,6 +256,59 @@ final class DownloadTaskTests: XCTestCase {
         XCTAssertEqual(DownloadStatus(rawValue: "completed"), .completed)
         XCTAssertEqual(DownloadStatus(rawValue: "failed"), .failed)
         XCTAssertEqual(DownloadStatus(rawValue: "cancelled"), .cancelled)
+        XCTAssertEqual(DownloadStatus(rawValue: "scheduled"), .scheduled)
         XCTAssertNil(DownloadStatus(rawValue: "invalid"))
+    }
+
+    // MARK: - premiereDate 編碼/解碼測試
+
+    func testEncodingAndDecodingWithPremiereDate() throws {
+        let premiereDate = Date().addingTimeInterval(3600)
+        let originalTask = DownloadTask(
+            url: "https://www.youtube.com/watch?v=abc123",
+            title: "Upcoming Premiere",
+            status: .scheduled,
+            premiereDate: premiereDate
+        )
+        originalTask.errorMessage = "Premieres in 60 minutes"
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(originalTask)
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decodedTask = try decoder.decode(DownloadTask.self, from: data)
+
+        XCTAssertEqual(decodedTask.status, .scheduled)
+        XCTAssertNotNil(decodedTask.premiereDate)
+        // 比較時間（允許 1 秒誤差）
+        if let decodedDate = decodedTask.premiereDate {
+            XCTAssertEqual(decodedDate.timeIntervalSince1970, premiereDate.timeIntervalSince1970, accuracy: 1.0)
+        }
+        XCTAssertEqual(decodedTask.errorMessage, "Premieres in 60 minutes")
+    }
+
+    func testDecodingScheduledStatusFromJSON() throws {
+        let json = """
+        {
+            "id": "550E8400-E29B-41D4-A716-446655440000",
+            "url": "https://www.youtube.com/watch?v=premiere123",
+            "title": "Upcoming Video",
+            "status": "scheduled",
+            "progress": 0.0,
+            "errorMessage": "Premieres in 30 minutes",
+            "createdAt": "2024-01-15T10:30:00Z",
+            "premiereDate": "2024-01-15T11:00:00Z"
+        }
+        """.data(using: .utf8)!
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let task = try decoder.decode(DownloadTask.self, from: json)
+
+        XCTAssertEqual(task.status, .scheduled)
+        XCTAssertNotNil(task.premiereDate)
+        XCTAssertEqual(task.errorMessage, "Premieres in 30 minutes")
     }
 }

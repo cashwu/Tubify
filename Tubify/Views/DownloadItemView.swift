@@ -157,10 +157,25 @@ struct DownloadItemView: View {
                 Image(systemName: "xmark.circle.fill")
                     .foregroundStyle(.orange)
                 Text("已取消")
+            case .scheduled:
+                Image(systemName: "clock.badge.exclamationmark")
+                    .foregroundStyle(.yellow)
+                if let date = task.premiereDate {
+                    Text(formatPremiereTime(date))
+                } else {
+                    Text("尚未首播")
+                }
             }
         }
         .font(.system(size: 18))
         .foregroundStyle(.secondary)
+    }
+
+    /// 格式化首播時間顯示
+    private func formatPremiereTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        return formatter.string(from: date) + " 首播"
     }
 
     // MARK: - 操作按鈕
@@ -178,8 +193,8 @@ struct DownloadItemView: View {
                 .help("在 Finder 中顯示")
             }
 
-            // 重試按鈕（失敗或取消時）
-            if task.status == .failed || task.status == .cancelled {
+            // 重試按鈕（失敗、取消或首播尚未開始時）
+            if task.status == .failed || task.status == .cancelled || task.status == .scheduled {
                 Button(action: onRetry) {
                     Image(systemName: "arrow.clockwise")
                         .font(.system(size: 21))

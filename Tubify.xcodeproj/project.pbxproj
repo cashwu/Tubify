@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		02C4CE0B1320A67BBF578263 /* TubifyApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A44ECF8881FAB3E657F8FCAD /* TubifyApp.swift */; };
 		060C5193E130325111314B69 /* YouTubeMetadataServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F614B343FA3EF55C77F02A1 /* YouTubeMetadataServiceTests.swift */; };
+		07691B56D9D1D64B3EBD9CB6 /* PremiereErrorParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DAE150F1AF830DF89DE33B2 /* PremiereErrorParserTests.swift */; };
 		212AAF34444F4E7456F50B21 /* DownloadItemView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92F4011B6FFCBC1F7193FDD3 /* DownloadItemView.swift */; };
 		25F7A1662ED3A48695BB3824 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 345AA1EE74AF5EFA1829B291 /* SettingsView.swift */; };
 		6160F89C21556B3D4731DDBD /* YouTubeMetadataService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E3CBC495E00CB65FBBB39DC /* YouTubeMetadataService.swift */; };
@@ -21,6 +22,7 @@
 		94F2DB927CAD21242C8680BF /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44C08970ACCDAA7691461E10 /* ContentView.swift */; };
 		96781B6921245C33C992D231 /* URLValidationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27FA3E7C8810E2DD3D783593 /* URLValidationTests.swift */; };
 		A5133C8B045F8477AD986E02 /* DownloadTaskTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C99522A3C5241F5B0BB160A /* DownloadTaskTests.swift */; };
+		BCD604B18AFED60EAE3CF48C /* PremiereErrorParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72AD088C85DB93491D3D0928 /* PremiereErrorParser.swift */; };
 		BD1FE5AAA01D463DA43E76B2 /* DownloadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D4F49C12534415A645F3C44 /* DownloadManager.swift */; };
 		C71926994535505153FC4AEF /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E899875AB33A3557093ED50B /* NotificationService.swift */; };
 		D348C0FAAA322EADA614BA14 /* Logger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C5FE8EA69573F2FB899C4F1 /* Logger.swift */; };
@@ -50,7 +52,9 @@
 		644BFB8F58A30DF3B66C8E4E /* YTDLPService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YTDLPService.swift; sourceTree = "<group>"; };
 		6BE1AE51AC18C3B14E2D617B /* Tubify.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Tubify.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		729614B0A0CFED38AEA1A4CA /* SafariCookiesService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafariCookiesService.swift; sourceTree = "<group>"; };
+		72AD088C85DB93491D3D0928 /* PremiereErrorParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PremiereErrorParser.swift; sourceTree = "<group>"; };
 		7B1861C7487DDFADC5E6A40B /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettings.swift; sourceTree = "<group>"; };
+		7DAE150F1AF830DF89DE33B2 /* PremiereErrorParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PremiereErrorParserTests.swift; sourceTree = "<group>"; };
 		80285D6CF9B0E6021ACC8991 /* TubifyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TubifyTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		8A9847C5AD0C41FEB8563FC3 /* DownloadTask.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadTask.swift; sourceTree = "<group>"; };
 		8C99522A3C5241F5B0BB160A /* DownloadTaskTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadTaskTests.swift; sourceTree = "<group>"; };
@@ -109,6 +113,7 @@
 			isa = PBXGroup;
 			children = (
 				4C5FE8EA69573F2FB899C4F1 /* Logger.swift */,
+				72AD088C85DB93491D3D0928 /* PremiereErrorParser.swift */,
 			);
 			path = Utilities;
 			sourceTree = "<group>";
@@ -155,6 +160,7 @@
 			isa = PBXGroup;
 			children = (
 				8C99522A3C5241F5B0BB160A /* DownloadTaskTests.swift */,
+				7DAE150F1AF830DF89DE33B2 /* PremiereErrorParserTests.swift */,
 				27FA3E7C8810E2DD3D783593 /* URLValidationTests.swift */,
 				3F614B343FA3EF55C77F02A1 /* YouTubeMetadataServiceTests.swift */,
 				551DBCC97D37881B53AA3F66 /* YTDLPServiceTests.swift */,
@@ -243,6 +249,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A5133C8B045F8477AD986E02 /* DownloadTaskTests.swift in Sources */,
+				07691B56D9D1D64B3EBD9CB6 /* PremiereErrorParserTests.swift in Sources */,
 				96781B6921245C33C992D231 /* URLValidationTests.swift in Sources */,
 				8BA95BA87A60E31C7644B309 /* YTDLPServiceTests.swift in Sources */,
 				060C5193E130325111314B69 /* YouTubeMetadataServiceTests.swift in Sources */,
@@ -263,6 +270,7 @@
 				C71926994535505153FC4AEF /* NotificationService.swift in Sources */,
 				65CB75E79E8A5D2A50D70F41 /* PermissionService.swift in Sources */,
 				FC58597FD186D9CF84D07939 /* PersistenceService.swift in Sources */,
+				BCD604B18AFED60EAE3CF48C /* PremiereErrorParser.swift in Sources */,
 				888A4ADB770C69D94B881679 /* SafariCookiesService.swift in Sources */,
 				25F7A1662ED3A48695BB3824 /* SettingsView.swift in Sources */,
 				02C4CE0B1320A67BBF578263 /* TubifyApp.swift in Sources */,
