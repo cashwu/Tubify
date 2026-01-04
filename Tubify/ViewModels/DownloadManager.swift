@@ -35,11 +35,6 @@ class DownloadManager {
         set { UserDefaults.standard.set(newValue, forKey: AppSettingsKeys.downloadFolder) }
     }
 
-    var downloadInterval: Double {
-        get { UserDefaults.standard.double(forKey: AppSettingsKeys.downloadInterval).nonZeroOrDefault(AppSettingsDefaults.downloadInterval) }
-        set { UserDefaults.standard.set(newValue, forKey: AppSettingsKeys.downloadInterval) }
-    }
-
     var maxConcurrentDownloads: Int {
         get {
             let value = UserDefaults.standard.integer(forKey: AppSettingsKeys.maxConcurrentDownloads).nonZeroOrDefault(AppSettingsDefaults.maxConcurrentDownloads)
@@ -219,9 +214,9 @@ class DownloadManager {
                 var isFirstTask = true
                 for task in pendingTasks {
                     // 啟動新任務前等待間隔（第一個任務不等，避免不必要的延遲）
-                    if !isFirstTask && downloadInterval > 0 {
-                        TubifyLogger.download.debug("等待 \(self.downloadInterval) 秒後啟動下一個任務")
-                        try? await Task.sleep(for: .seconds(downloadInterval))
+                    if !isFirstTask {
+                        TubifyLogger.download.debug("等待 \(DownloadConstants.preStartDelay) 秒後啟動下一個任務")
+                        try? await Task.sleep(for: .seconds(DownloadConstants.preStartDelay))
                     }
                     isFirstTask = false
 

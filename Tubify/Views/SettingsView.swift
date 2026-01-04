@@ -10,9 +10,6 @@ struct SettingsView: View {
     @AppStorage(AppSettingsKeys.downloadFolder)
     private var downloadFolder: String = AppSettingsDefaults.downloadFolder
 
-    @AppStorage(AppSettingsKeys.downloadInterval)
-    private var downloadInterval: Double = AppSettingsDefaults.downloadInterval
-
     @AppStorage(AppSettingsKeys.maxConcurrentDownloads)
     private var maxConcurrentDownloads: Int = AppSettingsDefaults.maxConcurrentDownloads
 
@@ -129,25 +126,6 @@ struct SettingsView: View {
                             selectDownloadFolder()
                         }
                     }
-
-                    // 下載間隔
-                    HStack {
-                        Text("下載間隔")
-                        Spacer()
-
-                        TextField("", value: $downloadInterval, format: .number)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 60)
-                            .multilineTextAlignment(.trailing)
-                            .font(.system(size: 18))
-
-                        Text("秒")
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Text("啟動每個新下載前的等待秒數（避免被 YouTube 限制）")
-                        .font(.system(size: 18))
-                        .foregroundStyle(.secondary)
 
                     // 同時下載數量
                     HStack {
