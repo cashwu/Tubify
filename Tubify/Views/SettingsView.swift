@@ -145,7 +145,7 @@ struct SettingsView: View {
                             .foregroundStyle(.secondary)
                     }
 
-                    Text("每個下載完成後，等待指定秒數再開始下一個")
+                    Text("啟動每個新下載前的等待秒數（避免被 YouTube 限制）")
                         .font(.system(size: 18))
                         .foregroundStyle(.secondary)
 

@@ -216,7 +216,15 @@ class DownloadManager {
 
                 TubifyLogger.download.debug("準備啟動 \(pendingTasks.count) 個下載任務")
 
+                var isFirstTask = true
                 for task in pendingTasks {
+                    // 啟動新任務前等待間隔（第一個任務不等，避免不必要的延遲）
+                    if !isFirstTask && downloadInterval > 0 {
+                        TubifyLogger.download.debug("等待 \(self.downloadInterval) 秒後啟動下一個任務")
+                        try? await Task.sleep(for: .seconds(downloadInterval))
+                    }
+                    isFirstTask = false
+
                     currentTasks.insert(task.id)
                     TubifyLogger.download.info("啟動並行下載: \(task.title) (目前進行中: \(self.currentTasks.count))")
 
@@ -227,16 +235,6 @@ class DownloadManager {
                         // 下載完成後從 currentTasks 移除
                         _ = await MainActor.run {
                             self.currentTasks.remove(task.id)
-                        }
-
-                        // 等待間隔時間後觸發下一個
-                        try? await Task.sleep(for: .seconds(self.downloadInterval))
-
-                        // 繼續處理佇列
-                        await MainActor.run {
-                            if self.downloadTask == nil && self.tasks.contains(where: { $0.status == .pending }) {
-                                self.startDownloadQueue()
-                            }
                         }
                     }
                 }
