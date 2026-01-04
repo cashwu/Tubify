@@ -111,29 +111,35 @@ if [ "$SKIP_TESTS" = false ]; then
     print_step "執行單元測試..."
     echo ""
 
-    if xcodebuild test \
+    # 檢查 scheme 是否有設定測試
+    TEST_OUTPUT=$(xcodebuild test \
         -project "${PROJECT_NAME}.xcodeproj" \
         -scheme "$SCHEME_NAME" \
         -configuration Debug \
         -destination 'platform=macOS' \
-        2>&1 | grep -E "(Test Case|passed|failed|error:)"; then
+        2>&1) || true
 
-        # 檢查測試結果
-        if xcodebuild test \
-            -project "${PROJECT_NAME}.xcodeproj" \
-            -scheme "$SCHEME_NAME" \
-            -configuration Debug \
-            -destination 'platform=macOS' \
-            2>&1 | grep -q "TEST SUCCEEDED"; then
-            print_success "所有測試通過"
-        else
-            print_error "測試失敗！請修復測試後再打包。"
-            echo ""
-            echo "提示: 使用 --skip-tests 可跳過測試"
-            exit 1
-        fi
+    if echo "$TEST_OUTPUT" | grep -q "Scheme .* is not currently configured for the test action"; then
+        print_warning "Scheme 尚未設定測試 action，跳過測試"
+        print_warning "如需測試，請在 Xcode 中將 TubifyTests 加入 Scheme 的 Test action"
+        echo ""
+    elif echo "$TEST_OUTPUT" | grep -q "TEST SUCCEEDED"; then
+        print_success "所有測試通過"
+        echo ""
+    elif echo "$TEST_OUTPUT" | grep -q "TEST FAILED"; then
+        echo "$TEST_OUTPUT" | grep -E "(Test Case|passed|failed|error:)" || true
+        print_error "測試失敗！請修復測試後再打包。"
+        echo ""
+        echo "提示: 使用 --skip-tests 可跳過測試"
+        exit 1
+    else
+        # 其他錯誤
+        echo "$TEST_OUTPUT" | tail -20
+        print_error "測試執行發生錯誤"
+        echo ""
+        echo "提示: 使用 --skip-tests 可跳過測試"
+        exit 1
     fi
-    echo ""
 fi
 
 # 建立輸出目錄
@@ -270,9 +276,11 @@ echo ""
 print_success "輸出目錄: $EXPORT_PATH"
 echo ""
 echo "產出檔案:"
-ls -lh "$EXPORT_PATH"/*.app 2>/dev/null | awk '{print "  [APP] " $NF " (" $5 ")"}'
+APP_SIZE=$(du -sh "$APP_PATH" 2>/dev/null | awk '{print $1}')
+echo "  [APP] ${APP_PATH} (${APP_SIZE})"
 if [ "$CREATE_DMG" = true ] && [ -f "$DMG_PATH" ]; then
-    ls -lh "$DMG_PATH" | awk '{print "  [DMG] " $NF " (" $5 ")"}'
+    DMG_SIZE=$(ls -lh "$DMG_PATH" | awk '{print $5}')
+    echo "  [DMG] ${DMG_PATH} (${DMG_SIZE})"
 fi
 echo ""
 echo "安裝說明:"
