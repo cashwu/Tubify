@@ -4,7 +4,6 @@ import Foundation
 enum AppSettingsKeys {
     static let downloadCommand = "downloadCommand"
     static let downloadFolder = "downloadFolder"
-    static let downloadInterval = "downloadInterval"
     static let maxConcurrentDownloads = "maxConcurrentDownloads"
 }
 
@@ -14,8 +13,13 @@ enum AppSettingsDefaults {
     // 使用 -S ext:mp4 以獲得最佳 mp4 品質
     static let downloadCommand = "yt-dlp -S ext:mp4 --cookies-from-browser safari \"$youtubeUrl\""
     static let downloadFolder = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first?.path ?? "~/Downloads"
-    static let downloadInterval: Double = 2.0 // 秒
     static let maxConcurrentDownloads: Int = 2 // 最大同時下載數量（1-5）
+}
+
+/// 下載相關常數
+enum DownloadConstants {
+    /// 啟動每個新下載前的等待秒數（避免被 YouTube 限制）
+    static let preStartDelay: Double = 1.0
 }
 
 /// Double extension for UserDefaults handling

@@ -35,11 +35,6 @@ class DownloadManager {
         set { UserDefaults.standard.set(newValue, forKey: AppSettingsKeys.downloadFolder) }
     }
 
-    var downloadInterval: Double {
-        get { UserDefaults.standard.double(forKey: AppSettingsKeys.downloadInterval).nonZeroOrDefault(AppSettingsDefaults.downloadInterval) }
-        set { UserDefaults.standard.set(newValue, forKey: AppSettingsKeys.downloadInterval) }
-    }
-
     var maxConcurrentDownloads: Int {
         get {
             let value = UserDefaults.standard.integer(forKey: AppSettingsKeys.maxConcurrentDownloads).nonZeroOrDefault(AppSettingsDefaults.maxConcurrentDownloads)
@@ -208,12 +203,25 @@ class DownloadManager {
             // 找出可以開始的任務數量
             let availableSlots = maxConcurrentDownloads - currentTasks.count
 
+            TubifyLogger.download.debug("佇列狀態: maxConcurrent=\(self.maxConcurrentDownloads), currentTasks=\(self.currentTasks.count), availableSlots=\(availableSlots)")
+
             if availableSlots > 0 {
                 // 取得待處理的任務
                 let pendingTasks = tasks.filter { $0.status == .pending }.prefix(availableSlots)
 
+                TubifyLogger.download.debug("準備啟動 \(pendingTasks.count) 個下載任務")
+
+                var isFirstTask = true
                 for task in pendingTasks {
+                    // 啟動新任務前等待間隔（第一個任務不等，避免不必要的延遲）
+                    if !isFirstTask {
+                        TubifyLogger.download.debug("等待 \(DownloadConstants.preStartDelay) 秒後啟動下一個任務")
+                        try? await Task.sleep(for: .seconds(DownloadConstants.preStartDelay))
+                    }
+                    isFirstTask = false
+
                     currentTasks.insert(task.id)
+                    TubifyLogger.download.info("啟動並行下載: \(task.title) (目前進行中: \(self.currentTasks.count))")
 
                     // 啟動下載任務（不等待完成）
                     Task {
@@ -222,16 +230,6 @@ class DownloadManager {
                         // 下載完成後從 currentTasks 移除
                         _ = await MainActor.run {
                             self.currentTasks.remove(task.id)
-                        }
-
-                        // 等待間隔時間後觸發下一個
-                        try? await Task.sleep(for: .seconds(self.downloadInterval))
-
-                        // 繼續處理佇列
-                        await MainActor.run {
-                            if self.downloadTask == nil && self.tasks.contains(where: { $0.status == .pending }) {
-                                self.startDownloadQueue()
-                            }
                         }
                     }
                 }
