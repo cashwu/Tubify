@@ -79,7 +79,7 @@ struct SettingsView: View {
                                 .foregroundStyle(.orange)
                         }
                         if !hasFullDiskAccess && PermissionService.shared.commandUsesSafariCookies(downloadCommand) {
-                            Text("使用 Safari cookies 需要完整磁碟存取權限")
+                            Text("使用 Safari cookies 需要完整磁碟存取權限。請在系統設定 > 隱私與安全性 > 完整磁碟存取 中加入 Tubify。")
                                 .font(.system(size: 18))
                                 .foregroundStyle(.orange)
                         }
@@ -325,6 +325,21 @@ struct SettingsView: View {
     // MARK: - 檢查 ffmpeg
 
     private func checkFFmpeg() async {
+        // 先檢查已知的 Homebrew 安裝路徑
+        let possiblePaths = [
+            "/opt/homebrew/bin/ffmpeg",      // Apple Silicon Homebrew
+            "/usr/local/bin/ffmpeg",          // Intel Homebrew
+            "/usr/bin/ffmpeg"                 // 系統安裝
+        ]
+
+        for path in possiblePaths {
+            if FileManager.default.fileExists(atPath: path) {
+                ffmpegStatus = .found(path)
+                return
+            }
+        }
+
+        // 後備方案：嘗試使用 which 指令
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
         process.arguments = ["ffmpeg"]

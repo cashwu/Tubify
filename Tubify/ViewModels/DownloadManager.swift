@@ -268,7 +268,6 @@ class DownloadManager {
             ) { [weak task] progress in
                 Task { @MainActor in
                     task?.progress = progress
-                    LogFileManager.shared.logDownloadProgress(taskId: task?.id ?? UUID(), progress: progress)
                 }
             }
 

@@ -120,8 +120,16 @@ actor YTDLPService {
             throw YTDLPError.notFound
         }
 
+        // 如果指令包含 --cookies-from-browser safari，使用 SafariCookiesService 轉換
+        // 這是因為 yt-dlp 子進程沒有完整磁碟存取權限，但 Tubify 有
+        var processedTemplate = commandTemplate
+        if SafariCookiesService.shared.commandNeedsSafariCookies(commandTemplate) {
+            TubifyLogger.cookies.info("偵測到 Safari cookies 參數，轉換為 cookies 文件")
+            processedTemplate = SafariCookiesService.shared.transformCommand(commandTemplate)
+        }
+
         // 解析命令模板
-        let command = commandTemplate.replacingOccurrences(of: "$youtubeUrl", with: url)
+        let command = processedTemplate.replacingOccurrences(of: "$youtubeUrl", with: url)
         let arguments = parseCommandArguments(command)
 
         // 加入輸出路徑參數
@@ -164,14 +172,16 @@ actor YTDLPService {
             for line in output.components(separatedBy: .newlines) {
                 guard !line.isEmpty else { continue }
 
-                LogFileManager.shared.logYTDLPOutput(taskId: taskId, output: line)
-
-                // 解析進度
+                // 解析進度（不寫入日誌）
                 if let progress = self?.parseProgress(from: line) {
                     Task { @MainActor in
                         onProgress(progress)
                     }
+                    continue
                 }
+
+                // 非進度訊息寫入日誌
+                LogFileManager.shared.logYTDLPOutput(taskId: taskId, output: line)
 
                 // 解析輸出檔案路徑
                 if line.contains("[download] Destination:") {

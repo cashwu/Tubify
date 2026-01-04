@@ -10,10 +10,14 @@ struct DownloadItemView: View {
     @State private var isHovering = false
     @State private var showDeleteAlert = false
 
-    /// 檢查是否為權限相關錯誤
+    /// 檢查是否為 Safari cookies 權限相關錯誤
     private var isPermissionError: Bool {
         guard let error = task.errorMessage else { return false }
-        return error.contains("Operation not permitted") || error.contains("Permission denied")
+        // 只有當錯誤訊息明確提到 Safari cookies 時才視為權限問題
+        let isCookiesError = error.contains("cookies") || error.contains("Safari") ||
+                             error.contains("Cookies.binarycookies")
+        let isPermError = error.contains("Operation not permitted") || error.contains("Permission denied")
+        return isCookiesError && isPermError
     }
 
     var body: some View {

@@ -15,6 +15,7 @@
 		65CB75E79E8A5D2A50D70F41 /* PermissionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD110BD56C1F54E7333B92DA /* PermissionService.swift */; };
 		74417089AD46AB141DDD3AF5 /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B1861C7487DDFADC5E6A40B /* AppSettings.swift */; };
 		77F48A65E13C25E4269ABF0E /* YTDLPService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 644BFB8F58A30DF3B66C8E4E /* YTDLPService.swift */; };
+		888A4ADB770C69D94B881679 /* SafariCookiesService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 729614B0A0CFED38AEA1A4CA /* SafariCookiesService.swift */; };
 		8BA95BA87A60E31C7644B309 /* YTDLPServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 551DBCC97D37881B53AA3F66 /* YTDLPServiceTests.swift */; };
 		902E79E3B4284B909393FB2C /* DownloadTask.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A9847C5AD0C41FEB8563FC3 /* DownloadTask.swift */; };
 		94F2DB927CAD21242C8680BF /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44C08970ACCDAA7691461E10 /* ContentView.swift */; };
@@ -48,6 +49,7 @@
 		5E3CBC495E00CB65FBBB39DC /* YouTubeMetadataService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YouTubeMetadataService.swift; sourceTree = "<group>"; };
 		644BFB8F58A30DF3B66C8E4E /* YTDLPService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YTDLPService.swift; sourceTree = "<group>"; };
 		6BE1AE51AC18C3B14E2D617B /* Tubify.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Tubify.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		729614B0A0CFED38AEA1A4CA /* SafariCookiesService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafariCookiesService.swift; sourceTree = "<group>"; };
 		7B1861C7487DDFADC5E6A40B /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettings.swift; sourceTree = "<group>"; };
 		80285D6CF9B0E6021ACC8991 /* TubifyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TubifyTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		8A9847C5AD0C41FEB8563FC3 /* DownloadTask.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadTask.swift; sourceTree = "<group>"; };
@@ -84,6 +86,7 @@
 				E899875AB33A3557093ED50B /* NotificationService.swift */,
 				BD110BD56C1F54E7333B92DA /* PermissionService.swift */,
 				92B5992FEF733EEB5117091F /* PersistenceService.swift */,
+				729614B0A0CFED38AEA1A4CA /* SafariCookiesService.swift */,
 				5E3CBC495E00CB65FBBB39DC /* YouTubeMetadataService.swift */,
 				644BFB8F58A30DF3B66C8E4E /* YTDLPService.swift */,
 			);
@@ -97,6 +100,7 @@
 				92F4011B6FFCBC1F7193FDD3 /* DownloadItemView.swift */,
 				90FDB53F7F4996C674F7E7E2 /* EmptyStateView.swift */,
 				345AA1EE74AF5EFA1829B291 /* SettingsView.swift */,
+				DA08B7DD769F6C1E83D77AA9 /* Components */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -125,6 +129,13 @@
 				8A9847C5AD0C41FEB8563FC3 /* DownloadTask.swift */,
 			);
 			path = Models;
+			sourceTree = "<group>";
+		};
+		DA08B7DD769F6C1E83D77AA9 /* Components */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = Components;
 			sourceTree = "<group>";
 		};
 		F00F48984AA878182469C3D3 /* Tubify */ = {
@@ -252,6 +263,7 @@
 				C71926994535505153FC4AEF /* NotificationService.swift in Sources */,
 				65CB75E79E8A5D2A50D70F41 /* PermissionService.swift in Sources */,
 				FC58597FD186D9CF84D07939 /* PersistenceService.swift in Sources */,
+				888A4ADB770C69D94B881679 /* SafariCookiesService.swift in Sources */,
 				25F7A1662ED3A48695BB3824 /* SettingsView.swift in Sources */,
 				02C4CE0B1320A67BBF578263 /* TubifyApp.swift in Sources */,
 				77F48A65E13C25E4269ABF0E /* YTDLPService.swift in Sources */,

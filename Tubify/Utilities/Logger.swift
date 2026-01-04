@@ -19,6 +19,9 @@ enum TubifyLogger {
 
     /// UI 相關日誌
     static let ui = Logger(subsystem: subsystem, category: "ui")
+
+    /// Cookies 相關日誌
+    static let cookies = Logger(subsystem: subsystem, category: "cookies")
 }
 
 /// 日誌檔案管理
@@ -87,13 +90,6 @@ class LogFileManager {
         let message = "下載開始 - TaskID: \(taskId.uuidString), URL: \(url)"
         writeToFile(message)
         TubifyLogger.download.info("\(message)")
-    }
-
-    /// 記錄下載進度
-    func logDownloadProgress(taskId: UUID, progress: Double) {
-        let message = "下載進度 - TaskID: \(taskId.uuidString), Progress: \(String(format: "%.1f", progress * 100))%"
-        writeToFile(message, level: "DEBUG")
-        TubifyLogger.download.debug("\(message)")
     }
 
     /// 記錄下載完成
