@@ -21,6 +21,9 @@ class DownloadManager {
     /// 是否正在下載
     var isDownloading: Bool = false
 
+    /// 是否全部暫停
+    var isAllPaused: Bool = false
+
     /// 目前下載中的任務（支援同時多個）
     var currentTasks: Set<UUID> = []
 
@@ -131,12 +134,15 @@ class DownloadManager {
         // 2. 使用 Safari cookies 需要 Full Disk Access 權限，沒有權限會導致 yt-dlp 無限期掛起
         // 3. Cookies 只在下載時使用（下載私人影片時）
 
+        // 決定新任務的狀態：如果全部暫停中，新任務也設為暫停
+        let newStatus: DownloadStatus = isAllPaused ? .paused : .pending
+
         do {
             let videoInfo = try await metadataService.fetchVideoInfo(url: task.url, cookiesArguments: [])
             TubifyLogger.download.info("成功獲取影片資訊: \(videoInfo.title)")
             task.title = videoInfo.title
             task.thumbnailURL = videoInfo.thumbnail
-            task.status = .pending
+            task.status = newStatus
         } catch {
             let errorMessage = error.localizedDescription
             TubifyLogger.download.error("獲取影片資訊失敗: \(errorMessage)")
@@ -158,11 +164,11 @@ class DownloadManager {
                     task.status = .scheduled
                     task.errorMessage = errorMessage
                 } else {
-                    task.status = .pending
+                    task.status = newStatus
                 }
             } else {
                 task.title = "無法獲取標題"
-                task.status = .pending
+                task.status = newStatus
             }
         }
 
@@ -175,6 +181,9 @@ class DownloadManager {
         let metadataService = YouTubeMetadataService.shared
 
         // 注意：不使用 cookies 來獲取播放清單元資料（原因同 fetchMetadataForTask）
+
+        // 決定新任務的狀態：如果全部暫停中，新任務也設為暫停
+        let newStatus: DownloadStatus = isAllPaused ? .paused : .pending
 
         do {
             let videos = try await metadataService.fetchPlaylistInfo(url: urlString, cookiesArguments: [])
@@ -191,7 +200,8 @@ class DownloadManager {
                 let task = DownloadTask(
                     url: video.url,
                     title: video.title,
-                    thumbnailURL: video.thumbnail
+                    thumbnailURL: video.thumbnail,
+                    status: newStatus
                 )
                 tasks.append(task)
             }
@@ -202,7 +212,7 @@ class DownloadManager {
 
             // 播放清單獲取失敗，將佔位任務轉為可下載狀態
             placeholderTask.title = "播放清單（無法獲取詳細資訊）"
-            placeholderTask.status = .pending
+            placeholderTask.status = newStatus
         }
 
         PersistenceService.shared.saveTasks(tasks)
@@ -228,7 +238,7 @@ class DownloadManager {
 
             TubifyLogger.download.debug("佇列狀態: maxConcurrent=\(self.maxConcurrentDownloads), currentTasks=\(self.currentTasks.count), availableSlots=\(availableSlots)")
 
-            if availableSlots > 0 {
+            if availableSlots > 0 && !isAllPaused {
                 // 取得待處理的任務
                 let pendingTasks = tasks.filter { $0.status == .pending }.prefix(availableSlots)
 
@@ -322,6 +332,12 @@ class DownloadManager {
         } catch {
             let errorMsg = error.localizedDescription
 
+            // 如果任務已經被暫停或取消，不要覆蓋狀態
+            guard task.status != .paused && task.status != .cancelled else {
+                PersistenceService.shared.saveTasks(tasks)
+                return
+            }
+
             // 檢查是否為首播影片
             if let premiereDate = PremiereErrorParser.parsePremiereDate(from: errorMsg) {
                 task.status = .scheduled
@@ -390,6 +406,56 @@ class DownloadManager {
 
         tasks.removeAll()
         PersistenceService.shared.clearTasks()
+    }
+
+    /// 暫停全部下載
+    func pauseAll() async {
+        isAllPaused = true
+
+        // 暫停所有正在下載的任務
+        for task in tasks where task.status == .downloading {
+            await YTDLPService.shared.cancel(taskId: task.id)
+            task.status = .paused
+        }
+
+        // 將等待中的任務也設為暫停
+        for task in tasks where task.status == .pending {
+            task.status = .paused
+        }
+
+        PersistenceService.shared.saveTasks(tasks)
+    }
+
+    /// 繼續全部下載
+    func resumeAll() {
+        isAllPaused = false
+
+        // 將所有暫停和失敗的任務設為等待中
+        for task in tasks where task.status == .paused || task.status == .failed {
+            task.status = .pending
+            task.progress = 0
+            task.errorMessage = nil
+        }
+
+        PersistenceService.shared.saveTasks(tasks)
+        startDownloadQueue()
+    }
+
+    /// 暫停單一任務
+    func pauseTask(_ task: DownloadTask) async {
+        if task.status == .downloading {
+            await YTDLPService.shared.cancel(taskId: task.id)
+        }
+        task.status = .paused
+        PersistenceService.shared.saveTasks(tasks)
+    }
+
+    /// 繼續單一任務
+    func resumeTask(_ task: DownloadTask) {
+        task.status = .pending
+        task.progress = 0  // 重置進度，因為需要重新下載
+        PersistenceService.shared.saveTasks(tasks)
+        startDownloadQueue()
     }
 
     /// 驗證 URL 格式是否有效

@@ -200,6 +200,14 @@ struct ContentView: View {
                             },
                             onShowInFinder: {
                                 downloadManager.showInFinder(task)
+                            },
+                            onPause: {
+                                Task {
+                                    await downloadManager.pauseTask(task)
+                                }
+                            },
+                            onResume: {
+                                downloadManager.resumeTask(task)
                             }
                         )
 
@@ -251,6 +259,32 @@ struct ContentView: View {
             .focusable(false)
             .help("設定")
 
+            // 暫停全部按鈕
+            if downloadManager.tasks.contains(where: { $0.status == .downloading || $0.status == .pending }) {
+                Button(action: {
+                    Task { await downloadManager.pauseAll() }
+                }) {
+                    Image(systemName: "pause.circle")
+                        .font(.system(size: 21))
+                }
+                .buttonStyle(.borderless)
+                .focusable(false)
+                .help("暫停全部")
+            }
+
+            // 繼續全部按鈕
+            if downloadManager.tasks.contains(where: { $0.status == .paused }) {
+                Button(action: {
+                    downloadManager.resumeAll()
+                }) {
+                    Image(systemName: "play.circle")
+                        .font(.system(size: 21))
+                }
+                .buttonStyle(.borderless)
+                .focusable(false)
+                .help("繼續全部")
+            }
+
             Spacer()
 
             // 任務計數
@@ -298,6 +332,7 @@ struct ContentView: View {
         let downloading = downloadManager.tasks.filter { $0.status == .downloading }.count
         let completed = downloadManager.tasks.filter { $0.status == .completed }.count
         let pending = downloadManager.tasks.filter { $0.status == .pending }.count
+        let paused = downloadManager.tasks.filter { $0.status == .paused }.count
         let scheduled = downloadManager.tasks.filter { $0.status == .scheduled }.count
 
         if total == 0 {
@@ -311,6 +346,9 @@ struct ContentView: View {
         }
         if pending > 0 {
             parts.append("等待中 \(pending)")
+        }
+        if paused > 0 {
+            parts.append("暫停 \(paused)")
         }
         if scheduled > 0 {
             parts.append("首播 \(scheduled)")

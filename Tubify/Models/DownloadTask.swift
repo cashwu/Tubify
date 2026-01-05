@@ -5,6 +5,7 @@ enum DownloadStatus: String, Codable {
     case pending = "pending"           // 等待中
     case fetchingInfo = "fetchingInfo" // 獲取資訊中
     case downloading = "downloading"   // 下載中
+    case paused = "paused"             // 已暫停
     case completed = "completed"       // 完成
     case failed = "failed"             // 失敗
     case cancelled = "cancelled"       // 已取消
@@ -15,6 +16,7 @@ enum DownloadStatus: String, Codable {
         case .pending: return "等待中"
         case .fetchingInfo: return "獲取資訊中..."
         case .downloading: return "下載中"
+        case .paused: return "已暫停"
         case .completed: return "完成"
         case .failed: return "失敗"
         case .cancelled: return "已取消"

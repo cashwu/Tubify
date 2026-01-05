@@ -7,6 +7,8 @@ struct DownloadItemView: View {
     let onRemove: () -> Void
     let onRetry: () -> Void
     let onShowInFinder: () -> Void
+    let onPause: () -> Void
+    let onResume: () -> Void
 
     @State private var isHovering = false
     @State private var showDeleteAlert = false
@@ -163,6 +165,10 @@ struct DownloadItemView: View {
                 ProgressView()
                     .controlSize(.small)
                 Text("下載中")
+            case .paused:
+                Image(systemName: "pause.circle.fill")
+                    .foregroundStyle(.yellow)
+                Text("已暫停")
             case .completed:
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(.green)
@@ -221,6 +227,28 @@ struct DownloadItemView: View {
                 .help("在 Finder 中顯示")
             }
 
+            // 暫停按鈕（下載中或等待中時顯示）
+            if task.status == .downloading || task.status == .pending {
+                Button(action: onPause) {
+                    Image(systemName: "pause.circle")
+                        .font(.system(size: 21))
+                }
+                .buttonStyle(.borderless)
+                .focusable(false)
+                .help("暫停")
+            }
+
+            // 繼續按鈕（暫停時顯示）
+            if task.status == .paused {
+                Button(action: onResume) {
+                    Image(systemName: "play.circle")
+                        .font(.system(size: 21))
+                }
+                .buttonStyle(.borderless)
+                .focusable(false)
+                .help("繼續")
+            }
+
             // 重試按鈕（失敗、取消或首播尚未開始時）
             if task.status == .failed || task.status == .cancelled || task.status == .scheduled {
                 Button(action: onRetry) {
@@ -260,7 +288,9 @@ struct DownloadItemView: View {
             ),
             onRemove: {},
             onRetry: {},
-            onShowInFinder: {}
+            onShowInFinder: {},
+            onPause: {},
+            onResume: {}
         )
 
         Divider()
@@ -273,7 +303,24 @@ struct DownloadItemView: View {
             ),
             onRemove: {},
             onRetry: {},
-            onShowInFinder: {}
+            onShowInFinder: {},
+            onPause: {},
+            onResume: {}
+        )
+
+        Divider()
+
+        DownloadItemView(
+            task: DownloadTask(
+                url: "https://www.youtube.com/watch?v=paused123",
+                title: "Paused Video Example",
+                status: .paused
+            ),
+            onRemove: {},
+            onRetry: {},
+            onShowInFinder: {},
+            onPause: {},
+            onResume: {}
         )
 
         Divider()
@@ -286,7 +333,9 @@ struct DownloadItemView: View {
             ),
             onRemove: {},
             onRetry: {},
-            onShowInFinder: {}
+            onShowInFinder: {},
+            onPause: {},
+            onResume: {}
         )
     }
     .padding()
