@@ -1,7 +1,14 @@
 import Foundation
 
+/// 持久化服務協議
+protocol PersistenceServiceProtocol {
+    func saveTasks(_ tasks: [DownloadTask])
+    func loadTasks() -> [DownloadTask]
+    func clearTasks()
+}
+
 /// 持久化服務
-class PersistenceService {
+class PersistenceService: PersistenceServiceProtocol {
     static let shared = PersistenceService()
 
     private let fileManager = FileManager.default

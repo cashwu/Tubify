@@ -12,34 +12,30 @@ final class DownloadManagerTests: XCTestCase {
 
     // MARK: - 測試用屬性
 
-    /// 測試用的 DownloadManager（使用 shared instance）
+    /// 測試用的 DownloadManager（使用 Mock 持久化服務）
     var manager: DownloadManager!
 
-    /// 測試開始時的任務快照（用於還原）
-    var originalTasks: [DownloadTask] = []
-    var originalIsAllPaused: Bool = false
+    /// Mock 持久化服務
+    var mockPersistence: MockPersistenceService!
 
     // MARK: - Setup & Teardown
 
     override func setUp() async throws {
         try await super.setUp()
-        manager = DownloadManager.shared
 
-        // 儲存原始狀態
-        originalTasks = manager.tasks
-        originalIsAllPaused = manager.isAllPaused
+        // 建立 Mock 並注入到新的 DownloadManager
+        mockPersistence = MockPersistenceService()
+        mockPersistence.reset()
+        manager = DownloadManager(persistenceService: mockPersistence)
 
-        // 清空任務列表以便測試
+        // 確保任務列表為空
         manager.tasks = []
         manager.isAllPaused = false
     }
 
     override func tearDown() async throws {
-        // 還原原始狀態
-        manager.tasks = originalTasks
-        manager.isAllPaused = originalIsAllPaused
         manager = nil
-
+        mockPersistence = nil
         try await super.tearDown()
     }
 

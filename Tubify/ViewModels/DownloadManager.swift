@@ -27,6 +27,9 @@ class DownloadManager {
     /// 目前下載中的任務（支援同時多個）
     var currentTasks: Set<UUID> = []
 
+    /// 持久化服務（可注入以供測試使用）
+    private let persistenceService: PersistenceServiceProtocol
+
     /// 設定（使用 UserDefaults 直接讀取，避免與 @Observable 衝突）
     var downloadCommand: String {
         get { UserDefaults.standard.string(forKey: AppSettingsKeys.downloadCommand) ?? AppSettingsDefaults.downloadCommand }
@@ -48,9 +51,17 @@ class DownloadManager {
 
     private var downloadTask: Task<Void, Never>?
 
-    private init() {
+    /// 正式環境初始化
+    private convenience init() {
+        self.init(persistenceService: PersistenceService.shared)
+    }
+
+    /// 可注入初始化（供測試使用）
+    init(persistenceService: PersistenceServiceProtocol) {
+        self.persistenceService = persistenceService
+
         // 載入已儲存的任務
-        tasks = PersistenceService.shared.loadTasks()
+        tasks = persistenceService.loadTasks()
 
         // 處理卡在 fetchingInfo 狀態的任務（可能是上次啟動時中斷的）
         for task in tasks where task.status == .fetchingInfo {
@@ -63,7 +74,7 @@ class DownloadManager {
 
         // 如果有待處理的任務，開始下載
         if tasks.contains(where: { $0.status == .pending }) {
-            PersistenceService.shared.saveTasks(tasks)
+            persistenceService.saveTasks(tasks)
             startDownloadQueue()
         }
     }
@@ -97,7 +108,7 @@ class DownloadManager {
             let task = DownloadTask(url: urlString, title: "載入播放清單中...")
             task.status = .fetchingInfo
             tasks.append(task)
-            PersistenceService.shared.saveTasks(tasks)
+            persistenceService.saveTasks(tasks)
 
             Task {
                 await expandPlaylist(placeholderTask: task, urlString: urlString)
@@ -113,7 +124,7 @@ class DownloadManager {
             }
 
             tasks.append(task)
-            PersistenceService.shared.saveTasks(tasks)
+            persistenceService.saveTasks(tasks)
 
             // 異步獲取資訊（不阻塞新 URL 的加入）
             Task {
@@ -172,7 +183,7 @@ class DownloadManager {
             }
         }
 
-        PersistenceService.shared.saveTasks(tasks)
+        persistenceService.saveTasks(tasks)
         startDownloadQueue()
     }
 
@@ -215,7 +226,7 @@ class DownloadManager {
             placeholderTask.status = newStatus
         }
 
-        PersistenceService.shared.saveTasks(tasks)
+        persistenceService.saveTasks(tasks)
         startDownloadQueue()
     }
 
@@ -334,7 +345,7 @@ class DownloadManager {
 
             // 如果任務已經被暫停或取消，不要覆蓋狀態
             guard task.status != .paused && task.status != .cancelled else {
-                PersistenceService.shared.saveTasks(tasks)
+                persistenceService.saveTasks(tasks)
                 return
             }
 
@@ -356,7 +367,7 @@ class DownloadManager {
         }
 
         // 儲存任務
-        PersistenceService.shared.saveTasks(tasks)
+        persistenceService.saveTasks(tasks)
     }
 
     /// 取消任務
@@ -368,7 +379,7 @@ class DownloadManager {
         }
 
         task.status = .cancelled
-        PersistenceService.shared.saveTasks(tasks)
+        persistenceService.saveTasks(tasks)
     }
 
     /// 移除任務
@@ -378,7 +389,7 @@ class DownloadManager {
         }
 
         tasks.removeAll { $0.id == task.id }
-        PersistenceService.shared.saveTasks(tasks)
+        persistenceService.saveTasks(tasks)
     }
 
     /// 重試任務
@@ -386,14 +397,14 @@ class DownloadManager {
         task.status = .pending
         task.progress = 0
         task.errorMessage = nil
-        PersistenceService.shared.saveTasks(tasks)
+        persistenceService.saveTasks(tasks)
         startDownloadQueue()
     }
 
     /// 清除已完成的任務
     func clearCompletedTasks() {
         tasks.removeAll { $0.status == .completed }
-        PersistenceService.shared.saveTasks(tasks)
+        persistenceService.saveTasks(tasks)
     }
 
     /// 清除所有任務
@@ -405,7 +416,7 @@ class DownloadManager {
         }
 
         tasks.removeAll()
-        PersistenceService.shared.clearTasks()
+        persistenceService.clearTasks()
     }
 
     /// 暫停全部下載
@@ -423,7 +434,7 @@ class DownloadManager {
             task.status = .paused
         }
 
-        PersistenceService.shared.saveTasks(tasks)
+        persistenceService.saveTasks(tasks)
     }
 
     /// 繼續全部下載
@@ -437,7 +448,7 @@ class DownloadManager {
             task.errorMessage = nil
         }
 
-        PersistenceService.shared.saveTasks(tasks)
+        persistenceService.saveTasks(tasks)
         startDownloadQueue()
     }
 
@@ -447,7 +458,7 @@ class DownloadManager {
             await YTDLPService.shared.cancel(taskId: task.id)
         }
         task.status = .paused
-        PersistenceService.shared.saveTasks(tasks)
+        persistenceService.saveTasks(tasks)
     }
 
     /// 繼續單一任務
@@ -460,7 +471,7 @@ class DownloadManager {
         
         task.status = .pending
         task.progress = 0  // 重置進度，因為需要重新下載
-        PersistenceService.shared.saveTasks(tasks)
+        persistenceService.saveTasks(tasks)
         startDownloadQueue()
     }
 
