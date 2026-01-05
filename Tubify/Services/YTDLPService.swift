@@ -5,6 +5,7 @@ final class DownloadResultHolder: @unchecked Sendable {
     private let lock = NSLock()
     private var _outputPath: String?
     private var _lastError: String?
+    private var _downloadedFiles: [String] = []
 
     var outputPath: String? {
         lock.lock()
@@ -18,6 +19,12 @@ final class DownloadResultHolder: @unchecked Sendable {
         return _lastError
     }
 
+    var downloadedFiles: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return _downloadedFiles
+    }
+
     func setOutputPath(_ path: String) {
         lock.lock()
         defer { lock.unlock() }
@@ -28,6 +35,12 @@ final class DownloadResultHolder: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         _lastError = error
+    }
+
+    func addDownloadedFile(_ path: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        _downloadedFiles.append(path)
     }
 }
 
@@ -197,6 +210,7 @@ actor YTDLPService {
                 // 解析輸出檔案路徑
                 if line.contains("[download] Destination:") {
                     let path = line.replacingOccurrences(of: "[download] Destination: ", with: "")
+                    resultHolder.addDownloadedFile(path)
                     resultHolder.setOutputPath(path)
                 } else if line.contains("[Merger] Merging formats into") {
                     let path = line.replacingOccurrences(of: "[Merger] Merging formats into \"", with: "")
@@ -240,6 +254,20 @@ actor YTDLPService {
         // 檢查結果
         if terminationStatus != 0 {
             let errorMessage = resultHolder.lastError ?? "未知錯誤 (退出碼: \(terminationStatus))"
+            LogFileManager.shared.logDownloadError(taskId: taskId, error: errorMessage)
+            throw YTDLPError.executionFailed(errorMessage)
+        }
+
+        // 檢查是否有未合併的分離檔案（音視頻分離但合併失敗）
+        let downloadedFiles = resultHolder.downloadedFiles
+        let m4aFiles = downloadedFiles.filter { $0.hasSuffix(".m4a") }
+        if !m4aFiles.isEmpty {
+            // 合併失敗，清理所有分離檔案
+            TubifyLogger.ytdlp.error("偵測到未合併的音頻檔案，清理分離檔案")
+            for file in downloadedFiles {
+                try? FileManager.default.removeItem(atPath: file)
+            }
+            let errorMessage = "音視頻合併失敗，請確認 ffmpeg 已正確安裝（brew install ffmpeg）"
             LogFileManager.shared.logDownloadError(taskId: taskId, error: errorMessage)
             throw YTDLPError.executionFailed(errorMessage)
         }
