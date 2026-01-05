@@ -452,6 +452,12 @@ class DownloadManager {
 
     /// 繼續單一任務
     func resumeTask(_ task: DownloadTask) {
+        // 如果全部暫停中，恢復單一任務時需要解除全部暫停狀態
+        // 否則 processQueue 不會處理這個任務
+        if isAllPaused {
+            isAllPaused = false
+        }
+        
         task.status = .pending
         task.progress = 0  // 重置進度，因為需要重新下載
         PersistenceService.shared.saveTasks(tasks)
