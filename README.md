@@ -56,11 +56,14 @@ xcodegen generate
 
 ## 設定選項
 
-- **下載指令**：預設為 `yt-dlp -f "bv[ext=mp4]+ba[ext=m4a]/b[ext=mp4]" --cookies-from-browser safari "$youtubeUrl"`
+- **下載指令**：預設為 `yt-dlp -f "bv[ext=mp4][vcodec^=avc]+ba[ext=m4a]/b[ext=mp4][vcodec^=avc]" --cookies-from-browser safari "$youtubeUrl"`
   - 使用 `$youtubeUrl` 作為 URL 佔位符
-  - 預設格式支援高畫質下載（最高可達 4K，需要 ffmpeg 合併影音串流）
+  - 預設格式使用 H.264 編碼，確保 macOS 原生支援預覽與播放
+  - 支援高畫質下載（最高可達 4K，需要 ffmpeg 合併影音串流）
 - **下載資料夾**：預設為 `~/Downloads`
 - **同時下載數量**：可設定 1-5 個並行下載，預設為 2
+
+> **更新注意**：更新 App 後，原有的下載指令設定不會自動更新。如果下載的影片無法預覽，請到設定頁面點擊「重設為預設值」以套用新的下載指令。
 
 ## 檔案結構
 
