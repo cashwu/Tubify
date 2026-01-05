@@ -259,12 +259,15 @@ actor YTDLPService {
         }
 
         // 檢查是否有未合併的分離檔案（音視頻分離但合併失敗）
+        // yt-dlp 合併成功後會自動刪除分離檔案，所以我們檢查這些檔案是否仍存在
         let downloadedFiles = resultHolder.downloadedFiles
-        let m4aFiles = downloadedFiles.filter { $0.hasSuffix(".m4a") }
-        if !m4aFiles.isEmpty {
+        let existingFiles = downloadedFiles.filter { FileManager.default.fileExists(atPath: $0) }
+        // 如果下載了多個檔案且都還存在，表示合併失敗
+        // 正常情況：純音訊下載只有 1 個檔案，合併成功後分離檔案會被刪除也只剩 1 個
+        if existingFiles.count > 1 {
             // 合併失敗，清理所有分離檔案
-            TubifyLogger.ytdlp.error("偵測到未合併的音頻檔案，清理分離檔案")
-            for file in downloadedFiles {
+            TubifyLogger.ytdlp.error("偵測到未合併的音視頻檔案，清理分離檔案: \(existingFiles)")
+            for file in existingFiles {
                 try? FileManager.default.removeItem(atPath: file)
             }
             let errorMessage = "音視頻合併失敗，請確認 ffmpeg 已正確安裝（brew install ffmpeg）"
