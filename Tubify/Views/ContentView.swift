@@ -298,12 +298,13 @@ struct ContentView: View {
         let downloading = downloadManager.tasks.filter { $0.status == .downloading }.count
         let completed = downloadManager.tasks.filter { $0.status == .completed }.count
         let pending = downloadManager.tasks.filter { $0.status == .pending }.count
+        let scheduled = downloadManager.tasks.filter { $0.status == .scheduled }.count
 
         if total == 0 {
             return "沒有下載任務"
         }
 
-        var parts: [String] = []
+        var parts: [String] = ["共 \(total) 個"]
 
         if downloading > 0 {
             parts.append("下載中 \(downloading)")
@@ -311,11 +312,14 @@ struct ContentView: View {
         if pending > 0 {
             parts.append("等待中 \(pending)")
         }
+        if scheduled > 0 {
+            parts.append("首播 \(scheduled)")
+        }
         if completed > 0 {
             parts.append("已完成 \(completed)")
         }
 
-        return parts.isEmpty ? "\(total) 個任務" : parts.joined(separator: " · ")
+        return parts.joined(separator: " · ")
     }
 
     // MARK: - 拖放處理

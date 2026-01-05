@@ -314,4 +314,39 @@ actor YouTubeMetadataService {
     static func isPlaylistSync(url: String) -> Bool {
         url.contains("list=") || url.contains("/playlist")
     }
+
+    /// 從 YouTube 網頁直接獲取標題（用於首播影片等 yt-dlp 無法獲取的情況）
+    func fetchTitleFromWebpage(url: String) async -> String? {
+        guard let requestURL = URL(string: url) else {
+            return nil
+        }
+
+        do {
+            let (data, _) = try await URLSession.shared.data(from: requestURL)
+            guard let html = String(data: data, encoding: .utf8) else {
+                return nil
+            }
+
+            // 解析 <title>...</title> 標籤
+            let pattern = #"<title>([^<]+)</title>"#
+            guard let regex = try? NSRegularExpression(pattern: pattern),
+                  let match = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
+                  let titleRange = Range(match.range(at: 1), in: html) else {
+                return nil
+            }
+
+            var title = String(html[titleRange])
+
+            // 移除 " - YouTube" 後綴
+            if title.hasSuffix(" - YouTube") {
+                title = String(title.dropLast(10))
+            }
+
+            TubifyLogger.download.info("從網頁獲取標題成功: \(title)")
+            return title.isEmpty ? nil : title
+        } catch {
+            TubifyLogger.download.error("從網頁獲取標題失敗: \(error.localizedDescription)")
+            return nil
+        }
+    }
 }

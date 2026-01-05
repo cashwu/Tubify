@@ -138,9 +138,32 @@ class DownloadManager {
             task.thumbnailURL = videoInfo.thumbnail
             task.status = .pending
         } catch {
-            TubifyLogger.download.error("獲取影片資訊失敗: \(error.localizedDescription)")
-            task.title = "無法獲取標題"
-            task.status = .pending
+            let errorMessage = error.localizedDescription
+            TubifyLogger.download.error("獲取影片資訊失敗: \(errorMessage)")
+
+            // 檢查是否為首播影片
+            if PremiereErrorParser.isPremiereError(errorMessage) {
+                TubifyLogger.download.info("偵測到首播影片，嘗試從網頁獲取標題")
+
+                // 嘗試從 YouTube 網頁直接獲取標題
+                if let webTitle = await metadataService.fetchTitleFromWebpage(url: task.url) {
+                    task.title = webTitle
+                } else {
+                    task.title = "無法獲取標題"
+                }
+
+                // 解析首播時間
+                if let premiereDate = PremiereErrorParser.parsePremiereDate(from: errorMessage) {
+                    task.premiereDate = premiereDate
+                    task.status = .scheduled
+                    task.errorMessage = errorMessage
+                } else {
+                    task.status = .pending
+                }
+            } else {
+                task.title = "無法獲取標題"
+                task.status = .pending
+            }
         }
 
         PersistenceService.shared.saveTasks(tasks)
