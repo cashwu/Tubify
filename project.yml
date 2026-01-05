@@ -25,6 +25,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.tubify.app
+        ENABLE_APP_SANDBOX: NO
         INFOPLIST_FILE: Tubify/Info.plist
         CODE_SIGN_ENTITLEMENTS: Tubify/Tubify.entitlements
         PRODUCT_NAME: Tubify
