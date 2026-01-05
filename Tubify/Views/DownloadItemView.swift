@@ -217,6 +217,7 @@ struct DownloadItemView: View {
                         .font(.system(size: 21))
                 }
                 .buttonStyle(.borderless)
+                .focusable(false)
                 .help("在 Finder 中顯示")
             }
 
@@ -227,6 +228,7 @@ struct DownloadItemView: View {
                         .font(.system(size: 21))
                 }
                 .buttonStyle(.borderless)
+                .focusable(false)
                 .help("重試")
             }
 
@@ -243,6 +245,7 @@ struct DownloadItemView: View {
                     .foregroundStyle(task.status == .downloading ? .orange : .secondary)
             }
             .buttonStyle(.borderless)
+            .focusable(false)
             .help(task.status == .downloading ? "取消下載" : "移除")
         }
         .opacity(isHovering ? 1 : 0.5)
