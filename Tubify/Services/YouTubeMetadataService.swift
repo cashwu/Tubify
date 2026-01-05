@@ -321,8 +321,13 @@ actor YouTubeMetadataService {
             return nil
         }
 
+        // 必須設置 User-Agent，否則 YouTube 會返回簡化頁面（標題只有 "YouTube"）
+        var request = URLRequest(url: requestURL)
+        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15", forHTTPHeaderField: "User-Agent")
+        request.setValue("zh-TW,zh;q=0.9,en;q=0.8", forHTTPHeaderField: "Accept-Language")
+
         do {
-            let (data, _) = try await URLSession.shared.data(from: requestURL)
+            let (data, _) = try await URLSession.shared.data(for: request)
             guard let html = String(data: data, encoding: .utf8) else {
                 return nil
             }

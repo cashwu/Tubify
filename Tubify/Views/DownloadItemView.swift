@@ -202,7 +202,7 @@ struct DownloadItemView: View {
     private func formatPremiereTime(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HH:mm"
-        return formatter.string(from: date) + " 首播"
+        return formatter.string(from: date) + " 首播 (預計時間)"
     }
 
     // MARK: - 操作按鈕
