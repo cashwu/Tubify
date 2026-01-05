@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// 單個下載項目視圖
 struct DownloadItemView: View {
@@ -9,6 +10,19 @@ struct DownloadItemView: View {
 
     @State private var isHovering = false
     @State private var showDeleteAlert = false
+
+    /// 複製 URL 到剪貼簿
+    private func copyURL() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(task.url, forType: .string)
+    }
+
+    /// 用預設瀏覽器打開 URL
+    private func openInBrowser() {
+        if let url = URL(string: task.url) {
+            NSWorkspace.shared.open(url)
+        }
+    }
 
     /// 檢查是否為 Safari cookies 權限相關錯誤
     private var isPermissionError: Bool {
@@ -78,6 +92,19 @@ struct DownloadItemView: View {
             }
         } message: {
             Text("確定要取消正在進行的下載嗎？")
+        }
+        .contextMenu {
+            Button {
+                copyURL()
+            } label: {
+                Label("複製連結", systemImage: "doc.on.doc")
+            }
+
+            Button {
+                openInBrowser()
+            } label: {
+                Label("在瀏覽器中打開", systemImage: "safari")
+            }
         }
     }
 
