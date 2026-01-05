@@ -16,6 +16,22 @@ Tubify 是一款使用 SwiftUI 開發的 macOS YouTube 影片下載器，以 yt-
 
 另有 `project.yml` 可搭配 XcodeGen 重新產生專案檔。
 
+### 常用指令
+
+```bash
+# 執行測試
+xcodebuild test -project Tubify.xcodeproj -scheme Tubify -destination 'platform=macOS'
+
+# 執行單一測試
+xcodebuild test -project Tubify.xcodeproj -scheme Tubify -destination 'platform=macOS' -only-testing:TubifyTests/DownloadTaskTests
+
+# 打包發佈（測試 + 建置 + DMG）
+./Scripts/package-app.sh
+
+# 快速打包（跳過測試）
+./Scripts/package-app.sh --skip-tests
+```
+
 ## 架構
 
 ### MVVM 模式
