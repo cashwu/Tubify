@@ -312,6 +312,13 @@ class DownloadManager {
                 title: task.title,
                 outputPath: outputPath
             )
+
+            // 檢查是否自動移除已完成的任務
+            let autoRemove = UserDefaults.standard.object(forKey: AppSettingsKeys.autoRemoveCompleted) as? Bool
+                ?? AppSettingsDefaults.autoRemoveCompleted
+            if autoRemove {
+                tasks.removeAll { $0.id == task.id }
+            }
         } catch {
             let errorMsg = error.localizedDescription
 

@@ -5,6 +5,7 @@ enum AppSettingsKeys {
     static let downloadCommand = "downloadCommand"
     static let downloadFolder = "downloadFolder"
     static let maxConcurrentDownloads = "maxConcurrentDownloads"
+    static let autoRemoveCompleted = "autoRemoveCompleted"
 }
 
 /// App 預設設定值
@@ -13,6 +14,7 @@ enum AppSettingsDefaults {
     static let downloadCommand = "yt-dlp -f \"bv[ext=mp4][vcodec^=avc]+ba[ext=m4a]/b[ext=mp4][vcodec^=avc]\" --cookies-from-browser safari \"$youtubeUrl\""
     static let downloadFolder = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first?.path ?? "~/Downloads"
     static let maxConcurrentDownloads: Int = 2 // 最大同時下載數量（1-5）
+    static let autoRemoveCompleted: Bool = true // 下載完成後自動從列表移除
 }
 
 /// 下載相關常數

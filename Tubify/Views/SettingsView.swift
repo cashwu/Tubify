@@ -13,6 +13,9 @@ struct SettingsView: View {
     @AppStorage(AppSettingsKeys.maxConcurrentDownloads)
     private var maxConcurrentDownloads: Int = AppSettingsDefaults.maxConcurrentDownloads
 
+    @AppStorage(AppSettingsKeys.autoRemoveCompleted)
+    private var autoRemoveCompleted: Bool = AppSettingsDefaults.autoRemoveCompleted
+
     @State private var showingFolderPicker = false
     @State private var ytdlpStatus: YTDLPStatus = .checking
     @State private var ffmpegStatus: FFmpegStatus = .checking
@@ -151,6 +154,9 @@ struct SettingsView: View {
                     Text("同時進行下載的最大任務數量")
                         .font(.system(size: 18))
                         .foregroundStyle(.secondary)
+
+                    // 自動移除已完成的下載
+                    Toggle("下載完成後自動從列表移除", isOn: $autoRemoveCompleted)
                 } header: {
                     Text("下載")
                 }
