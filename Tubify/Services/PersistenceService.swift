@@ -30,20 +30,15 @@ class PersistenceService {
 
     /// 儲存下載任務
     func saveTasks(_ tasks: [DownloadTask]) {
-        // 只儲存未完成的任務
-        let tasksToSave = tasks.filter { task in
-            task.status != .completed && task.status != .cancelled
-        }
-
         do {
             let encoder = JSONEncoder()
             encoder.outputFormatting = .prettyPrinted
             encoder.dateEncodingStrategy = .iso8601
 
-            let data = try encoder.encode(tasksToSave)
+            let data = try encoder.encode(tasks)
             try data.write(to: tasksFileURL)
 
-            TubifyLogger.persistence.info("已儲存 \(tasksToSave.count) 個任務")
+            TubifyLogger.persistence.info("已儲存 \(tasks.count) 個任務")
         } catch {
             TubifyLogger.persistence.error("儲存任務失敗: \(error.localizedDescription)")
         }
