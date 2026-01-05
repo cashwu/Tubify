@@ -85,13 +85,13 @@ struct DownloadItemView: View {
         .onHover { hovering in
             isHovering = hovering
         }
-        .alert("取消下載", isPresented: $showDeleteAlert) {
-            Button("繼續下載", role: .cancel) {}
-            Button("取消下載", role: .destructive) {
+        .alert(task.status == .downloading ? "取消下載" : "移除項目", isPresented: $showDeleteAlert) {
+            Button("取消", role: .cancel) {}
+            Button(task.status == .downloading ? "取消下載" : "移除", role: .destructive) {
                 onRemove()
             }
         } message: {
-            Text("確定要取消正在進行的下載嗎？")
+            Text(task.status == .downloading ? "確定要取消正在進行的下載嗎？" : "確定要從列表中移除此項目嗎？")
         }
         .contextMenu {
             Button {
@@ -234,11 +234,7 @@ struct DownloadItemView: View {
 
             // 移除/取消按鈕
             Button(action: {
-                if task.status == .downloading {
-                    showDeleteAlert = true
-                } else {
-                    onRemove()
-                }
+                showDeleteAlert = true
             }) {
                 Image(systemName: task.status == .downloading ? "xmark.circle" : "trash")
                     .font(.system(size: 21))
