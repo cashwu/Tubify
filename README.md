@@ -41,6 +41,20 @@ brew install ffmpeg
 xcodegen generate
 ```
 
+### 打包發佈
+
+使用打包腳本建立 DMG 發佈檔：
+
+```bash
+./Scripts/package-app.sh
+```
+
+腳本會執行測試、建置 Release 版本並打包成 DMG 檔案。可用選項：
+
+- `--skip-tests`：跳過測試
+- `--no-clean`：跳過清理，加速建置
+- `--no-dmg`：只建置 .app，不建立 DMG
+
 ## 功能
 
 - **拖放下載**：直接拖 YouTube 連結到視窗即可加入下載佇列
@@ -64,46 +78,6 @@ xcodegen generate
 - **同時下載數量**：可設定 1-5 個並行下載，預設為 2
 
 > **更新注意**：更新 App 後，原有的下載指令設定不會自動更新。如果下載的影片無法預覽，請到設定頁面點擊「重設為預設值」以套用新的下載指令。
-
-## 檔案結構
-
-```
-Tubify/
-├── TubifyApp.swift                  # App 入口
-├── Models/
-│   ├── DownloadTask.swift           # 下載任務模型
-│   └── AppSettings.swift            # 設定常數
-├── ViewModels/
-│   └── DownloadManager.swift        # 下載管理邏輯
-├── Views/
-│   ├── ContentView.swift            # 主視窗
-│   ├── DownloadItemView.swift       # 單個下載項目
-│   ├── EmptyStateView.swift         # 空白狀態
-│   └── SettingsView.swift           # 設定頁面
-├── Services/
-│   ├── YTDLPService.swift           # yt-dlp 指令執行
-│   ├── YouTubeMetadataService.swift # 獲取影片資訊
-│   ├── NotificationService.swift    # 系統通知
-│   ├── PersistenceService.swift     # 任務持久化
-│   ├── PermissionService.swift      # 完整磁碟存取權限偵測
-│   └── SafariCookiesService.swift   # Safari Cookies 代理服務
-└── Utilities/
-    ├── Logger.swift                 # 日誌工具
-    └── PremiereErrorParser.swift    # 首播錯誤解析工具
-
-TubifyTests/                         # 單元測試
-├── DownloadTaskTests.swift
-├── YouTubeMetadataServiceTests.swift
-├── URLValidationTests.swift
-├── YTDLPServiceTests.swift
-└── PremiereErrorParserTests.swift
-```
-
-## 日誌位置
-
-日誌檔案儲存在：`~/Library/Logs/Tubify/`
-
-任務資料儲存在：`~/Library/Application Support/Tubify/`
 
 ## 授權
 
