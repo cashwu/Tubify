@@ -9,6 +9,8 @@
 - [ffmpeg](https://ffmpeg.org/)（選用，用於合併高畫質影音串流）
 - 完整磁碟存取權限（選用，用於讀取 Safari cookies 下載需要登入的影片）
 
+> **注意**：由於 App 使用 ad-hoc 簽署，每次透過 DMG 更新後需要重新授權完整磁碟存取權限。這是 macOS 安全機制的限制。
+
 ## 安裝 yt-dlp
 
 使用 Homebrew 安裝：
