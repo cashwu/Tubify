@@ -2,6 +2,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// 主視窗
+@MainActor
 struct ContentView: View {
     @State private var downloadManager = DownloadManager.shared
     @State private var isTargeted = false
