@@ -11,6 +11,7 @@ struct ContentView: View {
     @State private var ytdlpNotInstalled = false
     @State private var urlErrorMessage: String?
     @State private var showDeleteAllAlert = false
+    @State private var subtitleRequest: SubtitleSelectionRequest?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -51,9 +52,20 @@ struct ContentView: View {
         .sheet(isPresented: $showingSettings) {
             SettingsView()
         }
+        .sheet(item: $subtitleRequest) { request in
+            SubtitleSelectionView(
+                videoTitle: request.videoTitle,
+                videoCount: request.tasks.count,
+                availableSubtitles: request.availableSubtitles
+            ) { selection in
+                downloadManager.confirmSubtitleSelection(for: request.tasks, selection: selection)
+                subtitleRequest = nil
+            }
+        }
         .onAppear {
             checkPermissions()
             setupPasteShortcut()
+            setupSubtitleSelectionCallback()
             Task {
                 await checkYTDLP()
             }
@@ -161,6 +173,14 @@ struct ContentView: View {
     private func checkYTDLP() async {
         let path = await YTDLPService.shared.findYTDLPPath()
         ytdlpNotInstalled = (path == nil)
+    }
+
+    // MARK: - 字幕選擇回調設置
+
+    private func setupSubtitleSelectionCallback() {
+        downloadManager.onSubtitleSelectionNeeded = { [self] request in
+            subtitleRequest = request
+        }
     }
 
     // MARK: - 貼上快捷鍵設定

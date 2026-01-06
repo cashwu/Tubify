@@ -161,6 +161,10 @@ struct DownloadItemView: View {
                 ProgressView()
                     .controlSize(.small)
                 Text("獲取資訊中...")
+            case .waitingForSubtitleSelection:
+                Image(systemName: "captions.bubble")
+                    .foregroundStyle(.blue)
+                Text("等待選擇字幕")
             case .downloading:
                 ProgressView()
                     .controlSize(.small)

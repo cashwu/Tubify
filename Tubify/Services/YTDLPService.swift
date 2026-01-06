@@ -127,6 +127,7 @@ actor YTDLPService {
         url: String,
         commandTemplate: String,
         outputDirectory: String,
+        subtitleSelection: SubtitleSelection? = nil,
         onProgress: @escaping ProgressCallback
     ) async throws -> String {
         guard let ytdlpPath = await findYTDLPPath() else {
@@ -155,6 +156,16 @@ actor YTDLPService {
         // 確保有 --newline 參數以便解析進度
         if !finalArguments.contains("--newline") {
             finalArguments.append("--newline")
+        }
+
+        // 加入字幕下載參數（如果有選擇字幕）
+        if let selection = subtitleSelection, !selection.selectedLanguages.isEmpty {
+            finalArguments.append("--write-sub")
+            finalArguments.append("--sub-lang")
+            finalArguments.append(selection.selectedLanguages.joined(separator: ","))
+            finalArguments.append("--sub-format")
+            finalArguments.append("srt")
+            TubifyLogger.ytdlp.info("下載字幕: \(selection.selectedLanguages.joined(separator: ", "))")
         }
 
         LogFileManager.shared.logDownloadStart(url: url, taskId: taskId)

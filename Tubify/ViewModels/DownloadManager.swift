@@ -9,6 +9,14 @@ enum URLValidationResult {
     case alreadyExists     // 已在佇列中
 }
 
+/// 字幕選擇請求
+struct SubtitleSelectionRequest: Identifiable {
+    let id = UUID()
+    let tasks: [DownloadTask]
+    let availableSubtitles: [SubtitleTrack]
+    let videoTitle: String?  // 單一影片為標題，播放清單為 nil
+}
+
 /// 下載管理器
 @Observable
 @MainActor
@@ -26,6 +34,9 @@ class DownloadManager {
 
     /// 目前下載中的任務（支援同時多個）
     var currentTasks: Set<UUID> = []
+
+    /// 字幕選擇回調（由 UI 設置）
+    var onSubtitleSelectionNeeded: ((SubtitleSelectionRequest) -> Void)?
 
     /// 持久化服務（可注入以供測試使用）
     private let persistenceService: PersistenceServiceProtocol
@@ -153,7 +164,27 @@ class DownloadManager {
             TubifyLogger.download.info("成功獲取影片資訊: \(videoInfo.title)")
             task.title = videoInfo.title
             task.thumbnailURL = videoInfo.thumbnail
-            task.status = newStatus
+
+            // 獲取字幕資訊
+            let subtitles = try await metadataService.fetchSubtitles(url: task.url, cookiesArguments: [])
+
+            if !subtitles.isEmpty {
+                // 有字幕，等待用戶選擇
+                task.availableSubtitles = subtitles
+                task.status = .waitingForSubtitleSelection
+                persistenceService.saveTasks(tasks)
+
+                // 通知 UI 顯示字幕選擇視窗
+                let request = SubtitleSelectionRequest(
+                    tasks: [task],
+                    availableSubtitles: subtitles,
+                    videoTitle: task.title
+                )
+                onSubtitleSelectionNeeded?(request)
+                return
+            } else {
+                task.status = newStatus
+            }
         } catch {
             let errorMessage = error.localizedDescription
             TubifyLogger.download.error("獲取影片資訊失敗: \(errorMessage)")
@@ -202,6 +233,7 @@ class DownloadManager {
             // 移除佔位任務
             tasks.removeAll { $0.id == placeholderTask.id }
 
+            var newTasks: [DownloadTask] = []
             for video in videos {
                 // 檢查是否已存在
                 if tasks.contains(where: { $0.url == video.url }) {
@@ -212,12 +244,51 @@ class DownloadManager {
                     url: video.url,
                     title: video.title,
                     thumbnailURL: video.thumbnail,
-                    status: newStatus
+                    status: .fetchingInfo  // 先設為獲取資訊中
                 )
                 tasks.append(task)
+                newTasks.append(task)
             }
 
             TubifyLogger.download.info("已新增播放清單中的 \(videos.count) 個影片")
+            persistenceService.saveTasks(tasks)
+
+            // 收集所有影片的字幕資訊
+            var allSubtitles: Set<String> = []
+            for task in newTasks {
+                if let subtitles = try? await metadataService.fetchSubtitles(url: task.url, cookiesArguments: []) {
+                    task.availableSubtitles = subtitles
+                    for sub in subtitles {
+                        allSubtitles.insert(sub.languageCode)
+                    }
+                }
+            }
+
+            if !allSubtitles.isEmpty {
+                // 有字幕，等待用戶選擇
+                for task in newTasks {
+                    task.status = .waitingForSubtitleSelection
+                }
+                persistenceService.saveTasks(tasks)
+
+                // 合併所有字幕語言（聯集）
+                let mergedSubtitles = allSubtitles.map { SubtitleTrack(languageCode: $0) }
+                    .sorted { $0.languageName.localizedCompare($1.languageName) == .orderedAscending }
+
+                // 通知 UI 顯示字幕選擇視窗
+                let request = SubtitleSelectionRequest(
+                    tasks: newTasks,
+                    availableSubtitles: mergedSubtitles,
+                    videoTitle: nil  // 播放清單不顯示單一標題
+                )
+                onSubtitleSelectionNeeded?(request)
+                return
+            } else {
+                // 沒有字幕，直接設為待下載
+                for task in newTasks {
+                    task.status = newStatus
+                }
+            }
         } catch {
             TubifyLogger.download.error("處理播放清單失敗: \(error.localizedDescription)")
 
@@ -227,6 +298,19 @@ class DownloadManager {
         }
 
         persistenceService.saveTasks(tasks)
+        startDownloadQueue()
+    }
+
+    /// 確認字幕選擇（由 UI 呼叫）
+    func confirmSubtitleSelection(for tasks: [DownloadTask], selection: SubtitleSelection?) {
+        let newStatus: DownloadStatus = isAllPaused ? .paused : .pending
+
+        for task in tasks {
+            task.subtitleSelection = selection
+            task.status = newStatus
+        }
+
+        persistenceService.saveTasks(self.tasks)
         startDownloadQueue()
     }
 
@@ -308,7 +392,8 @@ class DownloadManager {
                 taskId: task.id,
                 url: task.url,
                 commandTemplate: downloadCommand,
-                outputDirectory: downloadFolder
+                outputDirectory: downloadFolder,
+                subtitleSelection: task.subtitleSelection
             ) { [weak task] progress in
                 Task { @MainActor in
                     task?.progress = progress

@@ -315,6 +315,101 @@ actor YouTubeMetadataService {
         url.contains("list=") || url.contains("/playlist")
     }
 
+    /// 獲取影片的字幕資訊
+    func fetchSubtitles(url: String, cookiesArguments: [String] = []) async throws -> [SubtitleTrack] {
+        guard let ytdlpPath = await YTDLPService.shared.findYTDLPPath() else {
+            throw MetadataError.ytdlpNotFound
+        }
+
+        TubifyLogger.ytdlp.info("獲取字幕資訊: \(url)")
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: ytdlpPath)
+        process.arguments = ["-J", "--no-playlist"] + cookiesArguments + [url]
+
+        let pipe = Pipe()
+        let errorPipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = errorPipe
+
+        do {
+            try process.run()
+        } catch {
+            throw MetadataError.fetchFailed(error.localizedDescription)
+        }
+
+        let outputHandle = pipe.fileHandleForReading
+        let errorHandle = errorPipe.fileHandleForReading
+
+        let outputData = await withCheckedContinuation { (continuation: CheckedContinuation<Data, Never>) in
+            DispatchQueue.global().async {
+                let data = outputHandle.readDataToEndOfFile()
+                continuation.resume(returning: data)
+            }
+        }
+
+        let errorData = await withCheckedContinuation { (continuation: CheckedContinuation<Data, Never>) in
+            DispatchQueue.global().async {
+                let data = errorHandle.readDataToEndOfFile()
+                continuation.resume(returning: data)
+            }
+        }
+
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            var resumed = false
+            let resumeOnce = {
+                guard !resumed else { return }
+                resumed = true
+                continuation.resume()
+            }
+
+            process.terminationHandler = { _ in
+                resumeOnce()
+            }
+
+            if !process.isRunning {
+                resumeOnce()
+            }
+        }
+
+        if process.terminationStatus != 0 {
+            let errorMessage = String(data: errorData, encoding: .utf8) ?? "未知錯誤"
+            throw MetadataError.fetchFailed(errorMessage)
+        }
+
+        // 解析 JSON 並提取字幕資訊
+        do {
+            guard let json = try JSONSerialization.jsonObject(with: outputData) as? [String: Any] else {
+                return []
+            }
+            return parseSubtitles(from: json)
+        } catch {
+            TubifyLogger.ytdlp.error("解析字幕資訊失敗: \(error.localizedDescription)")
+            return []
+        }
+    }
+
+    /// 從 yt-dlp JSON 輸出解析字幕資訊（只解析用戶上傳的字幕，忽略自動翻譯）
+    private func parseSubtitles(from json: [String: Any]) -> [SubtitleTrack] {
+        // 只取 subtitles（用戶上傳），不取 automatic_captions（自動翻譯）
+        guard let subtitles = json["subtitles"] as? [String: Any], !subtitles.isEmpty else {
+            return []
+        }
+
+        var tracks: [SubtitleTrack] = []
+
+        for (langCode, _) in subtitles {
+            let track = SubtitleTrack(languageCode: langCode)
+            tracks.append(track)
+        }
+
+        // 按語言名稱排序
+        tracks.sort { $0.languageName.localizedCompare($1.languageName) == .orderedAscending }
+
+        TubifyLogger.ytdlp.info("找到 \(tracks.count) 個用戶上傳的字幕: \(tracks.map { $0.languageCode }.joined(separator: ", "))")
+        return tracks
+    }
+
     /// 從 YouTube 網頁直接獲取標題（用於首播影片等 yt-dlp 無法獲取的情況）
     func fetchTitleFromWebpage(url: String) async -> String? {
         guard let requestURL = URL(string: url) else {

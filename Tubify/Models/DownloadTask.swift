@@ -4,6 +4,7 @@ import Foundation
 enum DownloadStatus: String, Codable {
     case pending = "pending"           // 等待中
     case fetchingInfo = "fetchingInfo" // 獲取資訊中
+    case waitingForSubtitleSelection = "waitingForSubtitleSelection" // 等待選擇字幕
     case downloading = "downloading"   // 下載中
     case paused = "paused"             // 已暫停
     case completed = "completed"       // 完成
@@ -15,6 +16,7 @@ enum DownloadStatus: String, Codable {
         switch self {
         case .pending: return "等待中"
         case .fetchingInfo: return "獲取資訊中..."
+        case .waitingForSubtitleSelection: return "等待選擇字幕"
         case .downloading: return "下載中"
         case .paused: return "已暫停"
         case .completed: return "完成"
@@ -39,10 +41,13 @@ class DownloadTask: Identifiable, Codable {
     var createdAt: Date
     var completedAt: Date?
     var premiereDate: Date?  // 首播時間（僅適用於 scheduled 狀態）
+    var availableSubtitles: [SubtitleTrack]?  // 可用的字幕列表
+    var subtitleSelection: SubtitleSelection?  // 用戶選擇的字幕
 
     enum CodingKeys: String, CodingKey {
         case id, url, title, thumbnailURL, status, progress
         case errorMessage, outputPath, createdAt, completedAt, premiereDate
+        case availableSubtitles, subtitleSelection
     }
 
     init(
@@ -56,7 +61,9 @@ class DownloadTask: Identifiable, Codable {
         outputPath: String? = nil,
         createdAt: Date = Date(),
         completedAt: Date? = nil,
-        premiereDate: Date? = nil
+        premiereDate: Date? = nil,
+        availableSubtitles: [SubtitleTrack]? = nil,
+        subtitleSelection: SubtitleSelection? = nil
     ) {
         self.id = id
         self.url = url
@@ -69,6 +76,8 @@ class DownloadTask: Identifiable, Codable {
         self.createdAt = createdAt
         self.completedAt = completedAt
         self.premiereDate = premiereDate
+        self.availableSubtitles = availableSubtitles
+        self.subtitleSelection = subtitleSelection
     }
 
     required init(from decoder: Decoder) throws {
@@ -84,6 +93,8 @@ class DownloadTask: Identifiable, Codable {
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         completedAt = try container.decodeIfPresent(Date.self, forKey: .completedAt)
         premiereDate = try container.decodeIfPresent(Date.self, forKey: .premiereDate)
+        availableSubtitles = try container.decodeIfPresent([SubtitleTrack].self, forKey: .availableSubtitles)
+        subtitleSelection = try container.decodeIfPresent(SubtitleSelection.self, forKey: .subtitleSelection)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -99,6 +110,8 @@ class DownloadTask: Identifiable, Codable {
         try container.encode(createdAt, forKey: .createdAt)
         try container.encodeIfPresent(completedAt, forKey: .completedAt)
         try container.encodeIfPresent(premiereDate, forKey: .premiereDate)
+        try container.encodeIfPresent(availableSubtitles, forKey: .availableSubtitles)
+        try container.encodeIfPresent(subtitleSelection, forKey: .subtitleSelection)
     }
 }
 
