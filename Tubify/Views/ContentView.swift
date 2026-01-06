@@ -11,7 +11,7 @@ struct ContentView: View {
     @State private var ytdlpNotInstalled = false
     @State private var urlErrorMessage: String?
     @State private var showDeleteAllAlert = false
-    @State private var subtitleRequest: SubtitleSelectionRequest?
+    @State private var subtitleRequests: [SubtitleSelectionRequest] = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -52,14 +52,20 @@ struct ContentView: View {
         .sheet(isPresented: $showingSettings) {
             SettingsView()
         }
-        .sheet(item: $subtitleRequest) { request in
+        .sheet(item: Binding(
+            get: { subtitleRequests.first },
+            set: { _ in
+                if !subtitleRequests.isEmpty {
+                    subtitleRequests.removeFirst()
+                }
+            }
+        )) { request in
             SubtitleSelectionView(
                 videoTitle: request.videoTitle,
                 videoCount: request.tasks.count,
                 availableSubtitles: request.availableSubtitles
             ) { selection in
                 downloadManager.confirmSubtitleSelection(for: request.tasks, selection: selection)
-                subtitleRequest = nil
             }
         }
         .onAppear {
@@ -179,7 +185,7 @@ struct ContentView: View {
 
     private func setupSubtitleSelectionCallback() {
         downloadManager.onSubtitleSelectionNeeded = { [self] request in
-            subtitleRequest = request
+            subtitleRequests.append(request)
         }
     }
 

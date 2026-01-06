@@ -63,15 +63,6 @@ struct SubtitleSelectionView: View {
                         .toggleStyle(.checkbox)
                     }
                 }
-
-                Section {
-                    HStack {
-                        Text("格式")
-                        Spacer()
-                        Text("SRT")
-                            .foregroundStyle(.secondary)
-                    }
-                }
             }
             .formStyle(.grouped)
 
