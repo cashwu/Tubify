@@ -93,6 +93,17 @@ final class DownloadTaskTests: XCTestCase {
         XCTAssertEqual(task.errorMessage, "Premieres in 60 minutes")
     }
 
+    func testLivestreamingStatus() {
+        let task = DownloadTask(url: "https://www.youtube.com/watch?v=abc123")
+        let expectedEndTime = Date().addingTimeInterval(1800) // 30 分鐘後
+
+        task.status = .livestreaming
+        task.expectedEndTime = expectedEndTime
+
+        XCTAssertEqual(task.status, .livestreaming)
+        XCTAssertEqual(task.expectedEndTime, expectedEndTime)
+    }
+
     // MARK: - DownloadStatus displayText 測試
 
     func testStatusDisplayText() {
@@ -103,6 +114,7 @@ final class DownloadTaskTests: XCTestCase {
         XCTAssertEqual(DownloadStatus.failed.displayText, "失敗")
         XCTAssertEqual(DownloadStatus.cancelled.displayText, "已取消")
         XCTAssertEqual(DownloadStatus.scheduled.displayText, "尚未首播")
+        XCTAssertEqual(DownloadStatus.livestreaming.displayText, "首播串流中")
     }
 
     // MARK: - 進度測試
@@ -247,6 +259,7 @@ final class DownloadTaskTests: XCTestCase {
         XCTAssertEqual(DownloadStatus.failed.rawValue, "failed")
         XCTAssertEqual(DownloadStatus.cancelled.rawValue, "cancelled")
         XCTAssertEqual(DownloadStatus.scheduled.rawValue, "scheduled")
+        XCTAssertEqual(DownloadStatus.livestreaming.rawValue, "livestreaming")
     }
 
     func testStatusFromRawValue() {
@@ -257,6 +270,7 @@ final class DownloadTaskTests: XCTestCase {
         XCTAssertEqual(DownloadStatus(rawValue: "failed"), .failed)
         XCTAssertEqual(DownloadStatus(rawValue: "cancelled"), .cancelled)
         XCTAssertEqual(DownloadStatus(rawValue: "scheduled"), .scheduled)
+        XCTAssertEqual(DownloadStatus(rawValue: "livestreaming"), .livestreaming)
         XCTAssertNil(DownloadStatus(rawValue: "invalid"))
     }
 
@@ -310,5 +324,53 @@ final class DownloadTaskTests: XCTestCase {
         XCTAssertEqual(task.status, .scheduled)
         XCTAssertNotNil(task.premiereDate)
         XCTAssertEqual(task.errorMessage, "Premieres in 30 minutes")
+    }
+
+    // MARK: - expectedEndTime 編碼/解碼測試
+
+    func testEncodingAndDecodingWithExpectedEndTime() throws {
+        let expectedEndTime = Date().addingTimeInterval(1800) // 30 分鐘後
+        let originalTask = DownloadTask(
+            url: "https://www.youtube.com/watch?v=abc123",
+            title: "Livestreaming Video",
+            status: .livestreaming,
+            expectedEndTime: expectedEndTime
+        )
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(originalTask)
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decodedTask = try decoder.decode(DownloadTask.self, from: data)
+
+        XCTAssertEqual(decodedTask.status, .livestreaming)
+        XCTAssertNotNil(decodedTask.expectedEndTime)
+        // 比較時間（允許 1 秒誤差）
+        if let decodedDate = decodedTask.expectedEndTime {
+            XCTAssertEqual(decodedDate.timeIntervalSince1970, expectedEndTime.timeIntervalSince1970, accuracy: 1.0)
+        }
+    }
+
+    func testDecodingLivestreamingStatusFromJSON() throws {
+        let json = """
+        {
+            "id": "550E8400-E29B-41D4-A716-446655440000",
+            "url": "https://www.youtube.com/watch?v=livestream123",
+            "title": "Live Premiere Video",
+            "status": "livestreaming",
+            "progress": 0.0,
+            "createdAt": "2024-01-15T10:30:00Z",
+            "expectedEndTime": "2024-01-15T11:00:00Z"
+        }
+        """.data(using: .utf8)!
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let task = try decoder.decode(DownloadTask.self, from: json)
+
+        XCTAssertEqual(task.status, .livestreaming)
+        XCTAssertNotNil(task.expectedEndTime)
     }
 }

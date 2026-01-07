@@ -202,6 +202,14 @@ struct DownloadItemView: View {
                 } else {
                     Text("尚未首播")
                 }
+            case .livestreaming:
+                Image(systemName: "dot.radiowaves.left.and.right")
+                    .foregroundStyle(.orange)
+                if let endTime = task.expectedEndTime {
+                    Text("首播串流中 (預計 \(formatExpectedEndTime(endTime)) 播放完成)")
+                } else {
+                    Text("首播串流中")
+                }
             }
         }
         .font(.system(size: 18))
@@ -213,6 +221,13 @@ struct DownloadItemView: View {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HH:mm"
         return formatter.string(from: date) + " 首播 (預計時間)"
+    }
+
+    /// 格式化預計播完時間顯示
+    private func formatExpectedEndTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        return formatter.string(from: date)
     }
 
     // MARK: - 操作按鈕
@@ -253,8 +268,8 @@ struct DownloadItemView: View {
                 .help("繼續")
             }
 
-            // 重試按鈕（失敗、取消或首播尚未開始時）
-            if task.status == .failed || task.status == .cancelled || task.status == .scheduled {
+            // 重試按鈕（失敗、取消、首播尚未開始或首播串流中時）
+            if task.status == .failed || task.status == .cancelled || task.status == .scheduled || task.status == .livestreaming {
                 Button(action: onRetry) {
                     Image(systemName: "arrow.clockwise")
                         .font(.system(size: 21))

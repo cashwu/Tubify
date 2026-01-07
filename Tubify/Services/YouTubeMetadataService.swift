@@ -8,6 +8,8 @@ struct VideoInfo: Codable {
     let duration: Int?
     let uploader: String?
     let url: String
+    let liveStatus: String?        // 直播狀態：is_live, was_live, not_live 等
+    let releaseTimestamp: Int?     // 首播開始時間（Unix timestamp）
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -16,6 +18,8 @@ struct VideoInfo: Codable {
         case duration
         case uploader
         case url = "webpage_url"
+        case liveStatus = "live_status"
+        case releaseTimestamp = "release_timestamp"
     }
 }
 
@@ -234,7 +238,9 @@ actor YouTubeMetadataService {
                     thumbnail: "https://i.ytimg.com/vi/\(entry.id)/mqdefault.jpg",
                     duration: nil,
                     uploader: nil,
-                    url: videoURL
+                    url: videoURL,
+                    liveStatus: nil,
+                    releaseTimestamp: nil
                 )
             }
         } catch {

@@ -201,6 +201,23 @@ class DownloadManager {
             task.thumbnailURL = videoInfo.thumbnail
             task.duration = videoInfo.duration
 
+            // 檢查是否正在首播串流
+            if videoInfo.liveStatus == "is_live" {
+                TubifyLogger.download.info("偵測到正在首播串流中: \(videoInfo.title)")
+                task.status = .livestreaming
+
+                // 計算預計播完時間
+                if let releaseTimestamp = videoInfo.releaseTimestamp,
+                   let duration = videoInfo.duration {
+                    let endTimestamp = releaseTimestamp + duration
+                    task.expectedEndTime = Date(timeIntervalSince1970: TimeInterval(endTimestamp))
+                    TubifyLogger.download.info("預計播完時間: \(task.expectedEndTime!)")
+                }
+
+                persistenceService.saveTasks(tasks)
+                return  // 不加入下載佇列
+            }
+
             // 獲取字幕資訊
             let subtitles = try await metadataService.fetchSubtitles(url: task.url, cookiesArguments: [])
 

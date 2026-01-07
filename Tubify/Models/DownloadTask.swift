@@ -11,6 +11,7 @@ enum DownloadStatus: String, Codable {
     case failed = "failed"             // 失敗
     case cancelled = "cancelled"       // 已取消
     case scheduled = "scheduled"       // 尚未首播
+    case livestreaming = "livestreaming" // 首播串流中
 
     var displayText: String {
         switch self {
@@ -23,6 +24,7 @@ enum DownloadStatus: String, Codable {
         case .failed: return "失敗"
         case .cancelled: return "已取消"
         case .scheduled: return "尚未首播"
+        case .livestreaming: return "首播串流中"
         }
     }
 }
@@ -46,12 +48,13 @@ class DownloadTask: Identifiable, Codable {
     var duration: Int?  // 影片時長（秒）
     var callbackScheme: String?  // 下載完成後的回調 Scheme（例如 "whispify"）
     var requestId: String?  // 請求識別碼，回調時原樣帶回給呼叫方
+    var expectedEndTime: Date?  // 首播預計播放完成時間（僅適用於 livestreaming 狀態）
 
     enum CodingKeys: String, CodingKey {
         case id, url, title, thumbnailURL, status, progress
         case errorMessage, outputPath, createdAt, completedAt, premiereDate
         case availableSubtitles, subtitleSelection
-        case duration, callbackScheme, requestId
+        case duration, callbackScheme, requestId, expectedEndTime
     }
 
     init(
@@ -70,7 +73,8 @@ class DownloadTask: Identifiable, Codable {
         subtitleSelection: SubtitleSelection? = nil,
         duration: Int? = nil,
         callbackScheme: String? = nil,
-        requestId: String? = nil
+        requestId: String? = nil,
+        expectedEndTime: Date? = nil
     ) {
         self.id = id
         self.url = url
@@ -88,6 +92,7 @@ class DownloadTask: Identifiable, Codable {
         self.duration = duration
         self.callbackScheme = callbackScheme
         self.requestId = requestId
+        self.expectedEndTime = expectedEndTime
     }
 
     required init(from decoder: Decoder) throws {
@@ -108,6 +113,7 @@ class DownloadTask: Identifiable, Codable {
         duration = try container.decodeIfPresent(Int.self, forKey: .duration)
         callbackScheme = try container.decodeIfPresent(String.self, forKey: .callbackScheme)
         requestId = try container.decodeIfPresent(String.self, forKey: .requestId)
+        expectedEndTime = try container.decodeIfPresent(Date.self, forKey: .expectedEndTime)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -128,6 +134,7 @@ class DownloadTask: Identifiable, Codable {
         try container.encodeIfPresent(duration, forKey: .duration)
         try container.encodeIfPresent(callbackScheme, forKey: .callbackScheme)
         try container.encodeIfPresent(requestId, forKey: .requestId)
+        try container.encodeIfPresent(expectedEndTime, forKey: .expectedEndTime)
     }
 }
 

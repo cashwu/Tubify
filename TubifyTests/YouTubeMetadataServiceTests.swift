@@ -144,6 +144,65 @@ final class YouTubeMetadataServiceTests: XCTestCase {
         XCTAssertNil(videoInfo.thumbnail)
         XCTAssertNil(videoInfo.duration)
         XCTAssertNil(videoInfo.uploader)
+        XCTAssertNil(videoInfo.liveStatus)
+        XCTAssertNil(videoInfo.releaseTimestamp)
+    }
+
+    func testVideoInfoDecodingWithLiveStatus() throws {
+        let json = """
+        {
+            "id": "eMAm_gY0eaw",
+            "title": "首播串流測試影片",
+            "thumbnail": "https://i.ytimg.com/vi/eMAm_gY0eaw/maxresdefault.jpg",
+            "duration": 1456,
+            "uploader": "Test Channel",
+            "webpage_url": "https://www.youtube.com/watch?v=eMAm_gY0eaw",
+            "live_status": "is_live",
+            "release_timestamp": 1767789011
+        }
+        """.data(using: .utf8)!
+
+        let decoder = JSONDecoder()
+        let videoInfo = try decoder.decode(VideoInfo.self, from: json)
+
+        XCTAssertEqual(videoInfo.id, "eMAm_gY0eaw")
+        XCTAssertEqual(videoInfo.title, "首播串流測試影片")
+        XCTAssertEqual(videoInfo.duration, 1456)
+        XCTAssertEqual(videoInfo.liveStatus, "is_live")
+        XCTAssertEqual(videoInfo.releaseTimestamp, 1767789011)
+    }
+
+    func testVideoInfoDecodingWithWasLiveStatus() throws {
+        let json = """
+        {
+            "id": "abc123",
+            "title": "已結束的直播",
+            "webpage_url": "https://www.youtube.com/watch?v=abc123",
+            "live_status": "was_live"
+        }
+        """.data(using: .utf8)!
+
+        let decoder = JSONDecoder()
+        let videoInfo = try decoder.decode(VideoInfo.self, from: json)
+
+        XCTAssertEqual(videoInfo.liveStatus, "was_live")
+        XCTAssertNil(videoInfo.releaseTimestamp)
+    }
+
+    func testVideoInfoDecodingWithNotLiveStatus() throws {
+        let json = """
+        {
+            "id": "abc123",
+            "title": "普通影片",
+            "webpage_url": "https://www.youtube.com/watch?v=abc123",
+            "live_status": "not_live"
+        }
+        """.data(using: .utf8)!
+
+        let decoder = JSONDecoder()
+        let videoInfo = try decoder.decode(VideoInfo.self, from: json)
+
+        XCTAssertEqual(videoInfo.liveStatus, "not_live")
     }
 
     // MARK: - PlaylistInfo 解碼測試
