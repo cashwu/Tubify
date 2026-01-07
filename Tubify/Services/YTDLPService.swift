@@ -158,6 +158,11 @@ actor YTDLPService {
             finalArguments.append("--newline")
         }
 
+        // 加入 --print 參數，讓 yt-dlp 在下載完成後輸出最終檔案路徑
+        // 使用特殊前綴以便識別
+        finalArguments.append("--print")
+        finalArguments.append("after_move:FINAL_PATH:%(filepath)s")
+
         // 加入字幕下載參數（如果有選擇字幕）
         if let selection = subtitleSelection, !selection.selectedLanguages.isEmpty {
             finalArguments.append("--write-sub")
@@ -219,14 +224,25 @@ actor YTDLPService {
                 LogFileManager.shared.logYTDLPOutput(taskId: taskId, output: line)
 
                 // 解析輸出檔案路徑
-                if line.contains("[download] Destination:") {
+                // 優先使用 --print 輸出的 FINAL_PATH（最可靠）
+                if line.hasPrefix("FINAL_PATH:") {
+                    let path = String(line.dropFirst("FINAL_PATH:".count))
+                    TubifyLogger.ytdlp.info("從 --print 取得最終路徑: \(path)")
+                    resultHolder.setOutputPath(path)
+                } else if line.contains("[download] Destination:") {
                     let path = line.replacingOccurrences(of: "[download] Destination: ", with: "")
                     resultHolder.addDownloadedFile(path)
-                    resultHolder.setOutputPath(path)
+                    // 只有在還沒有設定 outputPath 時才設定（FINAL_PATH 優先）
+                    if resultHolder.outputPath == nil {
+                        resultHolder.setOutputPath(path)
+                    }
                 } else if line.contains("[Merger] Merging formats into") {
                     let path = line.replacingOccurrences(of: "[Merger] Merging formats into \"", with: "")
                         .replacingOccurrences(of: "\"", with: "")
-                    resultHolder.setOutputPath(path)
+                    // 只有在還沒有設定 outputPath 時才設定（FINAL_PATH 優先）
+                    if resultHolder.outputPath == nil {
+                        resultHolder.setOutputPath(path)
+                    }
                 }
             }
         }
@@ -292,22 +308,36 @@ actor YTDLPService {
         }
 
         if let finalPath = resultHolder.outputPath {
-            LogFileManager.shared.logDownloadComplete(taskId: taskId, outputPath: finalPath)
-            return finalPath
+            // 驗證檔案存在
+            if FileManager.default.fileExists(atPath: finalPath) {
+                LogFileManager.shared.logDownloadComplete(taskId: taskId, outputPath: finalPath)
+                return finalPath
+            } else {
+                TubifyLogger.ytdlp.warning("輸出路徑不存在，嘗試尋找替代檔案: \(finalPath)")
+            }
         }
 
-        // 嘗試從輸出目錄找最近修改的檔案（排除 .part 下載中檔案）
+        // Fallback: 如果 --print 和解析都失敗，嘗試用 title 模式尋找
+        // 這是最後的手段，只找最近 60 秒內修改的檔案
         let dirURL = URL(fileURLWithPath: outputDirectory)
+        let now = Date()
+        let recentThreshold: TimeInterval = 60  // 只找最近 60 秒內的檔案
+
         if let files = try? FileManager.default.contentsOfDirectory(
             at: dirURL,
             includingPropertiesForKeys: [.contentModificationDateKey],
             options: [.skipsHiddenFiles]
         ) {
-            // 過濾掉 .part 檔案（下載中的暫存檔）並按修改時間排序
-            let latestFile = files
-                .filter { !$0.pathExtension.lowercased().hasSuffix("part") }
+            // 只找最近修改的媒體檔案（排除 .part 和字幕檔）
+            let mediaExtensions: Set<String> = ["mp4", "mkv", "webm", "m4a", "mp3", "mov"]
+            let recentMediaFile = files
+                .filter { url in
+                    let ext = url.pathExtension.lowercased()
+                    return mediaExtensions.contains(ext)
+                }
                 .compactMap { url -> (URL, Date)? in
-                    guard let date = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate else {
+                    guard let date = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
+                          now.timeIntervalSince(date) < recentThreshold else {
                         return nil
                     }
                     return (url, date)
@@ -315,13 +345,15 @@ actor YTDLPService {
                 .sorted { $0.1 > $1.1 }
                 .first?.0
 
-            if let file = latestFile {
+            if let file = recentMediaFile {
                 let path = file.path
+                TubifyLogger.ytdlp.warning("使用 fallback 找到檔案: \(path)")
                 LogFileManager.shared.logDownloadComplete(taskId: taskId, outputPath: path)
                 return path
             }
         }
-        throw YTDLPError.parseError("無法確定輸出檔案路徑")
+
+        throw YTDLPError.parseError("無法確定輸出檔案路徑。請確認下載是否成功完成。")
     }
 
     /// 取消下載
