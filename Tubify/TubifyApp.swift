@@ -121,9 +121,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 確保只使用現有窗口（避免 SwiftUI WindowGroup 創建新窗口）
         // 找到主窗口（ContentView 的窗口，排除 Settings 窗口）
+        // 注意：最小化的視窗 isVisible = false，所以也要檢查 isMiniaturized
         let contentWindows = NSApplication.shared.windows.filter { window in
             // 排除 Settings 窗口和其他系統窗口
-            window.isVisible && !window.title.contains("設定")
+            (window.isVisible || window.isMiniaturized) && !window.title.contains("設定")
         }
 
         // 如果有多個窗口，關閉多餘的
@@ -133,8 +134,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // 將主窗口帶到前景
+        // 將主窗口帶到前景（如果是最小化的，先還原）
         if let mainWindow = contentWindows.first {
+            if mainWindow.isMiniaturized {
+                mainWindow.deminiaturize(nil)
+            }
             mainWindow.makeKeyAndOrderFront(nil)
         }
 
