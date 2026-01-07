@@ -25,6 +25,7 @@
 		902E79E3B4284B909393FB2C /* DownloadTask.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A9847C5AD0C41FEB8563FC3 /* DownloadTask.swift */; };
 		94F2DB927CAD21242C8680BF /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44C08970ACCDAA7691461E10 /* ContentView.swift */; };
 		96781B6921245C33C992D231 /* URLValidationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27FA3E7C8810E2DD3D783593 /* URLValidationTests.swift */; };
+		A41DD352078FDDD35B93E832 /* ContentViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00FAA0EE7D4C1B1E7F54B29A /* ContentViewTests.swift */; };
 		A5133C8B045F8477AD986E02 /* DownloadTaskTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C99522A3C5241F5B0BB160A /* DownloadTaskTests.swift */; };
 		AC0386EBF2A65F40E24981E0 /* SubtitleSelectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BEDEE0C21F86362EB8A3603 /* SubtitleSelectionView.swift */; };
 		B51562299E93AF915FF94B6F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 256049B658F182B4F13D8AE3 /* Assets.xcassets */; };
@@ -47,6 +48,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		00FAA0EE7D4C1B1E7F54B29A /* ContentViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentViewTests.swift; sourceTree = "<group>"; };
 		0D4F49C12534415A645F3C44 /* DownloadManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadManager.swift; sourceTree = "<group>"; };
 		256049B658F182B4F13D8AE3 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		27FA3E7C8810E2DD3D783593 /* URLValidationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = URLValidationTests.swift; sourceTree = "<group>"; };
@@ -183,6 +185,7 @@
 		F9A835E124ECFDC87D19F8CC /* TubifyTests */ = {
 			isa = PBXGroup;
 			children = (
+				00FAA0EE7D4C1B1E7F54B29A /* ContentViewTests.swift */,
 				EF8E5EE3B06A43221DB8548C /* DownloadManagerTests.swift */,
 				8C99522A3C5241F5B0BB160A /* DownloadTaskTests.swift */,
 				7DAE150F1AF830DF89DE33B2 /* PremiereErrorParserTests.swift */,
@@ -286,6 +289,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A41DD352078FDDD35B93E832 /* ContentViewTests.swift in Sources */,
 				29B9CC7FA4716ADB4DDC07FC /* DownloadManagerTests.swift in Sources */,
 				A5133C8B045F8477AD986E02 /* DownloadTaskTests.swift in Sources */,
 				7D6050C4FEF00EC383AB99C2 /* MockPersistenceService.swift in Sources */,
