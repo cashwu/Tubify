@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(xcodebuild build:*)",
+      "Bash(xcodebuild test:*)",
+      "Bash(xcodebuild:*)",
+      "Bash(xcodegen generate:*)",
+      "Bash(swiftc:*)"
+    ]
+  }
+}
