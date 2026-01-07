@@ -43,11 +43,15 @@ class DownloadTask: Identifiable, Codable {
     var premiereDate: Date?  // 首播時間（僅適用於 scheduled 狀態）
     var availableSubtitles: [SubtitleTrack]?  // 可用的字幕列表
     var subtitleSelection: SubtitleSelection?  // 用戶選擇的字幕
+    var duration: Int?  // 影片時長（秒）
+    var callbackScheme: String?  // 下載完成後的回調 Scheme（例如 "whispify"）
+    var requestId: String?  // 請求識別碼，回調時原樣帶回給呼叫方
 
     enum CodingKeys: String, CodingKey {
         case id, url, title, thumbnailURL, status, progress
         case errorMessage, outputPath, createdAt, completedAt, premiereDate
         case availableSubtitles, subtitleSelection
+        case duration, callbackScheme, requestId
     }
 
     init(
@@ -63,7 +67,10 @@ class DownloadTask: Identifiable, Codable {
         completedAt: Date? = nil,
         premiereDate: Date? = nil,
         availableSubtitles: [SubtitleTrack]? = nil,
-        subtitleSelection: SubtitleSelection? = nil
+        subtitleSelection: SubtitleSelection? = nil,
+        duration: Int? = nil,
+        callbackScheme: String? = nil,
+        requestId: String? = nil
     ) {
         self.id = id
         self.url = url
@@ -78,6 +85,9 @@ class DownloadTask: Identifiable, Codable {
         self.premiereDate = premiereDate
         self.availableSubtitles = availableSubtitles
         self.subtitleSelection = subtitleSelection
+        self.duration = duration
+        self.callbackScheme = callbackScheme
+        self.requestId = requestId
     }
 
     required init(from decoder: Decoder) throws {
@@ -95,6 +105,9 @@ class DownloadTask: Identifiable, Codable {
         premiereDate = try container.decodeIfPresent(Date.self, forKey: .premiereDate)
         availableSubtitles = try container.decodeIfPresent([SubtitleTrack].self, forKey: .availableSubtitles)
         subtitleSelection = try container.decodeIfPresent(SubtitleSelection.self, forKey: .subtitleSelection)
+        duration = try container.decodeIfPresent(Int.self, forKey: .duration)
+        callbackScheme = try container.decodeIfPresent(String.self, forKey: .callbackScheme)
+        requestId = try container.decodeIfPresent(String.self, forKey: .requestId)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -112,6 +125,9 @@ class DownloadTask: Identifiable, Codable {
         try container.encodeIfPresent(premiereDate, forKey: .premiereDate)
         try container.encodeIfPresent(availableSubtitles, forKey: .availableSubtitles)
         try container.encodeIfPresent(subtitleSelection, forKey: .subtitleSelection)
+        try container.encodeIfPresent(duration, forKey: .duration)
+        try container.encodeIfPresent(callbackScheme, forKey: .callbackScheme)
+        try container.encodeIfPresent(requestId, forKey: .requestId)
     }
 }
 
