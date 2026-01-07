@@ -355,12 +355,19 @@ struct ContentView: View {
     // MARK: - 任務計數文字
 
     private var taskCountText: String {
-        let total = downloadManager.tasks.count
-        let downloading = downloadManager.tasks.filter { $0.status == .downloading }.count
-        let completed = downloadManager.tasks.filter { $0.status == .completed }.count
-        let pending = downloadManager.tasks.filter { $0.status == .pending }.count
-        let paused = downloadManager.tasks.filter { $0.status == .paused }.count
-        let scheduled = downloadManager.tasks.filter { $0.status == .scheduled }.count
+        ContentView.buildTaskCountText(from: downloadManager.tasks)
+    }
+
+    /// 根據任務列表生成計數文字（供測試使用）
+    nonisolated static func buildTaskCountText(from tasks: [DownloadTask]) -> String {
+        let total = tasks.count
+        let downloading = tasks.filter { $0.status == .downloading }.count
+        let completed = tasks.filter { $0.status == .completed }.count
+        let pending = tasks.filter { $0.status == .pending }.count
+        let paused = tasks.filter { $0.status == .paused }.count
+        let scheduled = tasks.filter { $0.status == .scheduled }.count
+        let livestreaming = tasks.filter { $0.status == .livestreaming }.count
+        let postLive = tasks.filter { $0.status == .postLive }.count
 
         if total == 0 {
             return "沒有下載任務"
@@ -379,6 +386,12 @@ struct ContentView: View {
         }
         if scheduled > 0 {
             parts.append("首播 \(scheduled)")
+        }
+        if livestreaming > 0 {
+            parts.append("串流中 \(livestreaming)")
+        }
+        if postLive > 0 {
+            parts.append("處理中 \(postLive)")
         }
         if completed > 0 {
             parts.append("已完成 \(completed)")
