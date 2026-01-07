@@ -210,6 +210,10 @@ struct DownloadItemView: View {
                 } else {
                     Text("首播串流中")
                 }
+            case .postLive:
+                Image(systemName: "gearshape.2")
+                    .foregroundStyle(.purple)
+                Text("直播處理中 (請稍後重試)")
             }
         }
         .font(.system(size: 18))
@@ -268,8 +272,8 @@ struct DownloadItemView: View {
                 .help("繼續")
             }
 
-            // 重試按鈕（失敗、取消、首播尚未開始或首播串流中時）
-            if task.status == .failed || task.status == .cancelled || task.status == .scheduled || task.status == .livestreaming {
+            // 重試按鈕（失敗、取消、首播尚未開始、首播串流中或直播處理中時）
+            if task.status == .failed || task.status == .cancelled || task.status == .scheduled || task.status == .livestreaming || task.status == .postLive {
                 Button(action: onRetry) {
                     Image(systemName: "arrow.clockwise")
                         .font(.system(size: 21))

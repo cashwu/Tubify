@@ -12,6 +12,7 @@ enum DownloadStatus: String, Codable {
     case cancelled = "cancelled"       // 已取消
     case scheduled = "scheduled"       // 尚未首播
     case livestreaming = "livestreaming" // 首播串流中
+    case postLive = "postLive"         // 直播處理中
 
     var displayText: String {
         switch self {
@@ -25,6 +26,7 @@ enum DownloadStatus: String, Codable {
         case .cancelled: return "已取消"
         case .scheduled: return "尚未首播"
         case .livestreaming: return "首播串流中"
+        case .postLive: return "直播處理中"
         }
     }
 }

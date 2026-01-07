@@ -218,6 +218,14 @@ class DownloadManager {
                 return  // 不加入下載佇列
             }
 
+            // 檢查是否為直播剛結束、正在處理中
+            if videoInfo.liveStatus == "post_live" {
+                TubifyLogger.download.info("偵測到直播處理中: \(videoInfo.title)")
+                task.status = .postLive
+                persistenceService.saveTasks(tasks)
+                return  // 不加入下載佇列，等待 YouTube 處理完成
+            }
+
             // 獲取字幕資訊
             let subtitles = try await metadataService.fetchSubtitles(url: task.url, cookiesArguments: [])
 

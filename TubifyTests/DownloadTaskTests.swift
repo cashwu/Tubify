@@ -104,6 +104,14 @@ final class DownloadTaskTests: XCTestCase {
         XCTAssertEqual(task.expectedEndTime, expectedEndTime)
     }
 
+    func testPostLiveStatus() {
+        let task = DownloadTask(url: "https://www.youtube.com/watch?v=abc123")
+
+        task.status = .postLive
+
+        XCTAssertEqual(task.status, .postLive)
+    }
+
     // MARK: - DownloadStatus displayText 測試
 
     func testStatusDisplayText() {
@@ -115,6 +123,7 @@ final class DownloadTaskTests: XCTestCase {
         XCTAssertEqual(DownloadStatus.cancelled.displayText, "已取消")
         XCTAssertEqual(DownloadStatus.scheduled.displayText, "尚未首播")
         XCTAssertEqual(DownloadStatus.livestreaming.displayText, "首播串流中")
+        XCTAssertEqual(DownloadStatus.postLive.displayText, "直播處理中")
     }
 
     // MARK: - 進度測試
@@ -260,6 +269,7 @@ final class DownloadTaskTests: XCTestCase {
         XCTAssertEqual(DownloadStatus.cancelled.rawValue, "cancelled")
         XCTAssertEqual(DownloadStatus.scheduled.rawValue, "scheduled")
         XCTAssertEqual(DownloadStatus.livestreaming.rawValue, "livestreaming")
+        XCTAssertEqual(DownloadStatus.postLive.rawValue, "postLive")
     }
 
     func testStatusFromRawValue() {
@@ -271,6 +281,7 @@ final class DownloadTaskTests: XCTestCase {
         XCTAssertEqual(DownloadStatus(rawValue: "cancelled"), .cancelled)
         XCTAssertEqual(DownloadStatus(rawValue: "scheduled"), .scheduled)
         XCTAssertEqual(DownloadStatus(rawValue: "livestreaming"), .livestreaming)
+        XCTAssertEqual(DownloadStatus(rawValue: "postLive"), .postLive)
         XCTAssertNil(DownloadStatus(rawValue: "invalid"))
     }
 
