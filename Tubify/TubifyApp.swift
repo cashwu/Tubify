@@ -14,6 +14,7 @@ struct TubifyApp: App {
         WindowGroup {
             ContentView()
         }
+        .handlesExternalEvents(matching: Set(arrayLiteral: "*"))  // 所有外部事件由現有窗口處理
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
         .commands {
