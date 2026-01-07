@@ -88,11 +88,42 @@ class DownloadManager {
             persistenceService.saveTasks(tasks)
             startDownloadQueue()
         }
+
+        // 監聽外部下載請求
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleExternalDownloadRequest(_:)),
+            name: .externalDownloadRequest,
+            object: nil
+        )
+    }
+
+    @objc private func handleExternalDownloadRequest(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let urlString = userInfo["url"] as? String else {
+            return
+        }
+
+        let callbackScheme = userInfo["callback"] as? String
+        let requestId = userInfo["request_id"] as? String
+
+        // 建立下載任務，帶上 callback 和 request_id 資訊
+        addURL(urlString, callbackScheme: callbackScheme, requestId: requestId)
     }
 
     /// 新增 URL 到下載佇列
     @discardableResult
     func addURL(_ urlString: String) -> URLValidationResult {
+        return addURL(urlString, callbackScheme: nil, requestId: nil)
+    }
+
+    /// 新增 URL 到下載佇列（支援回調）
+    /// - Parameters:
+    ///   - urlString: YouTube URL
+    ///   - callbackScheme: 下載完成後的回調 Scheme（可選）
+    ///   - requestId: 請求識別碼，回調時原樣帶回（可選）
+    @discardableResult
+    func addURL(_ urlString: String, callbackScheme: String?, requestId: String?) -> URLValidationResult {
         // 基本格式檢查：必須是有效的 URL 格式，且不是 markdown 連結
         guard isValidURLFormat(urlString) else {
             TubifyLogger.download.error("無效的 URL 格式: \(urlString)")
@@ -118,16 +149,20 @@ class DownloadManager {
             // 播放清單：先建立佔位任務，然後異步展開
             let task = DownloadTask(url: urlString, title: "載入播放清單中...")
             task.status = .fetchingInfo
+            task.callbackScheme = callbackScheme
+            task.requestId = requestId
             tasks.append(task)
             persistenceService.saveTasks(tasks)
 
             Task {
-                await expandPlaylist(placeholderTask: task, urlString: urlString)
+                await expandPlaylist(placeholderTask: task, urlString: urlString, callbackScheme: callbackScheme, requestId: requestId)
             }
         } else {
             // 單一影片：先同步建立任務並加入列表
             let task = DownloadTask(url: urlString)
             task.status = .fetchingInfo
+            task.callbackScheme = callbackScheme
+            task.requestId = requestId
 
             // 使用靜態方法提取 video ID 來獲取縮圖（不需要 await）
             if let videoId = YouTubeMetadataService.extractVideoIdSync(from: urlString) {
@@ -164,6 +199,7 @@ class DownloadManager {
             TubifyLogger.download.info("成功獲取影片資訊: \(videoInfo.title)")
             task.title = videoInfo.title
             task.thumbnailURL = videoInfo.thumbnail
+            task.duration = videoInfo.duration
 
             // 獲取字幕資訊
             let subtitles = try await metadataService.fetchSubtitles(url: task.url, cookiesArguments: [])
@@ -219,7 +255,7 @@ class DownloadManager {
     }
 
     /// 展開播放清單
-    private func expandPlaylist(placeholderTask: DownloadTask, urlString: String) async {
+    private func expandPlaylist(placeholderTask: DownloadTask, urlString: String, callbackScheme: String? = nil, requestId: String? = nil) async {
         let metadataService = YouTubeMetadataService.shared
 
         // 注意：不使用 cookies 來獲取播放清單元資料（原因同 fetchMetadataForTask）
@@ -244,7 +280,9 @@ class DownloadManager {
                     url: video.url,
                     title: video.title,
                     thumbnailURL: video.thumbnail,
-                    status: .fetchingInfo  // 先設為獲取資訊中
+                    status: .fetchingInfo,  // 先設為獲取資訊中
+                    callbackScheme: callbackScheme,
+                    requestId: requestId
                 )
                 tasks.append(task)
                 newTasks.append(task)
@@ -418,6 +456,17 @@ class DownloadManager {
                 title: task.title,
                 outputPath: outputPath
             )
+
+            // 觸發回調（如果有設定）
+            if let callbackScheme = task.callbackScheme {
+                Task {
+                    await CallbackService.shared.triggerCallback(
+                        scheme: callbackScheme,
+                        task: task,
+                        filePath: outputPath
+                    )
+                }
+            }
 
             // 檢查是否自動移除已完成的任務
             let autoRemove = UserDefaults.standard.object(forKey: AppSettingsKeys.autoRemoveCompleted) as? Bool
