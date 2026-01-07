@@ -296,11 +296,30 @@ actor YTDLPService {
             return finalPath
         }
 
-        // 嘗試從輸出目錄找最新的檔案
-        let files = try? FileManager.default.contentsOfDirectory(atPath: outputDirectory)
-        let latestFile = files?.sorted().last
-        if let file = latestFile {
-            return "\(outputDirectory)/\(file)"
+        // 嘗試從輸出目錄找最近修改的檔案（排除 .part 下載中檔案）
+        let dirURL = URL(fileURLWithPath: outputDirectory)
+        if let files = try? FileManager.default.contentsOfDirectory(
+            at: dirURL,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) {
+            // 過濾掉 .part 檔案（下載中的暫存檔）並按修改時間排序
+            let latestFile = files
+                .filter { !$0.pathExtension.lowercased().hasSuffix("part") }
+                .compactMap { url -> (URL, Date)? in
+                    guard let date = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate else {
+                        return nil
+                    }
+                    return (url, date)
+                }
+                .sorted { $0.1 > $1.1 }
+                .first?.0
+
+            if let file = latestFile {
+                let path = file.path
+                LogFileManager.shared.logDownloadComplete(taskId: taskId, outputPath: path)
+                return path
+            }
         }
         throw YTDLPError.parseError("無法確定輸出檔案路徑")
     }

@@ -118,6 +118,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         TubifyLogger.general.info("收到外部下載請求: \(videoURL), callback: \(callbackScheme ?? "無"), request_id: \(requestId ?? "無")")
 
+        // 確保只使用現有窗口（避免 SwiftUI WindowGroup 創建新窗口）
+        // 找到主窗口（ContentView 的窗口，排除 Settings 窗口）
+        let contentWindows = NSApplication.shared.windows.filter { window in
+            // 排除 Settings 窗口和其他系統窗口
+            window.isVisible && !window.title.contains("設定")
+        }
+
+        // 如果有多個窗口，關閉多餘的
+        if contentWindows.count > 1 {
+            for window in contentWindows.dropFirst() {
+                window.close()
+            }
+        }
+
+        // 將主窗口帶到前景
+        if let mainWindow = contentWindows.first {
+            mainWindow.makeKeyAndOrderFront(nil)
+        }
+
         // 通知 DownloadManager 新增下載任務
         NotificationCenter.default.post(
             name: .externalDownloadRequest,
