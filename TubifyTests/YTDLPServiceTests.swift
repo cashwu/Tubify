@@ -234,4 +234,137 @@ final class YTDLPServiceTests: XCTestCase {
         return line.replacingOccurrences(of: "[Merger] Merging formats into \"", with: "")
             .replacingOccurrences(of: "\"", with: "")
     }
+
+    // MARK: - 字幕檔過濾測試
+
+    /// 模擬 YTDLPService 中過濾字幕檔的邏輯
+    private func filterMediaFiles(from paths: [String]) -> [String] {
+        let subtitleExtensions: Set<String> = ["srt", "vtt", "ass", "ssa", "sub", "sbv", "ttml"]
+        return paths.filter { path in
+            let ext = (path as NSString).pathExtension.lowercased()
+            return !subtitleExtensions.contains(ext)
+        }
+    }
+
+    func testFilterMediaFilesExcludesSrtSubtitles() {
+        let files = [
+            "/Downloads/video.f137.mp4",
+            "/Downloads/video.f140.m4a",
+            "/Downloads/video.zh-TW.srt",
+            "/Downloads/video.zh-Hans.srt"
+        ]
+        let mediaFiles = filterMediaFiles(from: files)
+        XCTAssertEqual(mediaFiles.count, 2)
+        XCTAssertTrue(mediaFiles.contains("/Downloads/video.f137.mp4"))
+        XCTAssertTrue(mediaFiles.contains("/Downloads/video.f140.m4a"))
+    }
+
+    func testFilterMediaFilesExcludesVttSubtitles() {
+        let files = [
+            "/Downloads/video.mp4",
+            "/Downloads/video.en.vtt",
+            "/Downloads/video.ja.vtt"
+        ]
+        let mediaFiles = filterMediaFiles(from: files)
+        XCTAssertEqual(mediaFiles.count, 1)
+        XCTAssertEqual(mediaFiles.first, "/Downloads/video.mp4")
+    }
+
+    func testFilterMediaFilesExcludesAssSubtitles() {
+        let files = [
+            "/Downloads/video.mkv",
+            "/Downloads/video.ass"
+        ]
+        let mediaFiles = filterMediaFiles(from: files)
+        XCTAssertEqual(mediaFiles.count, 1)
+        XCTAssertEqual(mediaFiles.first, "/Downloads/video.mkv")
+    }
+
+    func testFilterMediaFilesKeepsOnlyMediaWhenOnlySubtitlesExist() {
+        let files = [
+            "/Downloads/video.zh-TW.srt",
+            "/Downloads/video.zh-Hans.srt",
+            "/Downloads/video.en.vtt"
+        ]
+        let mediaFiles = filterMediaFiles(from: files)
+        XCTAssertEqual(mediaFiles.count, 0)
+    }
+
+    func testFilterMediaFilesKeepsAllMediaFiles() {
+        let files = [
+            "/Downloads/video.mp4",
+            "/Downloads/audio.m4a",
+            "/Downloads/video.webm"
+        ]
+        let mediaFiles = filterMediaFiles(from: files)
+        XCTAssertEqual(mediaFiles.count, 3)
+    }
+
+    func testFilterMediaFilesHandlesEmptyArray() {
+        let files: [String] = []
+        let mediaFiles = filterMediaFiles(from: files)
+        XCTAssertEqual(mediaFiles.count, 0)
+    }
+
+    func testFilterMediaFilesIsCaseInsensitive() {
+        let files = [
+            "/Downloads/video.mp4",
+            "/Downloads/video.SRT",
+            "/Downloads/video.Vtt"
+        ]
+        let mediaFiles = filterMediaFiles(from: files)
+        XCTAssertEqual(mediaFiles.count, 1)
+        XCTAssertEqual(mediaFiles.first, "/Downloads/video.mp4")
+    }
+
+    /// 測試合併檢測邏輯：多個字幕檔不應觸發合併失敗
+    func testMergeDetectionWithMultipleSubtitlesOnly() {
+        // 模擬情境：合併成功後，只剩下字幕檔
+        let existingFiles = [
+            "/Downloads/video.zh-TW.srt",
+            "/Downloads/video.zh-Hans.srt"
+        ]
+        let mediaFiles = filterMediaFiles(from: existingFiles)
+        // 應該不會觸發合併失敗（mediaFiles.count <= 1）
+        XCTAssertFalse(mediaFiles.count > 1, "多個字幕檔不應觸發合併失敗檢測")
+    }
+
+    /// 測試合併檢測邏輯：字幕檔 + 單一合併後媒體檔不應觸發錯誤
+    func testMergeDetectionWithSubtitlesAndMergedMedia() {
+        // 模擬情境：合併成功，有字幕檔和最終的 mp4
+        let existingFiles = [
+            "/Downloads/video.zh-TW.srt",
+            "/Downloads/video.zh-Hans.srt",
+            "/Downloads/video.mp4"
+        ]
+        let mediaFiles = filterMediaFiles(from: existingFiles)
+        // 只有 1 個媒體檔，不應觸發合併失敗
+        XCTAssertEqual(mediaFiles.count, 1, "合併成功後應只有一個媒體檔")
+        XCTAssertFalse(mediaFiles.count > 1, "字幕檔 + 單一媒體檔不應觸發合併失敗檢測")
+    }
+
+    /// 測試合併檢測邏輯：多個媒體檔應觸發合併失敗
+    func testMergeDetectionWithMultipleMediaFiles() {
+        // 模擬情境：合併失敗，視頻和音頻檔都還在
+        let existingFiles = [
+            "/Downloads/video.f137.mp4",
+            "/Downloads/video.f140.m4a"
+        ]
+        let mediaFiles = filterMediaFiles(from: existingFiles)
+        // 有 2 個媒體檔，應觸發合併失敗
+        XCTAssertTrue(mediaFiles.count > 1, "多個媒體檔應觸發合併失敗檢測")
+    }
+
+    /// 測試合併檢測邏輯：字幕檔 + 多個媒體檔應觸發合併失敗
+    func testMergeDetectionWithSubtitlesAndMultipleMediaFiles() {
+        // 模擬情境：合併失敗，有字幕檔，但視頻和音頻都還在
+        let existingFiles = [
+            "/Downloads/video.zh-TW.srt",
+            "/Downloads/video.f137.mp4",
+            "/Downloads/video.f140.m4a"
+        ]
+        let mediaFiles = filterMediaFiles(from: existingFiles)
+        // 有 2 個媒體檔，應觸發合併失敗
+        XCTAssertTrue(mediaFiles.count > 1, "字幕檔 + 多個媒體檔應觸發合併失敗檢測")
+    }
 }
