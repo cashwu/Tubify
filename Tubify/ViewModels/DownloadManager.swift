@@ -9,11 +9,12 @@ enum URLValidationResult {
     case alreadyExists     // 已在佇列中
 }
 
-/// 字幕選擇請求
-struct SubtitleSelectionRequest: Identifiable {
+/// 媒體選項選擇請求（字幕 + 音軌）
+struct MediaSelectionRequest: Identifiable {
     let id = UUID()
     let tasks: [DownloadTask]
     let availableSubtitles: [SubtitleTrack]
+    let availableAudioTracks: [AudioTrack]
     let videoTitle: String?  // 單一影片為標題，播放清單為 nil
 }
 
@@ -35,8 +36,8 @@ class DownloadManager {
     /// 目前下載中的任務（支援同時多個）
     var currentTasks: Set<UUID> = []
 
-    /// 字幕選擇回調（由 UI 設置）
-    var onSubtitleSelectionNeeded: ((SubtitleSelectionRequest) -> Void)?
+    /// 媒體選項選擇回調（由 UI 設置）
+    var onMediaSelectionNeeded: ((MediaSelectionRequest) -> Void)?
 
     /// 持久化服務（可注入以供測試使用）
     private let persistenceService: PersistenceServiceProtocol
@@ -226,22 +227,28 @@ class DownloadManager {
                 return  // 不加入下載佇列，等待 YouTube 處理完成
             }
 
-            // 獲取字幕資訊
-            let subtitles = try await metadataService.fetchSubtitles(url: task.url, cookiesArguments: [])
+            // 獲取字幕和音軌資訊
+            let mediaOptions = try await metadataService.fetchMediaOptions(url: task.url, cookiesArguments: [])
 
-            if !subtitles.isEmpty {
-                // 有字幕，等待用戶選擇
-                task.availableSubtitles = subtitles
-                task.status = .waitingForSubtitleSelection
+            // 過濾只保留支援的語言
+            let filteredSubtitles = mediaOptions.subtitles.filter { SubtitleTrack.isSupportedLanguage($0.languageCode) }
+            let filteredAudioTracks = mediaOptions.audioTracks.filter { AudioTrack.isSupportedLanguage($0.languageCode) }
+
+            if !filteredSubtitles.isEmpty || !filteredAudioTracks.isEmpty {
+                // 有字幕或音軌，等待用戶選擇
+                task.availableSubtitles = mediaOptions.subtitles
+                task.availableAudioTracks = mediaOptions.audioTracks
+                task.status = .waitingForMediaSelection
                 persistenceService.saveTasks(tasks)
 
-                // 通知 UI 顯示字幕選擇視窗
-                let request = SubtitleSelectionRequest(
+                // 通知 UI 顯示媒體選項選擇視窗
+                let request = MediaSelectionRequest(
                     tasks: [task],
-                    availableSubtitles: subtitles,
+                    availableSubtitles: mediaOptions.subtitles,
+                    availableAudioTracks: mediaOptions.audioTracks,
                     videoTitle: task.title
                 )
-                onSubtitleSelectionNeeded?(request)
+                onMediaSelectionNeeded?(request)
                 return
             } else {
                 task.status = newStatus
@@ -316,38 +323,50 @@ class DownloadManager {
             TubifyLogger.download.info("已新增播放清單中的 \(videos.count) 個影片")
             persistenceService.saveTasks(tasks)
 
-            // 收集所有影片的字幕資訊
+            // 收集所有影片的字幕和音軌資訊
             var allSubtitles: Set<String> = []
+            var allAudioTracks: Set<String> = []
             for task in newTasks {
-                if let subtitles = try? await metadataService.fetchSubtitles(url: task.url, cookiesArguments: []) {
-                    task.availableSubtitles = subtitles
-                    for sub in subtitles {
+                if let mediaOptions = try? await metadataService.fetchMediaOptions(url: task.url, cookiesArguments: []) {
+                    task.availableSubtitles = mediaOptions.subtitles
+                    task.availableAudioTracks = mediaOptions.audioTracks
+                    for sub in mediaOptions.subtitles {
                         allSubtitles.insert(sub.languageCode)
+                    }
+                    for audio in mediaOptions.audioTracks {
+                        allAudioTracks.insert(audio.languageCode)
                     }
                 }
             }
 
-            if !allSubtitles.isEmpty {
-                // 有字幕，等待用戶選擇
+            // 過濾只保留支援的語言
+            let filteredSubtitleCodes = allSubtitles.filter { SubtitleTrack.isSupportedLanguage($0) }
+            let filteredAudioCodes = allAudioTracks.filter { AudioTrack.isSupportedLanguage($0) }
+
+            if !filteredSubtitleCodes.isEmpty || !filteredAudioCodes.isEmpty {
+                // 有字幕或音軌，等待用戶選擇
                 for task in newTasks {
-                    task.status = .waitingForSubtitleSelection
+                    task.status = .waitingForMediaSelection
                 }
                 persistenceService.saveTasks(tasks)
 
-                // 合併所有字幕語言（聯集）
+                // 合併所有字幕和音軌語言（聯集）
                 let mergedSubtitles = allSubtitles.map { SubtitleTrack(languageCode: $0) }
                     .sorted { $0.languageName.localizedCompare($1.languageName) == .orderedAscending }
+                let mergedAudioTracks = allAudioTracks.map { AudioTrack(languageCode: $0) }
+                    .sorted { $0.languageName.localizedCompare($1.languageName) == .orderedAscending }
 
-                // 通知 UI 顯示字幕選擇視窗
-                let request = SubtitleSelectionRequest(
+                // 通知 UI 顯示媒體選項選擇視窗
+                let request = MediaSelectionRequest(
                     tasks: newTasks,
                     availableSubtitles: mergedSubtitles,
+                    availableAudioTracks: mergedAudioTracks,
                     videoTitle: nil  // 播放清單不顯示單一標題
                 )
-                onSubtitleSelectionNeeded?(request)
+                onMediaSelectionNeeded?(request)
                 return
             } else {
-                // 沒有字幕，直接設為待下載
+                // 沒有字幕或音軌，直接設為待下載
                 for task in newTasks {
                     task.status = newStatus
                 }
@@ -364,12 +383,13 @@ class DownloadManager {
         startDownloadQueue()
     }
 
-    /// 確認字幕選擇（由 UI 呼叫）
-    func confirmSubtitleSelection(for tasks: [DownloadTask], selection: SubtitleSelection?) {
+    /// 確認媒體選項選擇（由 UI 呼叫）
+    func confirmMediaSelection(for tasks: [DownloadTask], subtitleSelection: SubtitleSelection?, audioSelection: AudioSelection?) {
         let newStatus: DownloadStatus = isAllPaused ? .paused : .pending
 
         for task in tasks {
-            task.subtitleSelection = selection
+            task.subtitleSelection = subtitleSelection
+            task.audioSelection = audioSelection
             task.status = newStatus
         }
 
@@ -456,7 +476,8 @@ class DownloadManager {
                 url: task.url,
                 commandTemplate: downloadCommand,
                 outputDirectory: downloadFolder,
-                subtitleSelection: task.subtitleSelection
+                subtitleSelection: task.subtitleSelection,
+                audioSelection: task.audioSelection
             ) { [weak task] progress in
                 Task { @MainActor in
                     task?.progress = progress

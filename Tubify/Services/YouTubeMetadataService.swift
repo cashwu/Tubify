@@ -416,6 +416,193 @@ actor YouTubeMetadataService {
         return tracks
     }
 
+    /// 獲取影片的音軌資訊
+    func fetchAudioTracks(url: String, cookiesArguments: [String] = []) async throws -> [AudioTrack] {
+        guard let ytdlpPath = await YTDLPService.shared.findYTDLPPath() else {
+            throw MetadataError.ytdlpNotFound
+        }
+
+        TubifyLogger.ytdlp.info("獲取音軌資訊: \(url)")
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: ytdlpPath)
+        process.arguments = ["-J", "--no-playlist"] + cookiesArguments + [url]
+
+        let pipe = Pipe()
+        let errorPipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = errorPipe
+
+        do {
+            try process.run()
+        } catch {
+            throw MetadataError.fetchFailed(error.localizedDescription)
+        }
+
+        let outputHandle = pipe.fileHandleForReading
+        let errorHandle = errorPipe.fileHandleForReading
+
+        let outputData = await withCheckedContinuation { (continuation: CheckedContinuation<Data, Never>) in
+            DispatchQueue.global().async {
+                let data = outputHandle.readDataToEndOfFile()
+                continuation.resume(returning: data)
+            }
+        }
+
+        let errorData = await withCheckedContinuation { (continuation: CheckedContinuation<Data, Never>) in
+            DispatchQueue.global().async {
+                let data = errorHandle.readDataToEndOfFile()
+                continuation.resume(returning: data)
+            }
+        }
+
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            var resumed = false
+            let resumeOnce = {
+                guard !resumed else { return }
+                resumed = true
+                continuation.resume()
+            }
+
+            process.terminationHandler = { _ in
+                resumeOnce()
+            }
+
+            if !process.isRunning {
+                resumeOnce()
+            }
+        }
+
+        if process.terminationStatus != 0 {
+            let errorMessage = String(data: errorData, encoding: .utf8) ?? "未知錯誤"
+            throw MetadataError.fetchFailed(errorMessage)
+        }
+
+        // 解析 JSON 並提取音軌資訊
+        do {
+            guard let json = try JSONSerialization.jsonObject(with: outputData) as? [String: Any] else {
+                return []
+            }
+            return parseAudioTracks(from: json)
+        } catch {
+            TubifyLogger.ytdlp.error("解析音軌資訊失敗: \(error.localizedDescription)")
+            return []
+        }
+    }
+
+    /// 從 yt-dlp JSON 輸出解析音軌資訊
+    private func parseAudioTracks(from json: [String: Any]) -> [AudioTrack] {
+        guard let formats = json["formats"] as? [[String: Any]] else {
+            return []
+        }
+
+        // 收集所有有語言標籤的純音訊格式
+        var languageSet: Set<String> = []
+
+        for format in formats {
+            // 檢查是否為純音訊格式（有 acodec 但沒有 vcodec 或 vcodec 為 "none"）
+            let vcodec = format["vcodec"] as? String ?? "none"
+            let acodec = format["acodec"] as? String ?? "none"
+
+            let isAudioOnly = (vcodec == "none" || vcodec.isEmpty) && acodec != "none" && !acodec.isEmpty
+
+            if isAudioOnly, let language = format["language"] as? String, !language.isEmpty {
+                languageSet.insert(language)
+            }
+        }
+
+        // 轉換為 AudioTrack 陣列
+        var tracks: [AudioTrack] = []
+        for langCode in languageSet {
+            let track = AudioTrack(languageCode: langCode)
+            tracks.append(track)
+        }
+
+        // 按語言名稱排序
+        tracks.sort { $0.languageName.localizedCompare($1.languageName) == .orderedAscending }
+
+        if !tracks.isEmpty {
+            TubifyLogger.ytdlp.info("找到 \(tracks.count) 個音軌: \(tracks.map { $0.languageCode }.joined(separator: ", "))")
+        }
+        return tracks
+    }
+
+    /// 同時獲取字幕和音軌資訊（單次 yt-dlp 呼叫，更有效率）
+    func fetchMediaOptions(url: String, cookiesArguments: [String] = []) async throws -> (subtitles: [SubtitleTrack], audioTracks: [AudioTrack]) {
+        guard let ytdlpPath = await YTDLPService.shared.findYTDLPPath() else {
+            throw MetadataError.ytdlpNotFound
+        }
+
+        TubifyLogger.ytdlp.info("獲取媒體選項: \(url)")
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: ytdlpPath)
+        process.arguments = ["-J", "--no-playlist"] + cookiesArguments + [url]
+
+        let pipe = Pipe()
+        let errorPipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = errorPipe
+
+        do {
+            try process.run()
+        } catch {
+            throw MetadataError.fetchFailed(error.localizedDescription)
+        }
+
+        let outputHandle = pipe.fileHandleForReading
+        let errorHandle = errorPipe.fileHandleForReading
+
+        let outputData = await withCheckedContinuation { (continuation: CheckedContinuation<Data, Never>) in
+            DispatchQueue.global().async {
+                let data = outputHandle.readDataToEndOfFile()
+                continuation.resume(returning: data)
+            }
+        }
+
+        let errorData = await withCheckedContinuation { (continuation: CheckedContinuation<Data, Never>) in
+            DispatchQueue.global().async {
+                let data = errorHandle.readDataToEndOfFile()
+                continuation.resume(returning: data)
+            }
+        }
+
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            var resumed = false
+            let resumeOnce = {
+                guard !resumed else { return }
+                resumed = true
+                continuation.resume()
+            }
+
+            process.terminationHandler = { _ in
+                resumeOnce()
+            }
+
+            if !process.isRunning {
+                resumeOnce()
+            }
+        }
+
+        if process.terminationStatus != 0 {
+            let errorMessage = String(data: errorData, encoding: .utf8) ?? "未知錯誤"
+            throw MetadataError.fetchFailed(errorMessage)
+        }
+
+        // 解析 JSON 並提取字幕和音軌資訊
+        do {
+            guard let json = try JSONSerialization.jsonObject(with: outputData) as? [String: Any] else {
+                return ([], [])
+            }
+            let subtitles = parseSubtitles(from: json)
+            let audioTracks = parseAudioTracks(from: json)
+            return (subtitles, audioTracks)
+        } catch {
+            TubifyLogger.ytdlp.error("解析媒體選項失敗: \(error.localizedDescription)")
+            return ([], [])
+        }
+    }
+
     /// 從 YouTube 網頁直接獲取標題（用於首播影片等 yt-dlp 無法獲取的情況）
     func fetchTitleFromWebpage(url: String) async -> String? {
         guard let requestURL = URL(string: url) else {

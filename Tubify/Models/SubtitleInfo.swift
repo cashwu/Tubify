@@ -1,11 +1,7 @@
 import Foundation
 
-/// 代表一個字幕軌道
-struct SubtitleTrack: Codable, Identifiable, Hashable {
-    var id: String { languageCode }
-    let languageCode: String   // e.g., "zh-TW", "en"
-    let languageName: String   // e.g., "繁體中文", "English"
-
+/// 語言過濾工具（供字幕和音軌共用）
+enum LanguageFilter {
     /// 支援下載的語言代碼前綴（英文、日文、中文）
     private static let supportedLanguagePrefixes = ["en", "ja", "zh"]
 
@@ -24,6 +20,23 @@ struct SubtitleTrack: Codable, Identifiable, Hashable {
         // 處理一些 yt-dlp 特有的代碼格式
         let baseCode = code.components(separatedBy: "-").first ?? code
         return locale.localizedString(forLanguageCode: baseCode) ?? code
+    }
+}
+
+/// 代表一個字幕軌道
+struct SubtitleTrack: Codable, Identifiable, Hashable {
+    var id: String { languageCode }
+    let languageCode: String   // e.g., "zh-TW", "en"
+    let languageName: String   // e.g., "繁體中文", "English"
+
+    /// 檢查語言代碼是否為支援的語言（英文、日文、中文）
+    static func isSupportedLanguage(_ code: String) -> Bool {
+        LanguageFilter.isSupportedLanguage(code)
+    }
+
+    /// 從語言代碼取得顯示名稱
+    static func languageName(for code: String) -> String {
+        LanguageFilter.languageName(for: code)
     }
 
     init(languageCode: String, languageName: String? = nil) {

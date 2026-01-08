@@ -4,7 +4,7 @@ import Foundation
 enum DownloadStatus: String, Codable {
     case pending = "pending"           // 等待中
     case fetchingInfo = "fetchingInfo" // 獲取資訊中
-    case waitingForSubtitleSelection = "waitingForSubtitleSelection" // 等待選擇字幕
+    case waitingForMediaSelection = "waitingForMediaSelection" // 等待選擇媒體選項（字幕/音軌）
     case downloading = "downloading"   // 下載中
     case paused = "paused"             // 已暫停
     case completed = "completed"       // 完成
@@ -18,7 +18,7 @@ enum DownloadStatus: String, Codable {
         switch self {
         case .pending: return "等待中"
         case .fetchingInfo: return "獲取資訊中..."
-        case .waitingForSubtitleSelection: return "等待選擇字幕"
+        case .waitingForMediaSelection: return "等待選擇下載選項"
         case .downloading: return "下載中"
         case .paused: return "已暫停"
         case .completed: return "完成"
@@ -47,6 +47,8 @@ class DownloadTask: Identifiable, Codable {
     var premiereDate: Date?  // 首播時間（僅適用於 scheduled 狀態）
     var availableSubtitles: [SubtitleTrack]?  // 可用的字幕列表
     var subtitleSelection: SubtitleSelection?  // 用戶選擇的字幕
+    var availableAudioTracks: [AudioTrack]?   // 可用的音軌列表
+    var audioSelection: AudioSelection?        // 用戶選擇的音軌
     var duration: Int?  // 影片時長（秒）
     var callbackScheme: String?  // 下載完成後的回調 Scheme（例如 "whispify"）
     var requestId: String?  // 請求識別碼，回調時原樣帶回給呼叫方
@@ -56,6 +58,7 @@ class DownloadTask: Identifiable, Codable {
         case id, url, title, thumbnailURL, status, progress
         case errorMessage, outputPath, createdAt, completedAt, premiereDate
         case availableSubtitles, subtitleSelection
+        case availableAudioTracks, audioSelection
         case duration, callbackScheme, requestId, expectedEndTime
     }
 
@@ -73,6 +76,8 @@ class DownloadTask: Identifiable, Codable {
         premiereDate: Date? = nil,
         availableSubtitles: [SubtitleTrack]? = nil,
         subtitleSelection: SubtitleSelection? = nil,
+        availableAudioTracks: [AudioTrack]? = nil,
+        audioSelection: AudioSelection? = nil,
         duration: Int? = nil,
         callbackScheme: String? = nil,
         requestId: String? = nil,
@@ -91,6 +96,8 @@ class DownloadTask: Identifiable, Codable {
         self.premiereDate = premiereDate
         self.availableSubtitles = availableSubtitles
         self.subtitleSelection = subtitleSelection
+        self.availableAudioTracks = availableAudioTracks
+        self.audioSelection = audioSelection
         self.duration = duration
         self.callbackScheme = callbackScheme
         self.requestId = requestId
@@ -112,6 +119,8 @@ class DownloadTask: Identifiable, Codable {
         premiereDate = try container.decodeIfPresent(Date.self, forKey: .premiereDate)
         availableSubtitles = try container.decodeIfPresent([SubtitleTrack].self, forKey: .availableSubtitles)
         subtitleSelection = try container.decodeIfPresent(SubtitleSelection.self, forKey: .subtitleSelection)
+        availableAudioTracks = try container.decodeIfPresent([AudioTrack].self, forKey: .availableAudioTracks)
+        audioSelection = try container.decodeIfPresent(AudioSelection.self, forKey: .audioSelection)
         duration = try container.decodeIfPresent(Int.self, forKey: .duration)
         callbackScheme = try container.decodeIfPresent(String.self, forKey: .callbackScheme)
         requestId = try container.decodeIfPresent(String.self, forKey: .requestId)
@@ -133,6 +142,8 @@ class DownloadTask: Identifiable, Codable {
         try container.encodeIfPresent(premiereDate, forKey: .premiereDate)
         try container.encodeIfPresent(availableSubtitles, forKey: .availableSubtitles)
         try container.encodeIfPresent(subtitleSelection, forKey: .subtitleSelection)
+        try container.encodeIfPresent(availableAudioTracks, forKey: .availableAudioTracks)
+        try container.encodeIfPresent(audioSelection, forKey: .audioSelection)
         try container.encodeIfPresent(duration, forKey: .duration)
         try container.encodeIfPresent(callbackScheme, forKey: .callbackScheme)
         try container.encodeIfPresent(requestId, forKey: .requestId)

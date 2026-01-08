@@ -128,6 +128,7 @@ actor YTDLPService {
         commandTemplate: String,
         outputDirectory: String,
         subtitleSelection: SubtitleSelection? = nil,
+        audioSelection: AudioSelection? = nil,
         onProgress: @escaping ProgressCallback
     ) async throws -> String {
         guard let ytdlpPath = await findYTDLPPath() else {
@@ -137,9 +138,16 @@ actor YTDLPService {
         // 如果指令包含 --cookies-from-browser safari，使用 SafariCookiesService 轉換
         // 這是因為 yt-dlp 子進程沒有完整磁碟存取權限，但 Tubify 有
         var processedTemplate = commandTemplate
-        if SafariCookiesService.shared.commandNeedsSafariCookies(commandTemplate) {
+
+        // 如果有選擇特定音軌語言，修改 format 字串
+        if let audioSel = audioSelection, let lang = audioSel.selectedLanguage {
+            processedTemplate = injectAudioLanguage(into: processedTemplate, language: lang)
+            TubifyLogger.ytdlp.info("選擇音軌語言: \(lang)")
+        }
+
+        if SafariCookiesService.shared.commandNeedsSafariCookies(processedTemplate) {
             TubifyLogger.cookies.info("偵測到 Safari cookies 參數，轉換為 cookies 文件")
-            processedTemplate = SafariCookiesService.shared.transformCommand(commandTemplate)
+            processedTemplate = SafariCookiesService.shared.transformCommand(processedTemplate)
         }
 
         // 解析命令模板
@@ -419,5 +427,92 @@ actor YTDLPService {
         guard let percent = Double(percentString) else { return nil }
 
         return percent / 100.0
+    }
+
+    /// 將音軌語言選擇注入到 format 字串中
+    /// 例如: "-f bv+ba" -> "-f bv+ba[language=ja]/bv+ba"
+    nonisolated private func injectAudioLanguage(into template: String, language: String) -> String {
+        // 尋找 -f 或 --format 參數及其值
+        // 常見格式:
+        // -f "bv[ext=mp4]+ba[ext=m4a]"
+        // -f bv+ba
+        // --format "bestvideo+bestaudio"
+
+        var result = template
+
+        // 用正則表達式找到 -f 或 --format 參數
+        let patterns = [
+            #"(-f\s+)"([^"]+)""#,           // -f "..."
+            #"(-f\s+)'([^']+)'"#,           // -f '...'
+            #"(--format\s+)"([^"]+)""#,     // --format "..."
+            #"(--format\s+)'([^']+)'"#,     // --format '...'
+            #"(-f\s+)(\S+)"#,               // -f value (無引號)
+            #"(--format\s+)(\S+)"#          // --format value (無引號)
+        ]
+
+        for pattern in patterns {
+            if let regex = try? NSRegularExpression(pattern: pattern, options: []),
+               let match = regex.firstMatch(in: result, range: NSRange(result.startIndex..., in: result)) {
+
+                let prefixRange = Range(match.range(at: 1), in: result)!
+                let formatRange = Range(match.range(at: 2), in: result)!
+                let prefix = String(result[prefixRange])
+                let formatValue = String(result[formatRange])
+
+                // 修改 format 值，加入語言選擇
+                let modifiedFormat = injectLanguageIntoFormat(formatValue, language: language)
+
+                // 重建字串
+                let fullMatchRange = Range(match.range, in: result)!
+                let quoteChar = pattern.contains("\"") ? "\"" : (pattern.contains("'") ? "'" : "")
+                let replacement = "\(prefix)\(quoteChar)\(modifiedFormat)\(quoteChar)"
+                result = result.replacingCharacters(in: fullMatchRange, with: replacement)
+
+                TubifyLogger.ytdlp.debug("修改 format: \(formatValue) -> \(modifiedFormat)")
+                break
+            }
+        }
+
+        return result
+    }
+
+    /// 在 format 字串中注入語言選擇
+    /// 例如: "bv+ba[ext=m4a]" -> "bv+ba[ext=m4a][language=ja]/bv+ba[ext=m4a]"
+    nonisolated private func injectLanguageIntoFormat(_ format: String, language: String) -> String {
+        // 找到音訊部分（ba, bestaudio 等）
+        // 常見模式: bv+ba, bestvideo+bestaudio, bv[...]+ba[...]
+
+        // 策略：在音訊格式選擇器後加入 [language=XX]，並加入 fallback
+        // 例如: bv+ba[ext=m4a] -> bv+ba[ext=m4a][language=ja]/bv+ba[ext=m4a]
+
+        let audioPatterns = [
+            #"(ba\[[^\]]*\])"#,          // ba[...]
+            #"(bestaudio\[[^\]]*\])"#,   // bestaudio[...]
+            #"(ba)(?![a-z\[])"#,         // ba (不帶其他字符)
+            #"(bestaudio)(?![a-z\[])"#   // bestaudio (不帶其他字符)
+        ]
+
+        var modifiedFormat = format
+
+        for pattern in audioPatterns {
+            if let regex = try? NSRegularExpression(pattern: pattern, options: []),
+               let match = regex.firstMatch(in: modifiedFormat, range: NSRange(modifiedFormat.startIndex..., in: modifiedFormat)) {
+
+                let audioRange = Range(match.range(at: 1), in: modifiedFormat)!
+                let audioSelector = String(modifiedFormat[audioRange])
+
+                // 新的音訊選擇器：加入語言過濾，並保留 fallback
+                let newAudioSelector = "\(audioSelector)[language=\(language)]"
+
+                // 加入 fallback：原始格式（如果沒有該語言的音軌就用預設）
+                let formatWithFallback = modifiedFormat.replacingCharacters(in: audioRange, with: newAudioSelector)
+                    + "/" + format
+
+                modifiedFormat = formatWithFallback
+                break
+            }
+        }
+
+        return modifiedFormat
     }
 }

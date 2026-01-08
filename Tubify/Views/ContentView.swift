@@ -11,7 +11,7 @@ struct ContentView: View {
     @State private var ytdlpNotInstalled = false
     @State private var urlErrorMessage: String?
     @State private var showDeleteAllAlert = false
-    @State private var subtitleRequests: [SubtitleSelectionRequest] = []
+    @State private var mediaRequests: [MediaSelectionRequest] = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -53,25 +53,30 @@ struct ContentView: View {
             SettingsView()
         }
         .sheet(item: Binding(
-            get: { subtitleRequests.first },
+            get: { mediaRequests.first },
             set: { _ in
-                if !subtitleRequests.isEmpty {
-                    subtitleRequests.removeFirst()
+                if !mediaRequests.isEmpty {
+                    mediaRequests.removeFirst()
                 }
             }
         )) { request in
-            SubtitleSelectionView(
+            MediaSelectionView(
                 videoTitle: request.videoTitle,
                 videoCount: request.tasks.count,
-                availableSubtitles: request.availableSubtitles
-            ) { selection in
-                downloadManager.confirmSubtitleSelection(for: request.tasks, selection: selection)
+                availableSubtitles: request.availableSubtitles,
+                availableAudioTracks: request.availableAudioTracks
+            ) { subtitleSelection, audioSelection in
+                downloadManager.confirmMediaSelection(
+                    for: request.tasks,
+                    subtitleSelection: subtitleSelection,
+                    audioSelection: audioSelection
+                )
             }
         }
         .onAppear {
             checkPermissions()
             setupPasteShortcut()
-            setupSubtitleSelectionCallback()
+            setupMediaSelectionCallback()
             Task {
                 await checkYTDLP()
             }
@@ -181,11 +186,11 @@ struct ContentView: View {
         ytdlpNotInstalled = (path == nil)
     }
 
-    // MARK: - 字幕選擇回調設置
+    // MARK: - 媒體選項選擇回調設置
 
-    private func setupSubtitleSelectionCallback() {
-        downloadManager.onSubtitleSelectionNeeded = { [self] request in
-            subtitleRequests.append(request)
+    private func setupMediaSelectionCallback() {
+        downloadManager.onMediaSelectionNeeded = { [self] request in
+            mediaRequests.append(request)
         }
     }
 
