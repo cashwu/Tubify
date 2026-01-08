@@ -6,6 +6,15 @@ struct SubtitleTrack: Codable, Identifiable, Hashable {
     let languageCode: String   // e.g., "zh-TW", "en"
     let languageName: String   // e.g., "繁體中文", "English"
 
+    /// 支援下載的語言代碼前綴（英文、日文、中文）
+    private static let supportedLanguagePrefixes = ["en", "ja", "zh"]
+
+    /// 檢查語言代碼是否為支援的語言（英文、日文、中文）
+    static func isSupportedLanguage(_ code: String) -> Bool {
+        let baseCode = code.components(separatedBy: "-").first ?? code
+        return supportedLanguagePrefixes.contains(baseCode.lowercased())
+    }
+
     /// 從語言代碼取得顯示名稱
     static func languageName(for code: String) -> String {
         let locale = Locale(identifier: "zh-TW")

@@ -10,6 +10,11 @@ struct SubtitleSelectionView: View {
     @State private var selectedLanguages: Set<String> = []
     @Environment(\.dismiss) private var dismiss
 
+    /// 過濾只顯示英文、日文、中文字幕
+    private var filteredSubtitles: [SubtitleTrack] {
+        availableSubtitles.filter { SubtitleTrack.isSupportedLanguage($0.languageCode) }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // 標題欄
@@ -42,7 +47,7 @@ struct SubtitleSelectionView: View {
             // 字幕列表
             Form {
                 Section("可用字幕") {
-                    ForEach(availableSubtitles) { track in
+                    ForEach(filteredSubtitles) { track in
                         Toggle(isOn: Binding(
                             get: { selectedLanguages.contains(track.languageCode) },
                             set: { isSelected in
@@ -93,8 +98,8 @@ struct SubtitleSelectionView: View {
         }
         .frame(width: 350, height: 400)
         .onAppear {
-            // 預設選擇所有字幕
-            selectedLanguages = Set(availableSubtitles.map { $0.languageCode })
+            // 預設選擇所有過濾後的字幕
+            selectedLanguages = Set(filteredSubtitles.map { $0.languageCode })
         }
     }
 }
