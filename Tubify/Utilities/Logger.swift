@@ -31,6 +31,7 @@ class LogFileManager {
     private let fileManager = FileManager.default
     private let logDirectory: URL
     private let dateFormatter: DateFormatter
+    private let lock = NSLock()
 
     private init() {
         // 建立日誌目錄 ~/Library/Logs/Tubify/
@@ -64,6 +65,9 @@ class LogFileManager {
 
     /// 寫入日誌到檔案
     func writeToFile(_ message: String, level: String = "INFO") {
+        lock.lock()
+        defer { lock.unlock() }
+        
         let timestamp = dateFormatter.string(from: Date())
         let logLine = "[\(timestamp)] [\(level)] \(message)\n"
 
