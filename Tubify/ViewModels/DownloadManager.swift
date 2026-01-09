@@ -182,10 +182,26 @@ class DownloadManager {
         return .success
     }
 
+    /// 獲取 Cookies 參數
+    private func getCookiesArguments() -> [String] {
+        // 檢查設定的下載指令是否包含 Safari cookies
+        if SafariCookiesService.shared.commandNeedsSafariCookies(downloadCommand) {
+            // 嘗試導出 Cookies
+            if let cookiesPath = SafariCookiesService.shared.exportSafariCookies() {
+                TubifyLogger.download.info("使用導出的 Safari Cookies 進行元資料獲取")
+                return ["--cookies", cookiesPath]
+            }
+        }
+        return []
+    }
+
     /// 獲取單一影片的元資料
     private func fetchMetadataForTask(_ task: DownloadTask) async {
         TubifyLogger.download.info("獲取影片元資料: \(task.url)")
         let metadataService = YouTubeMetadataService.shared
+
+        // 獲取 cookies 參數（解決 Bot 驗證問題）
+        let cookiesArgs = getCookiesArguments()
 
         // 注意：不使用 cookies 來獲取元資料，因為：
         // 1. 公開影片不需要認證就可以獲取元資料
@@ -196,7 +212,7 @@ class DownloadManager {
         let newStatus: DownloadStatus = isAllPaused ? .paused : .pending
 
         do {
-            let videoInfo = try await metadataService.fetchVideoInfo(url: task.url, cookiesArguments: [])
+            let videoInfo = try await metadataService.fetchVideoInfo(url: task.url, cookiesArguments: cookiesArgs)
             TubifyLogger.download.info("成功獲取影片資訊: \(videoInfo.title)")
             task.title = videoInfo.title
             task.thumbnailURL = videoInfo.thumbnail
@@ -228,7 +244,7 @@ class DownloadManager {
             }
 
             // 獲取字幕和音軌資訊
-            let mediaOptions = try await metadataService.fetchMediaOptions(url: task.url, cookiesArguments: [])
+            let mediaOptions = try await metadataService.fetchMediaOptions(url: task.url, cookiesArguments: cookiesArgs)
 
             // 過濾只保留支援的語言
             let filteredSubtitles = mediaOptions.subtitles.filter { SubtitleTrack.isSupportedLanguage($0.languageCode) }
@@ -290,13 +306,16 @@ class DownloadManager {
     private func expandPlaylist(placeholderTask: DownloadTask, urlString: String, callbackScheme: String? = nil, requestId: String? = nil) async {
         let metadataService = YouTubeMetadataService.shared
 
+        // 獲取 cookies 參數（解決 Bot 驗證問題）
+        let cookiesArgs = getCookiesArguments()
+
         // 注意：不使用 cookies 來獲取播放清單元資料（原因同 fetchMetadataForTask）
 
         // 決定新任務的狀態：如果全部暫停中，新任務也設為暫停
         let newStatus: DownloadStatus = isAllPaused ? .paused : .pending
 
         do {
-            let videos = try await metadataService.fetchPlaylistInfo(url: urlString, cookiesArguments: [])
+            let videos = try await metadataService.fetchPlaylistInfo(url: urlString, cookiesArguments: cookiesArgs)
 
             // 移除佔位任務
             tasks.removeAll { $0.id == placeholderTask.id }
@@ -327,7 +346,7 @@ class DownloadManager {
             var allSubtitles: Set<String> = []
             var allAudioTracks: Set<String> = []
             for task in newTasks {
-                if let mediaOptions = try? await metadataService.fetchMediaOptions(url: task.url, cookiesArguments: []) {
+                if let mediaOptions = try? await metadataService.fetchMediaOptions(url: task.url, cookiesArguments: cookiesArgs) {
                     task.availableSubtitles = mediaOptions.subtitles
                     task.availableAudioTracks = mediaOptions.audioTracks
                     for sub in mediaOptions.subtitles {
