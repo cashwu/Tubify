@@ -250,8 +250,8 @@ class DownloadManager {
             let filteredSubtitles = mediaOptions.subtitles.filter { SubtitleTrack.isSupportedLanguage($0.languageCode) }
             let filteredAudioTracks = mediaOptions.audioTracks.filter { AudioTrack.isSupportedLanguage($0.languageCode) }
 
-            if !filteredSubtitles.isEmpty || !filteredAudioTracks.isEmpty {
-                // 有字幕或音軌，等待用戶選擇
+            if !filteredSubtitles.isEmpty || filteredAudioTracks.count > 1 {
+                // 有字幕或多個音軌，等待用戶選擇
                 task.availableSubtitles = mediaOptions.subtitles
                 task.availableAudioTracks = mediaOptions.audioTracks
                 task.status = .waitingForMediaSelection
@@ -362,8 +362,8 @@ class DownloadManager {
             let filteredSubtitleCodes = allSubtitles.filter { SubtitleTrack.isSupportedLanguage($0) }
             let filteredAudioCodes = allAudioTracks.filter { AudioTrack.isSupportedLanguage($0) }
 
-            if !filteredSubtitleCodes.isEmpty || !filteredAudioCodes.isEmpty {
-                // 有字幕或音軌，等待用戶選擇
+            if !filteredSubtitleCodes.isEmpty || filteredAudioCodes.count > 1 {
+                // 有字幕或多個音軌，等待用戶選擇
                 for task in newTasks {
                     task.status = .waitingForMediaSelection
                 }

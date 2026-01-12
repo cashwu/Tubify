@@ -22,9 +22,9 @@ struct MediaSelectionView: View {
         availableAudioTracks.filter { AudioTrack.isSupportedLanguage($0.languageCode) }
     }
 
-    /// 是否有任何可選項目
+    /// 是否有任何可選項目（音軌需要超過 1 個才算有選項）
     private var hasOptions: Bool {
-        !filteredSubtitles.isEmpty || !filteredAudioTracks.isEmpty
+        !filteredSubtitles.isEmpty || filteredAudioTracks.count > 1
     }
 
     /// 動態計算視窗高度
@@ -33,7 +33,7 @@ struct MediaSelectionView: View {
         if !filteredSubtitles.isEmpty {
             height += CGFloat(40 + filteredSubtitles.count * 28)  // Section header + items
         }
-        if !filteredAudioTracks.isEmpty {
+        if filteredAudioTracks.count > 1 {
             height += CGFloat(40 + (filteredAudioTracks.count + 1) * 28)  // Section header + items + 預設選項
         }
         return min(max(height, 250), 500)  // 限制在 250-500 之間
@@ -96,8 +96,8 @@ struct MediaSelectionView: View {
                     }
                 }
 
-                // 音軌區塊
-                if !filteredAudioTracks.isEmpty {
+                // 音軌區塊（只有超過 1 個音軌時才顯示選擇）
+                if filteredAudioTracks.count > 1 {
                     Section("音軌（單選）") {
                         Picker("", selection: $selectedAudioLanguage) {
                             Text("預設音軌").tag(nil as String?)
