@@ -72,3 +72,10 @@ xcodebuild test -project Tubify.xcodeproj -scheme Tubify -destination 'platform=
 - **日誌**：`~/Library/Logs/Tubify/`
 - **任務持久化**：`~/Library/Application Support/Tubify/`
 - **預設下載目錄**：`~/Downloads/`
+
+## 開發流程
+
+每次完成需求開發後，必須執行以下步驟：
+
+1. **程式碼審查**：使用 `code-reviewer` agent 審查當次修改的程式碼
+2. **程式碼簡化**：使用 `code-simplifier` agent 確認是否有更簡潔的寫法
