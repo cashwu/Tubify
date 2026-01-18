@@ -42,3 +42,4 @@ firebase-debug.log
 *.swo
 *~
 .claude/settings.local.json
+default.profraw
