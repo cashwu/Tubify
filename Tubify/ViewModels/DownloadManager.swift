@@ -76,15 +76,20 @@ class DownloadManager {
         tasks = persistenceService.loadTasks()
 
         // 處理卡在 fetchingInfo 狀態的任務（可能是上次啟動時中斷的）
-        for task in tasks where task.status == .fetchingInfo {
-            TubifyLogger.download.info("重置卡住的任務: \(task.url)")
-            task.status = .pending
+        // 這些任務需要重新獲取元資料，以確保能正確檢測字幕和音軌
+        let stuckTasks = tasks.filter { $0.status == .fetchingInfo }
+        for task in stuckTasks {
+            TubifyLogger.download.info("重新獲取卡住任務的元資料: \(task.url)")
             if task.title == "載入中..." {
-                task.title = "無法獲取標題"
+                task.title = "重新載入中..."
+            }
+            // 異步重新獲取元資料
+            Task {
+                await fetchMetadataForTask(task)
             }
         }
 
-        // 如果有待處理的任務，開始下載
+        // 如果有待處理的任務（非 fetchingInfo），開始下載
         if tasks.contains(where: { $0.status == .pending }) {
             persistenceService.saveTasks(tasks)
             startDownloadQueue()
