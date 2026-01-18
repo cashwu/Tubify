@@ -69,6 +69,19 @@ actor YouTubeMetadataService {
 
     private init() {}
 
+    /// 設定子進程的環境變數，確保可以找到 node 等工具
+    /// macOS app 從 Finder 啟動時不會繼承 shell 的 PATH
+    private func configureProcessEnvironment(_ process: Process) {
+        var environment = ProcessInfo.processInfo.environment
+        let additionalPaths = ["/opt/homebrew/bin", "/usr/local/bin"]
+        if let existingPath = environment["PATH"] {
+            environment["PATH"] = additionalPaths.joined(separator: ":") + ":" + existingPath
+        } else {
+            environment["PATH"] = additionalPaths.joined(separator: ":") + ":/usr/bin:/bin"
+        }
+        process.environment = environment
+    }
+
     /// 檢查 URL 是否為播放清單
     func isPlaylist(url: String) -> Bool {
         return url.contains("list=") || url.contains("/playlist")
@@ -84,7 +97,9 @@ actor YouTubeMetadataService {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: ytdlpPath)
-        process.arguments = ["-J", "--no-playlist"] + cookiesArguments + [url]
+        // 使用 --skip-download 避免 yt-dlp 嘗試驗證下載格式導致 403 錯誤
+        process.arguments = ["-J", "--skip-download", "--no-playlist"] + cookiesArguments + [url]
+        configureProcessEnvironment(process)
 
         let pipe = Pipe()
         let errorPipe = Pipe()
@@ -164,6 +179,7 @@ actor YouTubeMetadataService {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: ytdlpPath)
         process.arguments = ["--flat-playlist", "-J"] + cookiesArguments + [url]
+        configureProcessEnvironment(process)
 
         let pipe = Pipe()
         let errorPipe = Pipe()
@@ -332,6 +348,7 @@ actor YouTubeMetadataService {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: ytdlpPath)
         process.arguments = ["-J", "--no-playlist"] + cookiesArguments + [url]
+        configureProcessEnvironment(process)
 
         let pipe = Pipe()
         let errorPipe = Pipe()
@@ -427,6 +444,7 @@ actor YouTubeMetadataService {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: ytdlpPath)
         process.arguments = ["-J", "--no-playlist"] + cookiesArguments + [url]
+        configureProcessEnvironment(process)
 
         let pipe = Pipe()
         let errorPipe = Pipe()
@@ -537,7 +555,9 @@ actor YouTubeMetadataService {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: ytdlpPath)
-        process.arguments = ["-J", "--no-playlist"] + cookiesArguments + [url]
+        // 使用 --skip-download 避免 yt-dlp 嘗試驗證下載格式導致 403 錯誤
+        process.arguments = ["-J", "--skip-download", "--no-playlist"] + cookiesArguments + [url]
+        configureProcessEnvironment(process)
 
         let pipe = Pipe()
         let errorPipe = Pipe()
