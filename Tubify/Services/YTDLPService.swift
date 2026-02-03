@@ -166,6 +166,11 @@ actor YTDLPService {
             finalArguments.append("--newline")
         }
 
+        // 強制啟用進度輸出（當 stdout 被 pipe 時，yt-dlp 預設會禁用進度）
+        if !finalArguments.contains("--progress") && !finalArguments.contains("--no-progress") {
+            finalArguments.append("--progress")
+        }
+
         // 加入 --print 參數，讓 yt-dlp 在下載完成後輸出最終檔案路徑
         // 使用特殊前綴以便識別
         finalArguments.append("--print")
@@ -183,7 +188,8 @@ actor YTDLPService {
 
         LogFileManager.shared.logDownloadStart(url: url, taskId: taskId)
         TubifyLogger.ytdlp.info("開始下載: \(url)")
-        TubifyLogger.ytdlp.debug("命令: \(ytdlpPath) \(finalArguments.joined(separator: " "))")
+        // 使用 info 級別確保命令被記錄，方便除錯進度問題
+        TubifyLogger.ytdlp.info("執行命令: \(ytdlpPath) \(finalArguments.joined(separator: " "))")
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: ytdlpPath)
@@ -199,6 +205,9 @@ actor YTDLPService {
         } else {
             environment["PATH"] = additionalPaths.joined(separator: ":") + ":/usr/bin:/bin"
         }
+        // 禁用 Python 輸出緩衝，確保 yt-dlp 的進度輸出能即時傳送
+        // 當 stdout 被 pipe 時，Python 預設使用塊緩衝，導致進度無法即時更新
+        environment["PYTHONUNBUFFERED"] = "1"
         process.environment = environment
 
         let outputPipe = Pipe()
@@ -212,46 +221,59 @@ actor YTDLPService {
         // 使用線程安全的容器來儲存結果
         let resultHolder = DownloadResultHolder()
 
-        // 處理輸出
-        outputPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+        let handleLine: (String, Bool) -> Void = { [weak self] line, isStderr in
+            LogFileManager.shared.logYTDLPRawOutput(
+                taskId: taskId,
+                source: isStderr ? "stderr" : "stdout",
+                output: line
+            )
+
+            // 先嘗試解析進度（yt-dlp 常把進度寫到 stderr）
+            if let progress = self?.parseProgress(from: line) {
+                // 記錄進度更新（用於診斷）
+                if progress < 0.01 || progress > 0.99 || Int(progress * 100) % 25 == 0 {
+                    TubifyLogger.ytdlp.info("進度更新: \(Int(progress * 100))%")
+                }
+                Task { @MainActor in
+                    onProgress(progress)
+                }
+                return
+            }
+
+            // 解析輸出檔案路徑
+            // 優先使用 --print 輸出的 FINAL_PATH（最可靠）
+            if line.hasPrefix("FINAL_PATH:") {
+                let path = String(line.dropFirst("FINAL_PATH:".count))
+                TubifyLogger.ytdlp.info("從 --print 取得最終路徑: \(path)")
+                resultHolder.setOutputPath(path)
+            } else if line.contains("[download] Destination:") {
+                let path = line.replacingOccurrences(of: "[download] Destination: ", with: "")
+                resultHolder.addDownloadedFile(path)
+                // 只有在還沒有設定 outputPath 時才設定（FINAL_PATH 優先）
+                if resultHolder.outputPath == nil {
+                    resultHolder.setOutputPath(path)
+                }
+            } else if line.contains("[Merger] Merging formats into") {
+                let path = line.replacingOccurrences(of: "[Merger] Merging formats into \"", with: "")
+                    .replacingOccurrences(of: "\"", with: "")
+                // 只有在還沒有設定 outputPath 時才設定（FINAL_PATH 優先）
+                if resultHolder.outputPath == nil {
+                    resultHolder.setOutputPath(path)
+                }
+            }
+
+            if isStderr, line.contains("ERROR") {
+                resultHolder.setError(line)
+            }
+        }
+
+        // 處理輸出（stdout / stderr）
+        outputPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             guard !data.isEmpty, let output = String(data: data, encoding: .utf8) else { return }
 
-            for line in output.components(separatedBy: .newlines) {
-                guard !line.isEmpty else { continue }
-
-                // 解析進度（不寫入日誌）
-                if let progress = self?.parseProgress(from: line) {
-                    Task { @MainActor in
-                        onProgress(progress)
-                    }
-                    continue
-                }
-
-                // 非進度訊息寫入日誌
-                LogFileManager.shared.logYTDLPOutput(taskId: taskId, output: line)
-
-                // 解析輸出檔案路徑
-                // 優先使用 --print 輸出的 FINAL_PATH（最可靠）
-                if line.hasPrefix("FINAL_PATH:") {
-                    let path = String(line.dropFirst("FINAL_PATH:".count))
-                    TubifyLogger.ytdlp.info("從 --print 取得最終路徑: \(path)")
-                    resultHolder.setOutputPath(path)
-                } else if line.contains("[download] Destination:") {
-                    let path = line.replacingOccurrences(of: "[download] Destination: ", with: "")
-                    resultHolder.addDownloadedFile(path)
-                    // 只有在還沒有設定 outputPath 時才設定（FINAL_PATH 優先）
-                    if resultHolder.outputPath == nil {
-                        resultHolder.setOutputPath(path)
-                    }
-                } else if line.contains("[Merger] Merging formats into") {
-                    let path = line.replacingOccurrences(of: "[Merger] Merging formats into \"", with: "")
-                        .replacingOccurrences(of: "\"", with: "")
-                    // 只有在還沒有設定 outputPath 時才設定（FINAL_PATH 優先）
-                    if resultHolder.outputPath == nil {
-                        resultHolder.setOutputPath(path)
-                    }
-                }
+            for line in output.components(separatedBy: .newlines) where !line.isEmpty {
+                handleLine(line, false)
             }
         }
 
@@ -260,10 +282,7 @@ actor YTDLPService {
             guard !data.isEmpty, let output = String(data: data, encoding: .utf8) else { return }
 
             for line in output.components(separatedBy: .newlines) where !line.isEmpty {
-                LogFileManager.shared.logYTDLPOutput(taskId: taskId, output: "[stderr] \(line)")
-                if line.contains("ERROR") {
-                    resultHolder.setError(line)
-                }
+                handleLine(line, true)
             }
         }
 

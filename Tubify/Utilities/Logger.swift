@@ -117,6 +117,13 @@ class LogFileManager {
         TubifyLogger.ytdlp.debug("\(message)")
     }
 
+    /// 記錄 yt-dlp 原始輸出（包含 progress）
+    func logYTDLPRawOutput(taskId: UUID, source: String, output: String) {
+        let message = "yt-dlp[\(source)] - TaskID: \(taskId.uuidString), Output: \(output)"
+        writeToFile(message, level: "DEBUG")
+        TubifyLogger.ytdlp.debug("\(message)")
+    }
+
     /// 清理舊日誌（保留最近 7 天）
     func cleanOldLogs(daysToKeep: Int = 7) {
         let calendar = Calendar.current
