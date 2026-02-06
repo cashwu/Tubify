@@ -41,21 +41,24 @@ show_help() {
     echo "用法: $0 [選項]"
     echo ""
     echo "選項:"
-    echo "  -h, --help       顯示此幫助訊息"
-    echo "  --no-clean       跳過清理（預設會清理）"
-    echo "  --skip-tests     跳過測試"
-    echo "  --no-dmg         不建立 DMG 檔案"
+    echo "  -h, --help           顯示此幫助訊息"
+    echo "  -v, --version VER   指定版本號（例如 1.2.0），會覆蓋 Xcode 專案設定"
+    echo "  --no-clean           跳過清理（預設會清理）"
+    echo "  --skip-tests         跳過測試"
+    echo "  --no-dmg             不建立 DMG 檔案"
     echo ""
     echo "範例:"
-    echo "  $0                    執行測試並打包"
-    echo "  $0 --skip-tests       跳過測試直接打包"
-    echo "  $0 --no-clean         跳過清理，快速建置"
+    echo "  $0                        執行測試並打包"
+    echo "  $0 --skip-tests           跳過測試直接打包"
+    echo "  $0 --no-clean             跳過清理，快速建置"
+    echo "  $0 -v 1.2.0 --skip-tests  指定版本號並跳過測試"
 }
 
 # 預設值
 CLEAN_BUILD=true
 SKIP_TESTS=false
 CREATE_DMG=true
+VERSION=""
 
 # 解析參數
 while [[ $# -gt 0 ]]; do
@@ -76,6 +79,14 @@ while [[ $# -gt 0 ]]; do
             CREATE_DMG=false
             shift
             ;;
+        -v|--version)
+            if [[ -z "${2:-}" ]]; then
+                print_error "-v/--version 需要指定版本號"
+                exit 1
+            fi
+            VERSION="$2"
+            shift 2
+            ;;
         *)
             print_error "未知選項: $1"
             show_help
@@ -88,6 +99,9 @@ echo ""
 echo "============================================================"
 echo "                    Tubify 打包腳本"
 echo "============================================================"
+if [ -n "$VERSION" ]; then
+    echo "                      版本: $VERSION"
+fi
 echo ""
 
 # 檢查是否在專案目錄
@@ -149,12 +163,18 @@ mkdir -p "$EXPORT_PATH"
 # 建置 Release 版本
 print_step "建置 Release 版本..."
 
+VERSION_OVERRIDE=()
+if [ -n "$VERSION" ]; then
+    VERSION_OVERRIDE=(MARKETING_VERSION="$VERSION")
+fi
+
 xcodebuild build \
     -project "${PROJECT_NAME}.xcodeproj" \
     -scheme "$SCHEME_NAME" \
     -configuration Release \
     -derivedDataPath "${BUILD_DIR}/DerivedData" \
     CONFIGURATION_BUILD_DIR="$EXPORT_PATH" \
+    "${VERSION_OVERRIDE[@]}" \
     2>&1 | while read line; do
         # 只顯示重要訊息
         if [[ "$line" == *"error:"* ]]; then
@@ -200,6 +220,11 @@ if codesign --verify --verbose "$APP_PATH" 2>/dev/null; then
     print_success "簽署驗證通過"
 else
     print_warning "簽署驗證失敗"
+fi
+
+# 更新 DMG 檔名（加入版本號）
+if [ -n "$VERSION" ]; then
+    DMG_PATH="${BUILD_DIR}/${PROJECT_NAME}-${VERSION}.dmg"
 fi
 
 # 建立 DMG
