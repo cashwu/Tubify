@@ -42,6 +42,18 @@ final class URLValidationTests: XCTestCase {
         XCTAssertTrue(isValidYouTubeURL("http://www.youtube.com/watch?v=dQw4w9WgXcQ"))
     }
 
+    func testValidWatchURLWithVNotFirstParam() {
+        XCTAssertTrue(isValidYouTubeURL("https://www.youtube.com/watch?app=desktop&si=Tsjc6qaEp5KtwLtE&v=gVavMA3U0As&feature=youtu.be"))
+    }
+
+    func testValidWatchURLWithSingleParamBeforeV() {
+        XCTAssertTrue(isValidYouTubeURL("https://www.youtube.com/watch?app=desktop&v=dQw4w9WgXcQ"))
+    }
+
+    func testValidPlaylistURLWithListNotFirstParam() {
+        XCTAssertTrue(isValidYouTubeURL("https://www.youtube.com/playlist?app=desktop&list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf"))
+    }
+
     // MARK: - 無效的 URL
 
     func testInvalidEmptyString() {
@@ -77,9 +89,9 @@ final class URLValidationTests: XCTestCase {
     /// 複製 DownloadManager 中的 URL 驗證邏輯以供測試
     private func isValidYouTubeURL(_ urlString: String) -> Bool {
         let patterns = [
-            #"youtube\.com/watch\?v="#,
+            #"youtube\.com/watch\?(.*&)?v="#,
             #"youtu\.be/"#,
-            #"youtube\.com/playlist\?list="#,
+            #"youtube\.com/playlist\?(.*&)?list="#,
             #"youtube\.com/shorts/"#
         ]
 

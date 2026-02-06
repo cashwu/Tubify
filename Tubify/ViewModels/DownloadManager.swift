@@ -702,9 +702,9 @@ class DownloadManager {
     /// 驗證 YouTube URL
     private func isValidYouTubeURL(_ urlString: String) -> Bool {
         let patterns = [
-            #"youtube\.com/watch\?v="#,
+            #"youtube\.com/watch\?(.*&)?v="#,
             #"youtu\.be/"#,
-            #"youtube\.com/playlist\?list="#,
+            #"youtube\.com/playlist\?(.*&)?list="#,
             #"youtube\.com/shorts/"#
         ]
 
