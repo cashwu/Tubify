@@ -11,11 +11,14 @@ settings:
     SWIFT_VERSION: "5.9"
     MACOSX_DEPLOYMENT_TARGET: "14.0"
     CODE_SIGN_STYLE: Automatic
+    ARCHS: "$(ARCHS_STANDARD)"
   configs:
     Debug:
       ENABLE_HARDENED_RUNTIME: NO
+      ONLY_ACTIVE_ARCH: YES
     Release:
       ENABLE_HARDENED_RUNTIME: YES
+      ONLY_ACTIVE_ARCH: NO
 
 targets:
   Tubify:

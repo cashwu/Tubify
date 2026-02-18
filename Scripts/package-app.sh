@@ -174,6 +174,8 @@ xcodebuild build \
     -configuration Release \
     -derivedDataPath "${BUILD_DIR}/DerivedData" \
     CONFIGURATION_BUILD_DIR="$EXPORT_PATH" \
+    ARCHS="arm64 x86_64" \
+    ONLY_ACTIVE_ARCH=NO \
     "${VERSION_OVERRIDE[@]}" \
     2>&1 | while read line; do
         # 只顯示重要訊息
