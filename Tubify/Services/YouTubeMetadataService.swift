@@ -169,7 +169,7 @@ actor YouTubeMetadataService {
     }
 
     /// 獲取播放清單資訊
-    func fetchPlaylistInfo(url: String, cookiesArguments: [String] = []) async throws -> [VideoInfo] {
+    func fetchPlaylistInfo(url: String, cookiesArguments: [String] = []) async throws -> (title: String, videos: [VideoInfo]) {
         guard let ytdlpPath = await YTDLPService.shared.findYTDLPPath() else {
             throw MetadataError.ytdlpNotFound
         }
@@ -240,13 +240,13 @@ actor YouTubeMetadataService {
             let playlistInfo = try decoder.decode(PlaylistInfo.self, from: data)
 
             guard let entries = playlistInfo.entries else {
-                return []
+                return (title: playlistInfo.title, videos: [])
             }
 
             TubifyLogger.ytdlp.info("成功獲取播放清單: \(playlistInfo.title), 共 \(entries.count) 個影片")
 
             // 轉換為 VideoInfo 陣列
-            return entries.compactMap { entry -> VideoInfo? in
+            let videos = entries.compactMap { entry -> VideoInfo? in
                 let videoURL = entry.url ?? "https://www.youtube.com/watch?v=\(entry.id)"
                 return VideoInfo(
                     id: entry.id,
@@ -259,6 +259,7 @@ actor YouTubeMetadataService {
                     releaseTimestamp: nil
                 )
             }
+            return (title: playlistInfo.title, videos: videos)
         } catch {
             TubifyLogger.ytdlp.error("解析播放清單資訊失敗: \(error.localizedDescription)")
             throw MetadataError.parseError

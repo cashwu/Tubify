@@ -18,6 +18,16 @@ struct MediaSelectionRequest: Identifiable {
     let videoTitle: String?  // 單一影片為標題，播放清單為 nil
 }
 
+/// 播放清單選集請求
+struct PlaylistSelectionRequest: Identifiable {
+    let id = UUID()
+    let playlistTitle: String
+    let videos: [VideoInfo]
+    let placeholderTaskId: UUID
+    let callbackScheme: String?
+    let requestId: String?
+}
+
 /// 下載管理器
 @Observable
 @MainActor
@@ -38,6 +48,9 @@ class DownloadManager {
 
     /// 媒體選項選擇回調（由 UI 設置）
     var onMediaSelectionNeeded: ((MediaSelectionRequest) -> Void)?
+
+    /// 播放清單選集回調（由 UI 設置）
+    var onPlaylistSelectionNeeded: ((PlaylistSelectionRequest) -> Void)?
 
     /// 持久化服務（可注入以供測試使用）
     private let persistenceService: PersistenceServiceProtocol
@@ -320,81 +333,26 @@ class DownloadManager {
         let newStatus: DownloadStatus = isAllPaused ? .paused : .pending
 
         do {
-            let videos = try await metadataService.fetchPlaylistInfo(url: urlString, cookiesArguments: cookiesArgs)
+            let (playlistTitle, videos) = try await metadataService.fetchPlaylistInfo(url: urlString, cookiesArguments: cookiesArgs)
 
-            // 移除佔位任務
-            tasks.removeAll { $0.id == placeholderTask.id }
-
-            var newTasks: [DownloadTask] = []
-            for video in videos {
-                // 檢查是否已存在
-                if tasks.contains(where: { $0.url == video.url }) {
-                    continue
-                }
-
-                let task = DownloadTask(
-                    url: video.url,
-                    title: video.title,
-                    thumbnailURL: video.thumbnail,
-                    status: .fetchingInfo,  // 先設為獲取資訊中
-                    callbackScheme: callbackScheme,
-                    requestId: requestId
-                )
-                tasks.append(task)
-                newTasks.append(task)
-            }
-
-            TubifyLogger.download.info("已新增播放清單中的 \(videos.count) 個影片")
-            persistenceService.saveTasks(tasks)
-
-            // 收集所有影片的字幕和音軌資訊
-            var allSubtitles: Set<String> = []
-            var allAudioTracks: Set<String> = []
-            for task in newTasks {
-                if let mediaOptions = try? await metadataService.fetchMediaOptions(url: task.url, cookiesArguments: cookiesArgs) {
-                    task.availableSubtitles = mediaOptions.subtitles
-                    task.availableAudioTracks = mediaOptions.audioTracks
-                    for sub in mediaOptions.subtitles {
-                        allSubtitles.insert(sub.languageCode)
-                    }
-                    for audio in mediaOptions.audioTracks {
-                        allAudioTracks.insert(audio.languageCode)
-                    }
-                }
-            }
-
-            // 過濾只保留支援的語言
-            let filteredSubtitleCodes = allSubtitles.filter { SubtitleTrack.isSupportedLanguage($0) }
-            let filteredAudioCodes = allAudioTracks.filter { AudioTrack.isSupportedLanguage($0) }
-
-            if !filteredSubtitleCodes.isEmpty || filteredAudioCodes.count > 1 {
-                // 有字幕或多個音軌，等待用戶選擇
-                for task in newTasks {
-                    task.status = .waitingForMediaSelection
-                }
+            // 空播放清單：移除佔位任務
+            guard !videos.isEmpty else {
+                TubifyLogger.download.info("播放清單為空，移除佔位任務")
+                tasks.removeAll { $0.id == placeholderTask.id }
                 persistenceService.saveTasks(tasks)
-
-                // 合併所有字幕和音軌語言（聯集）
-                let mergedSubtitles = allSubtitles.map { SubtitleTrack(languageCode: $0) }
-                    .sorted { $0.languageName.localizedCompare($1.languageName) == .orderedAscending }
-                let mergedAudioTracks = allAudioTracks.map { AudioTrack(languageCode: $0) }
-                    .sorted { $0.languageName.localizedCompare($1.languageName) == .orderedAscending }
-
-                // 通知 UI 顯示媒體選項選擇視窗
-                let request = MediaSelectionRequest(
-                    tasks: newTasks,
-                    availableSubtitles: mergedSubtitles,
-                    availableAudioTracks: mergedAudioTracks,
-                    videoTitle: nil  // 播放清單不顯示單一標題
-                )
-                onMediaSelectionNeeded?(request)
                 return
-            } else {
-                // 沒有字幕或音軌，直接設為待下載
-                for task in newTasks {
-                    task.status = newStatus
-                }
             }
+
+            // 觸發選集 UI，讓使用者選擇要下載的影片
+            let request = PlaylistSelectionRequest(
+                playlistTitle: playlistTitle,
+                videos: videos,
+                placeholderTaskId: placeholderTask.id,
+                callbackScheme: callbackScheme,
+                requestId: requestId
+            )
+            onPlaylistSelectionNeeded?(request)
+            return
         } catch {
             TubifyLogger.download.error("處理播放清單失敗: \(error.localizedDescription)")
 
@@ -405,6 +363,89 @@ class DownloadManager {
 
         persistenceService.saveTasks(tasks)
         startDownloadQueue()
+    }
+
+    /// 確認播放清單選集（由 UI 呼叫）
+    func confirmPlaylistSelection(request: PlaylistSelectionRequest, selectedVideos: [VideoInfo]) {
+        // 移除佔位任務
+        tasks.removeAll { $0.id == request.placeholderTaskId }
+
+        var newTasks: [DownloadTask] = []
+        for video in selectedVideos {
+            // 檢查是否已存在
+            if tasks.contains(where: { $0.url == video.url }) {
+                continue
+            }
+
+            let task = DownloadTask(
+                url: video.url,
+                title: video.title,
+                thumbnailURL: video.thumbnail,
+                status: .fetchingInfo,
+                callbackScheme: request.callbackScheme,
+                requestId: request.requestId
+            )
+            tasks.append(task)
+            newTasks.append(task)
+        }
+
+        TubifyLogger.download.info("已新增播放清單中的 \(newTasks.count) 個影片（選取 \(selectedVideos.count)，共 \(request.videos.count) 個）")
+        persistenceService.saveTasks(tasks)
+
+        // 收集所有影片的字幕和音軌資訊
+        Task {
+            let metadataService = YouTubeMetadataService.shared
+            let cookiesArgs = getCookiesArguments()
+
+            var allSubtitleCodes: Set<String> = []
+            var allAudioCodes: Set<String> = []
+            for task in newTasks {
+                if let mediaOptions = try? await metadataService.fetchMediaOptions(url: task.url, cookiesArguments: cookiesArgs) {
+                    task.availableSubtitles = mediaOptions.subtitles
+                    task.availableAudioTracks = mediaOptions.audioTracks
+                    allSubtitleCodes.formUnion(mediaOptions.subtitles.map(\.languageCode))
+                    allAudioCodes.formUnion(mediaOptions.audioTracks.map(\.languageCode))
+                }
+            }
+
+            // 過濾只保留支援的語言
+            let filteredSubtitleCodes = allSubtitleCodes.filter { SubtitleTrack.isSupportedLanguage($0) }
+            let filteredAudioCodes = allAudioCodes.filter { AudioTrack.isSupportedLanguage($0) }
+
+            let newStatus: DownloadStatus = isAllPaused ? .paused : .pending
+
+            if !filteredSubtitleCodes.isEmpty || filteredAudioCodes.count > 1 {
+                for task in newTasks {
+                    task.status = .waitingForMediaSelection
+                }
+                persistenceService.saveTasks(tasks)
+
+                let mergedSubtitles = allSubtitleCodes.map { SubtitleTrack(languageCode: $0) }
+                    .sorted { $0.languageName.localizedCompare($1.languageName) == .orderedAscending }
+                let mergedAudioTracks = allAudioCodes.map { AudioTrack(languageCode: $0) }
+                    .sorted { $0.languageName.localizedCompare($1.languageName) == .orderedAscending }
+
+                let mediaRequest = MediaSelectionRequest(
+                    tasks: newTasks,
+                    availableSubtitles: mergedSubtitles,
+                    availableAudioTracks: mergedAudioTracks,
+                    videoTitle: nil
+                )
+                onMediaSelectionNeeded?(mediaRequest)
+            } else {
+                for task in newTasks {
+                    task.status = newStatus
+                }
+                persistenceService.saveTasks(tasks)
+                startDownloadQueue()
+            }
+        }
+    }
+
+    /// 取消播放清單選集（由 UI 呼叫）
+    func cancelPlaylistSelection(placeholderTaskId: UUID) {
+        tasks.removeAll { $0.id == placeholderTaskId }
+        persistenceService.saveTasks(tasks)
     }
 
     /// 確認媒體選項選擇（由 UI 呼叫）

@@ -12,6 +12,7 @@ struct ContentView: View {
     @State private var urlErrorMessage: String?
     @State private var showDeleteAllAlert = false
     @State private var mediaRequests: [MediaSelectionRequest] = []
+    @State private var playlistRequests: [PlaylistSelectionRequest] = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -53,6 +54,30 @@ struct ContentView: View {
             SettingsView()
         }
         .sheet(item: Binding(
+            get: { playlistRequests.first },
+            set: { _ in
+                if !playlistRequests.isEmpty {
+                    playlistRequests.removeFirst()
+                }
+            }
+        )) { request in
+            PlaylistSelectionView(
+                playlistTitle: request.playlistTitle,
+                videos: request.videos,
+                onConfirm: { selectedVideos in
+                    downloadManager.confirmPlaylistSelection(
+                        request: request,
+                        selectedVideos: selectedVideos
+                    )
+                },
+                onCancel: {
+                    downloadManager.cancelPlaylistSelection(
+                        placeholderTaskId: request.placeholderTaskId
+                    )
+                }
+            )
+        }
+        .sheet(item: Binding(
             get: { mediaRequests.first },
             set: { _ in
                 if !mediaRequests.isEmpty {
@@ -77,6 +102,7 @@ struct ContentView: View {
             checkPermissions()
             setupPasteShortcut()
             setupMediaSelectionCallback()
+            setupPlaylistSelectionCallback()
             Task {
                 await checkYTDLP()
             }
@@ -191,6 +217,14 @@ struct ContentView: View {
     private func setupMediaSelectionCallback() {
         downloadManager.onMediaSelectionNeeded = { [self] request in
             mediaRequests.append(request)
+        }
+    }
+
+    // MARK: - 播放清單選集回調設置
+
+    private func setupPlaylistSelectionCallback() {
+        downloadManager.onPlaylistSelectionNeeded = { [self] request in
+            playlistRequests.append(request)
         }
     }
 

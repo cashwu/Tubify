@@ -468,4 +468,146 @@ final class DownloadManagerTests: XCTestCase {
         // Assert
         XCTAssertEqual(newStatus, .pending, "當未全部暫停時，新任務應該設為 pending")
     }
+
+    // MARK: - 播放清單選集測試
+
+    func testConfirmPlaylistSelection_AddsSelectedVideosToQueue() {
+        // Arrange: 建立佔位任務
+        let placeholderTask = createTestTask(
+            url: "https://www.youtube.com/playlist?list=PLtest",
+            title: "載入播放清單中...",
+            status: .fetchingInfo
+        )
+        manager.tasks = [placeholderTask]
+
+        let selectedVideos = [
+            VideoInfo(
+                id: "vid1", title: "Video 1", thumbnail: nil,
+                duration: 120, uploader: "Test", url: "https://www.youtube.com/watch?v=vid1",
+                liveStatus: nil, releaseTimestamp: nil
+            ),
+            VideoInfo(
+                id: "vid2", title: "Video 2", thumbnail: nil,
+                duration: 180, uploader: "Test", url: "https://www.youtube.com/watch?v=vid2",
+                liveStatus: nil, releaseTimestamp: nil
+            ),
+        ]
+
+        let request = PlaylistSelectionRequest(
+            playlistTitle: "Test Playlist",
+            videos: selectedVideos,
+            placeholderTaskId: placeholderTask.id,
+            callbackScheme: nil,
+            requestId: nil
+        )
+
+        // Act
+        manager.confirmPlaylistSelection(request: request, selectedVideos: selectedVideos)
+
+        // Assert: 佔位任務被移除，選擇的影片被加入
+        XCTAssertFalse(manager.tasks.contains(where: { $0.id == placeholderTask.id }), "佔位任務應該被移除")
+        XCTAssertEqual(manager.tasks.count, 2, "應該有 2 個新任務")
+        XCTAssertTrue(manager.tasks.contains(where: { $0.url == "https://www.youtube.com/watch?v=vid1" }), "vid1 應該在佇列中")
+        XCTAssertTrue(manager.tasks.contains(where: { $0.url == "https://www.youtube.com/watch?v=vid2" }), "vid2 應該在佇列中")
+        XCTAssertEqual(manager.tasks.first?.title, "Video 1", "任務標題應該正確設定")
+        XCTAssertTrue(mockPersistence.saveTasksCalled, "應該呼叫 saveTasks 持久化")
+    }
+
+    func testConfirmPlaylistSelection_SkipsDuplicateVideos() {
+        // Arrange: 佇列中已存在一個影片
+        let existingTask = createTestTask(
+            url: "https://www.youtube.com/watch?v=vid1",
+            title: "Existing Video",
+            status: .pending
+        )
+        let placeholderTask = createTestTask(
+            url: "https://www.youtube.com/playlist?list=PLtest",
+            title: "載入播放清單中...",
+            status: .fetchingInfo
+        )
+        manager.tasks = [existingTask, placeholderTask]
+
+        let selectedVideos = [
+            VideoInfo(
+                id: "vid1", title: "Video 1", thumbnail: nil,
+                duration: 120, uploader: "Test", url: "https://www.youtube.com/watch?v=vid1",
+                liveStatus: nil, releaseTimestamp: nil
+            ),
+            VideoInfo(
+                id: "vid2", title: "Video 2", thumbnail: nil,
+                duration: 180, uploader: "Test", url: "https://www.youtube.com/watch?v=vid2",
+                liveStatus: nil, releaseTimestamp: nil
+            ),
+        ]
+
+        let request = PlaylistSelectionRequest(
+            playlistTitle: "Test Playlist",
+            videos: selectedVideos,
+            placeholderTaskId: placeholderTask.id,
+            callbackScheme: nil,
+            requestId: nil
+        )
+
+        // Act
+        manager.confirmPlaylistSelection(request: request, selectedVideos: selectedVideos)
+
+        // Assert: 已存在的 vid1 應該被跳過，只新增 vid2
+        XCTAssertEqual(manager.tasks.count, 2, "應該有 2 個任務（1 個既有 + 1 個新增）")
+        XCTAssertTrue(manager.tasks.contains(where: { $0.url == "https://www.youtube.com/watch?v=vid1" && $0.title == "Existing Video" }), "既有的 vid1 應該保持不變")
+        XCTAssertTrue(manager.tasks.contains(where: { $0.url == "https://www.youtube.com/watch?v=vid2" }), "vid2 應該被新增")
+    }
+
+    func testCancelPlaylistSelection_RemovesPlaceholderTask() {
+        // Arrange: 建立佔位任務和一個正常任務
+        let normalTask = createTestTask(
+            url: "https://www.youtube.com/watch?v=normal",
+            title: "Normal Video",
+            status: .pending
+        )
+        let placeholderTask = createTestTask(
+            url: "https://www.youtube.com/playlist?list=PLtest",
+            title: "載入播放清單中...",
+            status: .fetchingInfo
+        )
+        manager.tasks = [normalTask, placeholderTask]
+
+        // Act
+        manager.cancelPlaylistSelection(placeholderTaskId: placeholderTask.id)
+
+        // Assert: 佔位任務被移除，正常任務不受影響
+        XCTAssertEqual(manager.tasks.count, 1, "應該只剩 1 個任務")
+        XCTAssertEqual(manager.tasks.first?.id, normalTask.id, "正常任務應該保留")
+        XCTAssertFalse(manager.tasks.contains(where: { $0.id == placeholderTask.id }), "佔位任務應該被移除")
+        XCTAssertTrue(mockPersistence.saveTasksCalled, "應該呼叫 saveTasks 持久化")
+    }
+
+    func testPlaylistSelectionCallback_IsTriggered() {
+        // Arrange: 設定回調
+        var receivedRequest: PlaylistSelectionRequest?
+        manager.onPlaylistSelectionNeeded = { request in
+            receivedRequest = request
+        }
+
+        let request = PlaylistSelectionRequest(
+            playlistTitle: "Test Playlist",
+            videos: [
+                VideoInfo(
+                    id: "vid1", title: "Video 1", thumbnail: nil,
+                    duration: 120, uploader: "Test", url: "https://www.youtube.com/watch?v=vid1",
+                    liveStatus: nil, releaseTimestamp: nil
+                ),
+            ],
+            placeholderTaskId: UUID(),
+            callbackScheme: nil,
+            requestId: nil
+        )
+
+        // Act: 手動觸發回調
+        manager.onPlaylistSelectionNeeded?(request)
+
+        // Assert
+        XCTAssertNotNil(receivedRequest, "回調應該被觸發")
+        XCTAssertEqual(receivedRequest?.playlistTitle, "Test Playlist", "播放清單標題應該正確")
+        XCTAssertEqual(receivedRequest?.videos.count, 1, "影片數量應該正確")
+    }
 }
