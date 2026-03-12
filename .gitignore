@@ -43,3 +43,5 @@ firebase-debug.log
 *~
 .claude/settings.local.json
 default.profraw
+.spectra/
+openspec/.vector-search.db*
