@@ -2,7 +2,7 @@
 name: spectra-archive
 description: "Archive a completed change"
 license: MIT
-compatibility: Requires openspec CLI.
+compatibility: Requires spectra CLI.
 metadata:
   author: spectra
   version: "1.0"

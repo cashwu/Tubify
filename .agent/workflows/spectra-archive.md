@@ -6,6 +6,7 @@ tags: ["workflow", "archive"]
 ---
 
 <!-- SPECTRA:START v1.0.1 -->
+
 Archive a completed change.
 
 **Input**: Optionally specify a change name after `/spectra:archive` (e.g., `/spectra:archive add-auth`). If omitted, check if it can be inferred from conversation context. If vague or ambiguous you MUST prompt for available changes.
@@ -159,4 +160,5 @@ Target archive directory already exists.
 - If sync is requested, use the Skill tool to invoke `spectra-sync-specs` (agent-driven)
 - If delta specs exist, always run the sync assessment and show the combined summary before prompting
 - If **AskUserQuestion tool** is not available, ask the same questions as plain text and wait for the user's response
+
 <!-- SPECTRA:END -->

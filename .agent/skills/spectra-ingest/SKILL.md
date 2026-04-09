@@ -11,26 +11,26 @@ metadata:
 
 Update an existing Spectra change — from a plan file or conversation context.
 
-**Plan file support** is available when the tool has a plan directory (`~/.claude/plans/`). Otherwise, use conversation context to update artifacts.
+This tool uses conversation context to update artifacts (no plan file directory). Otherwise, use conversation context to update artifacts.
 
 **Prerequisites**: This skill requires the `spectra` CLI. If any `spectra` command fails with "command not found" or similar, report the error and STOP.
 
 **Input**: Optionally specify a plan file path or name.
 
-- `/spectra-ingest ~/.claude/plans/agile-discovering-rocket.md`
-- `/spectra-ingest agile-discovering-rocket`
-- `/spectra-ingest` (use conversation context or auto-detect plan file)
+- `/spectra:ingest agile-discovering-rocket.md`
+- `/spectra:ingest agile-discovering-rocket`
+- `/spectra:ingest` (use conversation context or auto-detect plan file)
 
 **Steps**
 
 1. **Locate the requirement source**
 
-   a. **Argument provided** → treat as plan file reference (prepend `~/.claude/plans/` and append `.md` if needed)
+   a. **Argument provided** → treat as plan file reference (prepend `` and append `.md` if needed)
    - If the file exists → use it as the plan file source, proceed to Step 2
    - If the file does NOT exist → report the error and **stop**
 
    b. **No argument, plan file detectable**:
-   - Check conversation context for plan file path (plan mode system messages include the path like `~/.claude/plans/<name>.md`)
+   - Check conversation context for plan file path (plan mode system messages include the path like `<name>.md`)
    - If found and the file exists → use the **AskUserQuestion tool** to ask:
      - Option 1: Use the plan file
      - Option 2: Use conversation context
@@ -38,7 +38,7 @@ Update an existing Spectra change — from a plan file or conversation context.
    - If the user picks conversation context → skip Step 2, go to Step 3
 
    c. **No argument, no plan file detectable**:
-   - Check `~/.claude/plans/` for recent files
+   - Check `` for recent files
    - If recent files exist → list 5 most recent with the **AskUserQuestion tool**, include "Use conversation context" as an additional option
    - If the user picks a file → proceed to Step 2
    - If the user picks conversation context → skip Step 2, go to Step 3
@@ -79,7 +79,7 @@ Update an existing Spectra change — from a plan file or conversation context.
    Parse both JSON outputs to get the full list of changes (active + parked). Parked changes should be annotated with "(parked)" in any selection list.
    - If one change exists (active or parked) → use the **AskUserQuestion tool** to confirm updating it
    - If multiple changes exist → use the **AskUserQuestion tool** to let user pick which one to update
-   - If no changes at all (neither active nor parked) → tell the user: "No active change found. Use `/spectra-propose` first to create one." and **stop**
+   - If no changes at all (neither active nor parked) → tell the user: "No active change found. Use `/spectra:propose` first to create one." and **stop**
 
 4. **Select the change**
 
@@ -233,18 +233,18 @@ Update an existing Spectra change — from a plan file or conversation context.
    - Validation result
 
    Use **AskUserQuestion tool** to confirm the workflow is complete. This ensures the workflow stops even when auto-accept is enabled. Provide exactly these options:
-   - **First option (will be auto-selected)**: "Done" — End the ingest workflow. Inform the user they can run `/spectra-apply <change-name>` when ready.
-   - **Second option**: "Apply" — Invoke `/spectra-apply <change-name>` to start implementation.
+   - **First option (will be auto-selected)**: "Done" — End the ingest workflow. Inform the user they can run `/spectra:apply <change-name>` when ready.
+   - **Second option**: "Apply" — Invoke `/spectra:apply <change-name>` to start implementation.
 
-   If **AskUserQuestion tool** is not available, display the summary and inform the user to run `/spectra-apply <change-name>` when ready. Then STOP — do not continue.
+   If **AskUserQuestion tool** is not available, display the summary and inform the user to run `/spectra:apply <change-name>` when ready. Then STOP — do not continue.
 
-   **After the user responds**, if they chose "Done", the workflow is OVER. If they chose "Apply", invoke `/spectra-apply <change-name>` to begin implementation.
+   **After the user responds**, if they chose "Done", the workflow is OVER. If they chose "Apply", invoke `/spectra:apply <change-name>` to begin implementation.
 
 **Guardrails**
 
-- **NEVER** modify the original plan file in `~/.claude/plans/`
+- **NEVER** modify the original plan file in ``
 - **NEVER** write application code — this skill only creates/updates Spectra artifacts
-- **NEVER** create new changes — ingest only updates existing changes. If no active change exists, direct user to `/spectra-propose`
+- **NEVER** create new changes — ingest only updates existing changes. If no active change exists, direct user to `/spectra:propose`
 - When updating existing changes, **preserve all completed tasks** (`[x]`) — never revert progress
 - If the source content is too brief to fill all artifact sections, use the **AskUserQuestion tool** to get more details rather than inventing content
 - If `spectra` CLI is not available, report the error and stop

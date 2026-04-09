@@ -6,6 +6,7 @@ tags: ["development", "debugging"]
 ---
 
 <!-- SPECTRA:START v1.0.1 -->
+
 Systematically debug a problem using a four-phase workflow.
 
 **This skill enforces debugging discipline.** No guessing, no random changes, no "let me try this." Every step is deliberate and evidence-based.
@@ -80,7 +81,7 @@ Ask these questions:
 
 Now — and only now — fix the bug.
 
-1. **Write a failing test** that reproduces the bug. If `tdd: true` is set in `openspec/config.yaml`, fetch TDD instructions via `spectra instructions --skill tdd` and follow the Red-Green-Refactor cycle
+1. **Write a failing test** that reproduces the bug. If `tdd: true` is set in `.spectra.yaml`, fetch TDD instructions via `spectra instructions --skill tdd` and follow the Red-Green-Refactor cycle
 2. **Make the minimum change** to fix the root cause — not the symptoms
 3. **Run the test** — confirm it passes
 4. **Run the full test suite** — ensure no regressions
@@ -110,4 +111,5 @@ Now — and only now — fix the bug.
 - **Don't power through** — After 3 failed attempts, stop and reassess
 - **Do keep notes** — Document what you tried, what you found, what you ruled out
 - **Do check broadly** — A bug in one place often means the same bug exists elsewhere
+
 <!-- SPECTRA:END -->

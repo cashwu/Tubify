@@ -1,12 +1,13 @@
 ---
 name: Spectra: Apply
-description: Implement tasks from an OpenSpec change
+description: Implement tasks from a Spectra change
 category: Workflow
 tags: ["workflow", "artifacts"]
 ---
 
 <!-- SPECTRA:START v1.0.1 -->
-Implement tasks from an OpenSpec change.
+
+Implement tasks from a Spectra change.
 
 **Input**: Optionally specify a change name (e.g., `/spectra:apply add-auth`). If omitted, check if it can be inferred from conversation context. If vague or ambiguous you MUST prompt for available changes.
 
@@ -28,7 +29,7 @@ Implement tasks from an OpenSpec change.
 2. **Check status to understand the schema**
 
    ```bash
-   spectra status --change "<name>" --json 2>/dev/null
+   spectra status --change "<name>" --json
    ```
 
    **If the command fails**: show the error and STOP.
@@ -96,6 +97,37 @@ Implement tasks from an OpenSpec change.
    - If `state: "all_done"`: congratulate, suggest archive
    - Otherwise: proceed to implementation
 
+3b. **Preflight check**
+
+If the apply instructions JSON includes a `preflight` field, act on its `status`:
+
+- **`"clean"`**: silently continue — no output needed.
+- **`"warnings"`**: display a brief summary, then continue automatically:
+  ```
+  ⚠ Preflight warnings:
+  - Drifted files (modified after change was created): <list paths>
+  - Change is <N> days old
+  Continuing...
+  ```
+  Only show the lines that are relevant (skip drifted if none, skip staleness if not stale).
+- **`"critical"`**: display missing files with their source artifact, then use the **AskUserQuestion tool** to ask the user:
+
+  ```
+  ⚠ Preflight: missing files detected
+  - <path> (referenced in <source artifact>)
+  - ...
+  These files are referenced in the change artifacts but no longer exist on disk.
+  ```
+
+  Options: "Continue anyway" / "Stop"
+  If the user chooses "Stop", end the workflow.
+
+  If there is no AskUserQuestion tool available:
+  Display the same information as plain text and ask whether to continue or stop.
+  Wait for the user's response.
+
+If the `preflight` field is absent (blocked or all_done states), skip this step.
+
 4. **Read context files**
 
    Read the files listed in `contextFiles` from the apply instructions output.
@@ -105,7 +137,7 @@ Implement tasks from an OpenSpec change.
 
 5. **Check project preferences**
 
-   Read `openspec/config.yaml` in the project root.
+   Read `.spectra.yaml` in the project root.
    If `tdd: true` is set, apply TDD discipline throughout implementation:
    - For each task, write a failing test FIRST, then implement to make it pass
    - Fetch TDD instructions by running `spectra instructions --skill tdd`, then follow the Red-Green-Refactor cycle
@@ -138,6 +170,7 @@ Implement tasks from an OpenSpec change.
      1. **Reuse** — search adjacent modules and shared utilities for existing implementations before writing new code
      2. **Quality** — derive values from existing state instead of duplicating; use existing types and constants over new literals
      3. **Efficiency** — parallelize independent async operations; avoid unnecessary awaits; match operation scope to actual need
+     4. **No Placeholders in artifacts** — if the design or spec for this task contains placeholder language (TBD, TODO, "add appropriate handling"), pause and fix the artifact first or flag to the user. Do not implement against vague requirements.
    - Make the code changes required
    - Keep changes minimal and focused
    - Mark task complete in the tasks file: `- [ ]` → `- [x]`
@@ -150,6 +183,21 @@ Implement tasks from an OpenSpec change.
    - Implementation reveals a design issue → suggest updating artifacts
    - Error or blocker encountered → report and wait for guidance
    - User interrupts
+
+---
+
+## Rationalization Table
+
+| What You're Thinking                                       | What You Should Do                                                               |
+| ---------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| "This task is trivial, I don't need to re-read the design" | Re-read. Context compression loses details. 30s of reading saves 30min of rework |
+| "I already know how this works, skip the code search"      | Search anyway. Someone may have added a utility since you last looked            |
+| "The test is obvious, I'll add it after implementation"    | If TDD is enabled, test first. If not, still write it before marking done        |
+| "This is just a small refactor, no test needed"            | Small refactors are how regressions sneak in. Write the test                     |
+| "The artifact says X but Y makes more sense"               | Pause and suggest updating the artifact. Don't silently deviate                  |
+| "I'll fix this other thing I noticed while I'm here"       | Finish current task first. Address the other thing separately                    |
+
+---
 
 8. **Final check**
 
@@ -239,4 +287,5 @@ This skill supports the "actions on a change" model:
 
 - **Can be invoked anytime**: Before all artifacts are done (if tasks exist), after partial implementation, interleaved with other actions
 - **Allows artifact updates**: If implementation reveals design issues, suggest updating artifacts - not phase-locked, work fluidly
+
 <!-- SPECTRA:END -->
