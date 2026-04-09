@@ -18,6 +18,14 @@ struct MediaSelectionRequest: Identifiable {
     let videoTitle: String?  // 單一影片為標題，播放清單為 nil
 }
 
+/// 影片或播放清單選擇請求
+struct VideoOrPlaylistChoiceRequest: Identifiable {
+    let id = UUID()
+    let urlString: String
+    let callbackScheme: String?
+    let requestId: String?
+}
+
 /// 播放清單選集請求
 struct PlaylistSelectionRequest: Identifiable {
     let id = UUID()
@@ -51,6 +59,9 @@ class DownloadManager {
 
     /// 播放清單選集回調（由 UI 設置）
     var onPlaylistSelectionNeeded: ((PlaylistSelectionRequest) -> Void)?
+
+    /// 影片或播放清單選擇回調（由 UI 設置）
+    var onVideoOrPlaylistChoiceNeeded: ((VideoOrPlaylistChoiceRequest) -> Void)?
 
     /// 持久化服務（可注入以供測試使用）
     private let persistenceService: PersistenceServiceProtocol
@@ -163,6 +174,19 @@ class DownloadManager {
 
         // 使用靜態方法檢查是否為播放清單（不需要 await）
         let isPlaylist = YouTubeMetadataService.isPlaylistSync(url: urlString)
+
+        // 檢查是否同時包含影片 ID 和播放清單 ID（混合 URL）
+        if isPlaylist, let components = URLComponents(string: urlString),
+           components.queryItems?.contains(where: { $0.name == "v" && $0.value?.isEmpty == false }) == true {
+            // 混合 URL：詢問使用者要下載影片還是播放清單
+            let request = VideoOrPlaylistChoiceRequest(
+                urlString: urlString,
+                callbackScheme: callbackScheme,
+                requestId: requestId
+            )
+            onVideoOrPlaylistChoiceNeeded?(request)
+            return .success
+        }
 
         if isPlaylist {
             // 播放清單：先建立佔位任務，然後異步展開
@@ -439,6 +463,74 @@ class DownloadManager {
                 persistenceService.saveTasks(tasks)
                 startDownloadQueue()
             }
+        }
+    }
+
+    /// 確認影片或播放清單選擇（由 UI 呼叫）
+    enum VideoOrPlaylistChoice {
+        case video
+        case playlist
+        case cancel
+    }
+
+    func confirmVideoOrPlaylistChoice(request: VideoOrPlaylistChoiceRequest, choice: VideoOrPlaylistChoice) {
+        switch choice {
+        case .video:
+            // 去除播放清單相關參數，直接走單一影片流程
+            let videoURL = stripPlaylistParameters(from: request.urlString)
+            addURLAsSingleVideo(videoURL, callbackScheme: request.callbackScheme, requestId: request.requestId)
+        case .playlist:
+            // 走現有播放清單流程
+            addURLAsPlaylist(request.urlString, callbackScheme: request.callbackScheme, requestId: request.requestId)
+        case .cancel:
+            break
+        }
+    }
+
+    /// 去除 URL 中的播放清單相關參數
+    private func stripPlaylistParameters(from urlString: String) -> String {
+        guard var components = URLComponents(string: urlString) else { return urlString }
+        let playlistParams: Set<String> = ["list", "index"]
+        components.queryItems = components.queryItems?.filter { !playlistParams.contains($0.name) }
+        if components.queryItems?.isEmpty == true {
+            components.queryItems = nil
+        }
+        return components.url?.absoluteString ?? urlString
+    }
+
+    /// 以單一影片模式新增 URL（跳過混合 URL 檢測）
+    private func addURLAsSingleVideo(_ urlString: String, callbackScheme: String?, requestId: String?) {
+        // 檢查是否已存在
+        guard !tasks.contains(where: { $0.url == urlString }) else { return }
+
+        let task = DownloadTask(url: urlString)
+        task.status = .fetchingInfo
+        task.callbackScheme = callbackScheme
+        task.requestId = requestId
+
+        if let videoId = YouTubeMetadataService.extractVideoIdSync(from: urlString) {
+            task.thumbnailURL = "https://i.ytimg.com/vi/\(videoId)/mqdefault.jpg"
+        }
+
+        tasks.append(task)
+        persistenceService.saveTasks(tasks)
+
+        Task {
+            await fetchMetadataForTask(task)
+        }
+    }
+
+    /// 以播放清單模式新增 URL（跳過混合 URL 檢測）
+    private func addURLAsPlaylist(_ urlString: String, callbackScheme: String?, requestId: String?) {
+        let task = DownloadTask(url: urlString, title: "載入播放清單中...")
+        task.status = .fetchingInfo
+        task.callbackScheme = callbackScheme
+        task.requestId = requestId
+        tasks.append(task)
+        persistenceService.saveTasks(tasks)
+
+        Task {
+            await expandPlaylist(placeholderTask: task, urlString: urlString, callbackScheme: callbackScheme, requestId: requestId)
         }
     }
 

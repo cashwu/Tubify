@@ -13,6 +13,8 @@ struct ContentView: View {
     @State private var showDeleteAllAlert = false
     @State private var mediaRequests: [MediaSelectionRequest] = []
     @State private var playlistRequests: [PlaylistSelectionRequest] = []
+    @State private var videoOrPlaylistRequests: [VideoOrPlaylistChoiceRequest] = []
+    @State private var showVideoOrPlaylistAlert = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -103,6 +105,7 @@ struct ContentView: View {
             setupPasteShortcut()
             setupMediaSelectionCallback()
             setupPlaylistSelectionCallback()
+            setupVideoOrPlaylistChoiceCallback()
             Task {
                 await checkYTDLP()
             }
@@ -132,6 +135,19 @@ struct ContentView: View {
             }
         } message: {
             Text("確定要清除所有下載任務嗎？此操作無法復原。")
+        }
+        .alert("下載選擇", isPresented: $showVideoOrPlaylistAlert) {
+            Button("取消", role: .cancel) {
+                dequeueVideoOrPlaylistChoice(choice: .cancel)
+            }
+            Button("播放清單") {
+                dequeueVideoOrPlaylistChoice(choice: .playlist)
+            }
+            Button("影片") {
+                dequeueVideoOrPlaylistChoice(choice: .video)
+            }
+        } message: {
+            Text("此連結指向播放清單中的一部影片，您要下載單支影片還是整個播放清單？")
         }
     }
 
@@ -225,6 +241,29 @@ struct ContentView: View {
     private func setupPlaylistSelectionCallback() {
         downloadManager.onPlaylistSelectionNeeded = { [self] request in
             playlistRequests.append(request)
+        }
+    }
+
+    // MARK: - 影片或播放清單選擇回調設置
+
+    private func setupVideoOrPlaylistChoiceCallback() {
+        downloadManager.onVideoOrPlaylistChoiceNeeded = { [self] request in
+            videoOrPlaylistRequests.append(request)
+            if !showVideoOrPlaylistAlert {
+                showVideoOrPlaylistAlert = true
+            }
+        }
+    }
+
+    // MARK: - 影片或播放清單選擇處理
+
+    private func dequeueVideoOrPlaylistChoice(choice: DownloadManager.VideoOrPlaylistChoice) {
+        guard !videoOrPlaylistRequests.isEmpty else { return }
+        let request = videoOrPlaylistRequests.removeFirst()
+        downloadManager.confirmVideoOrPlaylistChoice(request: request, choice: choice)
+        // 如果佇列中還有等待的請求，繼續顯示 alert
+        if !videoOrPlaylistRequests.isEmpty {
+            showVideoOrPlaylistAlert = true
         }
     }
 
