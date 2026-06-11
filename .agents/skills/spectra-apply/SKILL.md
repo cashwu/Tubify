@@ -130,6 +130,37 @@ If the apply instructions JSON includes a `preflight` field, act on its `status`
 
 If the `preflight` field is absent (blocked or all_done states), skip this step.
 
+3c. **Artifact quality check**
+
+Run `spectra analyze <change-name> --json` to check cross-artifact consistency (Coverage, Consistency, Ambiguity, Gaps).
+
+- **Zero findings**: silently continue.
+- **Warning/Suggestion only**: display a one-line summary (e.g., "⚠ Artifact analysis: 2 warnings found") and continue automatically.
+- **Critical findings**: display each Critical finding (summary + location + recommendation), then use the **AskUserQuestion tool**:
+  - **Fix and continue** — fix the artifact issues inline, then proceed
+  - **Continue anyway** — skip fixes and start implementation
+  - **Stop** — end the workflow
+
+  If there is no AskUserQuestion tool available, present options as plain text and wait for the user's response.
+
+3d. **Drift dormancy check** (passive trigger for stale changes)
+
+When the change has been dormant for more than 5 days AND the change directory has had zero commits in the past 3 days, surface a drift report before tasks begin — the change is likely out-of-sync with the current codebase.
+
+Detect dormancy from `.openspec.yaml` `created` and `git log -1 --format=%at -- docs/specs/changes/<name>/`:
+
+- **Both conditions met**: run `spectra drift <change-name>`, display the report, then use the **AskUserQuestion tool**:
+  - **Continue with apply** — proceed to tasks (recommended for Light drift)
+  - **Refresh first** — pause apply, run `/spectra-ingest <change-name>` to update artifacts, then resume
+  - **Stop** — end the workflow
+- **Either condition not met**: silently continue, no output.
+
+The trigger is guidance only — it MUST NOT block apply from proceeding when the user chooses to continue. Hard-blocking on dormancy would punish legitimate "I came back after a long weekend" cases.
+
+(Threshold reasoning: AI-assisted commits are daily-cadence. ≥5 days dormant + ≥3 days no commit ≈ genuine stagnation, not normal pacing.)
+
+If there is no AskUserQuestion tool available, present options as plain text and wait for the user's response.
+
 4. **Read context files**
 
    Read the files listed in `contextFiles` from the apply instructions output.
@@ -168,14 +199,27 @@ If the `preflight` field is absent (blocked or all_done states), skip this step.
    For each pending task:
    - Show which task is being worked on
    - Re-read the sections of design and spec files that are relevant to this task's scope — do not rely on memory from earlier in the conversation, as context may have been compressed
+   - **Read the Implementation Contract for this task before editing any source file.** If `design.md` exists and contains an `## Implementation Contract` section (or contract content under another heading the design uses), read the part of it that covers this task's scope. The contract names the observable behavior, interface or data shape, failure modes, acceptance criteria, and scope boundaries you must satisfy. Treat the contract as the durable handoff — it is what the task will be measured against, regardless of who started the change.
+   - **Detect unclear or path-only tasks before writing code.** A task is unclear if it:
+     - only names files to edit ("edit `foo.rs`", "update `bar.svelte`") with no behavior, contract, or verification target;
+     - is vague ("handle edge cases", "wire it up", "make it work");
+     - conflicts with the implementation contract (asks for behavior the contract excludes, or omits behavior the contract requires).
+       When this happens, pause. Either update the artifact (design or tasks) so the task names a concrete behavior and verification target, or report the blocker and wait for guidance. Do NOT silently guess against unclear requirements.
    - Before writing code, check:
      1. **Reuse** — search adjacent modules and shared utilities for existing implementations before writing new code
      2. **Quality** — derive values from existing state instead of duplicating; use existing types and constants over new literals
      3. **Efficiency** — parallelize independent async operations; avoid unnecessary awaits; match operation scope to actual need
      4. **No Placeholders in artifacts** — if the design or spec for this task contains placeholder language (TBD, TODO, "add appropriate handling"), pause and fix the artifact first or flag to the user. Do not implement against vague requirements.
+     5. **Examples as verification** — if the spec for this task's scope includes `##### Example:` blocks, use them as concrete test cases:
+        - When TDD is enabled: derive the first failing test directly from the example's GIVEN/WHEN/THEN values
+        - When TDD is not enabled: after implementing, verify the code handles the example's input→output correctly
+        - Example tables map to parameterized tests — one test per row
+          Do NOT invent additional test values beyond what the spec examples provide without reason. The examples ARE the agreed specification.
    - Make the code changes required
    - Keep changes minimal and focused
-   - Mark task complete in the tasks file: `- [ ]` → `- [x]`
+   - **Verify before marking done** — re-read the task description from the tasks file AND the relevant Implementation Contract content from design.md. For each requirement stated in the task description and each contract item that covers this task's scope, confirm it is addressed by your changes. Confirm the verification target named by the task (test name, CLI invocation, analyzer check, or manual assertion) actually passes. If any contract item, task requirement, or verification target is missing or failing, implement/fix it now. Do not mark the task complete until every part of the description is covered and the contract for this task is satisfied.
+   - Mark task complete by running: `spectra task done --change "<name>" <task-id>`
+     This command marks the checkbox in tasks.md AND records which files were modified for this task.
    - Continue to next task
 
    **Parallel task dispatch**: When consecutive `[P]`-marked tasks are found and `parallel_tasks: true` is configured (see Step 5), dispatch them as parallel agents in a single message. If any `[P]` task fails, pause and report.
@@ -190,14 +234,16 @@ If the `preflight` field is absent (blocked or all_done states), skip this step.
 
 ## Rationalization Table
 
-| What You're Thinking                                       | What You Should Do                                                               |
-| ---------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| "This task is trivial, I don't need to re-read the design" | Re-read. Context compression loses details. 30s of reading saves 30min of rework |
-| "I already know how this works, skip the code search"      | Search anyway. Someone may have added a utility since you last looked            |
-| "The test is obvious, I'll add it after implementation"    | If TDD is enabled, test first. If not, still write it before marking done        |
-| "This is just a small refactor, no test needed"            | Small refactors are how regressions sneak in. Write the test                     |
-| "The artifact says X but Y makes more sense"               | Pause and suggest updating the artifact. Don't silently deviate                  |
-| "I'll fix this other thing I noticed while I'm here"       | Finish current task first. Address the other thing separately                    |
+| What You're Thinking                                               | What You Should Do                                                                                                                            |
+| ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| "This task looks done, I'll mark it complete"                      | Re-read the task description first. Check whether your diff covers every part of it. Incomplete tasks marked done are the #1 source of rework |
+| "This task is trivial, I don't need to re-read the design"         | Re-read. Context compression loses details. 30s of reading saves 30min of rework                                                              |
+| "I already know how this works, skip the code search"              | Search anyway. Someone may have added a utility since you last looked                                                                         |
+| "The test is obvious, I'll add it after implementation"            | If TDD is enabled, test first. If not, still write it before marking done                                                                     |
+| "This is just a small refactor, no test needed"                    | Small refactors are how regressions sneak in. Write the test                                                                                  |
+| "The artifact says X but Y makes more sense"                       | Pause and suggest updating the artifact. Don't silently deviate                                                                               |
+| "I'll fix this other thing I noticed while I'm here"               | Finish current task first. Address the other thing separately                                                                                 |
+| "The example values are just illustrations, I'll pick better ones" | Use the spec example values exactly. They were chosen deliberately                                                                            |
 
 ---
 

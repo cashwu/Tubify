@@ -45,6 +45,7 @@ If no argument is provided, the workflow will extract requirements from conversa
    - If context is insufficient, use the **AskUserQuestion tool** to ask what they want to build
 
    From the resolved description, derive a kebab-case change name (e.g., "add dark mode" → `add-dark-mode`).
+   Do not keep archive-style date prefixes in active change names. If the source name starts with `YYYY-MM-DD-`, strip that date prefix before running `spectra new change`; archived change names and directories are historical references, not active names to reuse.
 
    **IMPORTANT**: Do NOT proceed without understanding what the user wants to build.
 
@@ -83,13 +84,29 @@ If no argument is provided, the workflow will extract requirements from conversa
 
 5. **Write the proposal**
 
+   **IMPORTANT — file path rules for the `## Impact` section:**
+   - All file paths SHALL be written relative to the project root (e.g., `src/lib/foo.ts`, `src-tauri/crates/core/src/bar.rs`, `docs/specs/specs/auth/spec.md`).
+   - Do NOT use relative fragments (e.g., `parser/mod.rs`, `core/mod.rs`) — preflight rejects them as non-anchored paths.
+   - Do NOT wrap shell commands in backticks inside artifact text (e.g., `` `git mv a.rs b.rs` ``) — preflight's backtick extractor will otherwise mis-parse the command as a file reference.
+   - When referring to a file without naming its concrete path, use descriptive prose (e.g., "Parser 入口檔") rather than a backticked path fragment.
+
    Get instructions:
 
    ```bash
    spectra instructions proposal --change "<name>" --json
    ```
 
-   Write the proposal file using the template from instructions, with the following format based on change type:
+   Generate the proposal content based on change type (see formats below), then write it via CLI:
+
+   ```bash
+   spectra new artifact proposal --change "<name>" --stdin <<'ARTIFACT_EOF'
+   <proposal content>
+   ARTIFACT_EOF
+   ```
+
+   If the command fails with a validation error, fix the content and retry.
+
+   Use the following format based on change type:
 
    ### Feature
 
@@ -119,7 +136,10 @@ If no argument is provided, the workflow will extract requirements from conversa
    ## Impact
 
    - Affected specs: <new or modified capabilities>
-   - Affected code: <list of affected files>
+   - Affected code:
+     - New: <paths to be created, relative to project root>
+     - Modified: <paths that already exist>
+     - Removed: <paths to be deleted>
    ```
 
    ### Bug Fix
@@ -147,7 +167,10 @@ If no argument is provided, the workflow will extract requirements from conversa
 
    ## Impact
 
-   - Affected code: <list of affected files>
+   - Affected code:
+     - Modified: <paths that already exist>
+     - New: <paths to be created, relative to project root>
+     - Removed: <paths to be deleted>
    ```
 
    ### Refactor / Enhancement
@@ -176,7 +199,10 @@ If no argument is provided, the workflow will extract requirements from conversa
    ## Impact
 
    - Affected specs: <affected capabilities>
-   - Affected code: <list of affected files>
+   - Affected code:
+     - Modified: <paths that already exist>
+     - New: <paths to be created, relative to project root>
+     - Removed: <paths to be deleted>
    ```
 
 6. **Get the artifact build order**
@@ -208,8 +234,28 @@ If no argument is provided, the workflow will extract requirements from conversa
      - `dependencies`: Completed artifacts to read for context
      - `locale`: The language to write the artifact in (e.g., "Japanese (日本語)"). If present, you MUST write the artifact content in this language. Exception: spec files (specs/\*_/_.md) MUST always be written in English regardless of locale, because they use normative language (SHALL/MUST).
    - Read any completed dependency files for context
-   - Create the artifact file using `template` as the structure
+   - Generate the artifact content using `template` as the structure
    - Apply `context` and `rules` as constraints - but do NOT copy them into the file
+   - Write the artifact via CLI (the CLI handles directory creation and format validation):
+
+     For **design** or **tasks**:
+
+     ```bash
+     spectra new artifact <artifact-id> --change "<name>" --stdin <<'ARTIFACT_EOF'
+     <content>
+     ARTIFACT_EOF
+     ```
+
+     For **specs** (one command per capability):
+
+     ```bash
+     spectra new artifact spec <capability-name> --change "<name>" --stdin <<'ARTIFACT_EOF'
+     <delta spec content>
+     ARTIFACT_EOF
+     ```
+
+     If the command fails with a validation error, fix the content and retry.
+
    - Show brief progress: "✓ Created <artifact-id>"
 
    b. **Continue until all `applyRequires` artifacts are complete**
@@ -251,6 +297,16 @@ If no argument is provided, the workflow will extract requirements from conversa
    - Are boundary conditions defined (empty input, max limits, error cases)?
    - Could "the system" refer to multiple components? Be explicit.
 
+   **Check 5: Durable Handoff Review** (run BEFORE the CLI analyzer)
+
+   This change has to survive being parked or handed to another agent. Reject and fix any of the following:
+   - **File-path-only tasks**: a task whose entire description is "edit file X" with no behavior, contract, or verification target. File paths are locator context — the task SHALL still describe what is observably true when complete.
+   - **Line-number-coupled instructions**: design or tasks content that points to "line 42" / "the function on lines 80-95" as the only way to identify the work. Source line numbers drift; name the function, command, struct, or behavior instead.
+   - **Vague acceptance criteria**: success conditions like "works correctly", "behaves as expected", "handles edge cases" without naming the observable behavior or the verification target (test name, CLI invocation, analyzer rule, manual assertion).
+   - **Missing scope boundaries on non-trivial work**: design lacking explicit "in scope" / "out of scope" lines for any change that touches more than one subsystem or introduces new behavior. Trivial artifact-only edits MAY skip this; runtime, build, or tooling effects MUST NOT.
+
+   Fix every failure inline using the existing context before running the CLI analyzer. If a failure cannot be fixed without new input from the user, surface it explicitly rather than papering over it.
+
 ---
 
 ## Rationalization Table
@@ -287,20 +343,24 @@ If no argument is provided, the workflow will extract requirements from conversa
 
     If validation fails, fix errors and re-validate.
 
-11. **Show final status and end workflow**
+11. **Park the change and end the workflow**
 
     Show summary:
     - Change name and location
     - List of artifacts created
     - Validation result
 
-    Use **AskUserQuestion tool** to ask what to do next. This ensures the workflow stops even when auto-accept is enabled. Provide exactly these options:
-    - **First option (will be auto-selected)**: "Park" — Execute `spectra park "<name>"` to park the change, then inform the user they can run `/spectra-apply <change-name>` when ready (which will auto-unpark).
-    - **Second option**: "Apply" — Invoke `/spectra-apply <change-name>` to start implementation.
+    Then unconditionally execute:
 
-    If **AskUserQuestion tool** is not available, execute `spectra park "<name>"` and inform the user to run `/spectra-apply <change-name>` when ready. Then STOP — do not continue.
+    ```bash
+    spectra park "<name>"
+    ```
 
-    **After the user responds**, if they chose "Park", execute `spectra park "<name>"` and the workflow is OVER. If they chose "Apply", invoke `/spectra-apply <change-name>` to begin implementation.
+    Inform the user that the change is parked and that running `/spectra-apply <change-name>` when ready will auto-unpark the change and start implementation.
+
+    If you are currently in Codex Plan Mode, also remind the user to switch the session to normal mode before running `/spectra-apply <change-name>`. This is only a reminder: do NOT try to use ExitPlanMode or EnterPlanMode, do NOT ask whether to switch modes, and do NOT invoke apply.
+
+    The propose workflow ENDS here. Do NOT invoke `/spectra-apply`. Do NOT call **AskUserQuestion** to ask whether to park or apply. This behavior is identical across Auto Mode, interactive mode, and any other agent mode — parking is unconditional and does not depend on `AskUserQuestion` availability or UI auto-accept settings.
 
 **Artifact Creation Guidelines**
 

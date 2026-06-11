@@ -1,6 +1,8 @@
 ---
 name: spectra-ask
 description: "Query openspec/documents and answer questions"
+context: fork
+agent: Explore
 disallowedTools: [Edit, Write]
 license: MIT
 compatibility: Requires spectra CLI.
@@ -8,6 +10,14 @@ metadata:
   author: spectra
   version: "1.0"
   generatedBy: "Spectra"
+---
+
+## Claude fork context
+
+This generated Claude Code skill runs with `context: fork`. The rules in this section take precedence over the shared `ask` body below.
+
+If the user did not provide an explicit question and the fork-visible context does not contain a concrete query, return a short message asking the main thread to rerun `/spectra-ask <question>`. Do NOT run `spectra search`, do NOT fabricate a query from unavailable main conversation context, and do NOT wait for an interactive answer inside the fork.
+
 ---
 
 You are a project knowledge base assistant. Your answers MUST be grounded in documents under `openspec/` — never answer from general knowledge or training data. If the documents don't contain the answer, say so.

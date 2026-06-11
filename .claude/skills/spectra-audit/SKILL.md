@@ -1,6 +1,9 @@
 ---
 name: spectra-audit
 description: "Audit changed code for security sharp edges — dangerous defaults, type confusion, and silent failures"
+context: fork
+agent: Explore
+disallowedTools: [Edit, Write]
 license: MIT
 compatibility: Requires spectra CLI.
 metadata:
@@ -9,117 +12,13 @@ metadata:
   generatedBy: "Spectra"
 ---
 
-Audit changed code for security sharp edges — API design traps, dangerous defaults, and interfaces that make it easy to do the wrong thing.
+Audit changed code for security sharp edges in a Claude Code fork. This generated skill is report-only: it SHALL NOT edit files and SHALL NOT apply fixes directly inside the fork.
 
-Good APIs don't require developers to "be careful" to stay secure. If the correct usage requires reading docs, remembering rules, or understanding cryptography, the API has failed.
+## Claude fork context
 
-**Core principle:** Security should be the path of least resistance. Insecure usage should be harder than secure usage.
+Run `git diff HEAD` to gather the current changes. If there are no changes, report that no security sharp edges were found and stop.
 
-## Two Modes
-
-This skill operates in two modes depending on how it's invoked:
-
-- **Standalone** (`/spectra-audit`): Full 3-agent parallel analysis on current git diff. See [Standalone Mode](#standalone-mode).
-- **Discipline** (via `/spectra-apply` when `audit: true`): Condensed checklist applied during implementation. See [Discipline Mode](#discipline-mode).
-
-Both modes share the same [Core Framework](#core-framework).
-
----
-
-## Standalone Mode
-
-When invoked directly as `/spectra-audit`:
-
-### Phase 1: Gather Changes
-
-Run `git diff HEAD` to get the full diff of current modifications.
-
-If there are no changes, report "No changes to audit" and stop.
-
-### Phase 2: Parallel 3-Agent Analysis
-
-Launch 3 agents in parallel (one message, 3 tool calls). Each agent receives the full diff and analyzes it through one adversary lens.
-
-**Agent 1 — The Scoundrel (壞蛋)**
-
-A malicious developer or attacker deliberately manipulating configuration.
-
-Search the diff for:
-
-- Config options that can disable security mechanisms
-- Algorithm parameters that accept downgrades (e.g., `"none"`, `"md5"`)
-- Values that can be injected to bypass validation
-- Dangerous config combinations (e.g., `auth_required: true` + `bypass_auth_for_health: true` + `health_check_path: "/"`)
-- String concatenation in security-critical paths (permissions, queries, paths)
-
-**Agent 2 — The Lazy Developer (懶惰的開發者)**
-
-A developer who copy-pastes examples and skips documentation.
-
-Search the diff for:
-
-- Unsafe defaults: `verify: false`, `timeout: 0`, empty strings as keys
-- Zero/nil/empty behavior: what does `timeout=0`, `max_attempts=0`, `key=""` mean?
-- Error messages that don't guide toward secure usage
-- The "first example found" test: is the most obvious usage secure?
-- Path of least resistance: does the simplest way to use this API produce secure results?
-
-**Agent 3 — The Confused Developer (搞混的開發者)**
-
-A developer who misunderstands API usage.
-
-Search the diff for:
-
-- Parameters that can be swapped without type errors (e.g., `encrypt(msg, key, nonce)` — key and nonce are both strings)
-- Silent failures: security checks that return true/false where the return value can be ignored
-- Raw primitives where semantic types should exist (strings for keys, bytes for nonces)
-- Configuration cliffs: one wrong value = catastrophe with no warning (e.g., `verify_ssl: fasle`)
-- Stringly-typed security: permissions as comma-separated strings instead of enums
-
-### Phase 3: Consolidate and Fix
-
-Merge findings from all 3 agents. For each finding:
-
-- If fixable: apply the fix directly
-- If false positive or not worth changing: skip without debate
-- Classify severity: Critical / High / Medium / Low
-
-End with a brief summary of what was fixed (or confirm the code is clean).
-
----
-
-## Discipline Mode
-
-When referenced by `/spectra-apply` (via `spectra instructions --skill audit`), do NOT launch the 3-agent workflow above. Instead, apply this condensed checklist continuously during implementation.
-
-### Quick 3-Role Check
-
-Before finalizing any code that involves APIs, configuration, parameters, or security-related logic, ask:
-
-1. **Scoundrel**: Can this be abused? Can config disable security? Can values be injected?
-2. **Lazy Developer**: Is the default safe? Will copy-paste usage be secure? Does the error message guide correctly?
-3. **Confused Developer**: Can params be swapped? Will wrong usage fail loudly? Are types distinct enough?
-
-### Red Flags During Implementation
-
-Stop and fix immediately if you notice:
-
-- Adding a string parameter for security-related logic → use enum or newtype
-- Adding a config option that defaults to `false` → is the "off" state safe?
-- `if value == 0` or `if key.nil?` → what does zero/nil MEAN in this context?
-- Security check returns true/false → can the return value be ignored?
-- Accepting algorithm/mode as a parameter → can it be hardcoded to the safe choice?
-- Adding a config option without validation → what happens with invalid/malicious values?
-
-### When to Engage
-
-Not every line of code needs audit scrutiny. Focus on:
-
-- New function signatures and public APIs
-- Configuration options and their defaults
-- Authentication, authorization, encryption interfaces
-- Input validation and error handling at system boundaries
-- Anywhere a developer makes a security-relevant choice
+Analyze the diff through the Scoundrel, Lazy Developer, and Confused Developer lenses. Return a consolidated report with findings grouped by severity, affected files, and recommended fixes. The main thread decides whether to apply any fixes.
 
 ---
 
