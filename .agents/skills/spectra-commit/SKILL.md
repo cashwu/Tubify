@@ -57,6 +57,16 @@ This is a **utility skill** (not a workflow step). It reads source file tracking
 
    From the full `git status --porcelain` output, any dirty files NOT in the artifact set and NOT in the tracking file are "unrelated changes."
 
+   <!-- SPECTRA-COMMIT-GUARD: archive-first allowlist + plus deletion protection -->
+   Treat generated plus skill deletions as protected unrelated changes by default:
+   - `.agents/skills/spectra-*-plus/`
+   - `.claude/skills/spectra-*-plus/`
+
+   If `git status --porcelain` shows a deletion under either path, keep it out of the default commit set even when the user later selects "Archive first, then commit together." Display it in Unrelated Changes, or in an explicit protected/excluded subsection, so the user can see it was excluded.
+
+   The only way to include a generated plus skill deletion is through Customize, after the user explicitly names that path for inclusion.
+   <!-- SPECTRA-COMMIT-GUARD:END -->
+
 5. **Display commit plan**
 
    Show the file list grouped into sections:
@@ -97,13 +107,14 @@ This is a **utility skill** (not a workflow step). It reads source file tracking
 
    Options:
    - **Commit as shown**: Proceed with the displayed artifact + source files
-   - **Include all dirty files**: Add all unrelated files to the commit as well
+   - **Include all dirty files**: Add all unrelated files to the commit as well, except protected generated plus skill deletions under `.agents/skills/spectra-*-plus/` and `.claude/skills/spectra-*-plus/`
    - **Customize**: Let the user add or remove specific files from the commit set
    - **Archive first, then commit together**: Run archive before committing — archive file moves will be included in this commit
 
    If the user selects "Customize":
    - Show a numbered list of all dirty files (included and excluded)
    - Ask which files to add or remove
+   - Generated plus skill deletions under `.agents/skills/spectra-*-plus/` and `.claude/skills/spectra-*-plus/` remain excluded unless the user explicitly names those paths for inclusion
    - Re-display the updated commit plan for confirmation
 
    If the user selects "Archive first, then commit together":
@@ -147,31 +158,44 @@ This is a **utility skill** (not a workflow step). It reads source file tracking
     spectra archive <name> --mark-tasks-complete  # if user chose to mark tasks complete in 6a-i
     ```
 
+    Before running archive, keep a copy of the already confirmed commit set:
+    - Change artifacts collected before archive
+    - Tracked source files from `.spectra/touched/<change-name>.json`
+    - User customizations already confirmed before archive
+
     After archive completes successfully:
 
-    1. Re-run `git status --porcelain` to capture all file changes produced by the archive (deletions from `openspec/changes/<name>/`, additions in `openspec/archived/`)
-    2. Add these archive-related file changes to the commit set
-    3. Display an **updated commit plan** showing all sections:
+    1. Re-run `git status --porcelain` only to identify allowlisted archive outputs. Do not treat the full post-archive dirty state as archive output.
+    2. Add only these archive-related file changes to the commit set:
+       - Deletions under `openspec/changes/<name>/`
+       - Additions or modifications under `openspec/changes/archive/<date>-<change>/`
+       - Changes under `openspec/specs/` only if the user explicitly selected spec sync in 6a-ii
+    3. Keep all other post-archive dirty files in Unrelated Changes, including protected generated plus skill deletions under `.agents/skills/spectra-*-plus/` and `.claude/skills/spectra-*-plus/`
+    4. Display an **updated commit plan** showing all sections:
 
     ```
     ## Updated Commit Plan: <change-name> (with archive)
 
     ### Change Artifacts (archived)
-    - D  docs/specs/changes/<name>/proposal.md
-    - D  docs/specs/changes/<name>/tasks.md
+    - D  openspec/changes/<name>/proposal.md
+    - D  openspec/changes/<name>/tasks.md
     - ...
 
     ### Archived Files
-    - A  docs/specs/archived/<name>/proposal.md
-    - A  docs/specs/archived/<name>/tasks.md
+    - A  openspec/changes/archive/<date>-<change>/proposal.md
+    - A  openspec/changes/archive/<date>-<change>/tasks.md
     - ...
 
     ### Source Files
     (same as before)
 
     ### Spec Sync Changes (if sync was performed)
-    - M  docs/specs/specs/<spec-name>/spec.md
+    - M  openspec/specs/<spec-name>/spec.md
     - ...
+
+    ### Unrelated Changes (not included)
+    - D  .agents/skills/spectra-apply-plus/SKILL.md
+    - D  .claude/skills/spectra-propose-plus/SKILL.md
     ```
 
     Then continue to step 7.
