@@ -135,6 +135,14 @@ final class YTDLPServiceTests: XCTestCase {
         XCTAssertEqual(error.errorDescription, "下載已取消")
     }
 
+    func testEndedLiveErrorClassification() {
+        let endedLiveError = "ERROR: [youtube] TR_NgGeXWGc: This live event has ended."
+        let unavailableError = "ERROR: [youtube] abc123: Video unavailable"
+
+        XCTAssertEqual(YTDLPErrorClassification.classify(endedLiveError), .endedLive)
+        XCTAssertEqual(YTDLPErrorClassification.classify(unavailableError), .other)
+    }
+
     // MARK: - DownloadResultHolder 測試
 
     func testDownloadResultHolderSetOutputPath() {

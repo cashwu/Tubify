@@ -65,6 +65,32 @@ enum YTDLPError: Error, LocalizedError {
     }
 }
 
+enum YTDLPErrorClassification {
+    case endedLive
+    case other
+
+    static func classify(_ message: String) -> YTDLPErrorClassification {
+        if message.contains("This live event has ended.") {
+            return .endedLive
+        }
+        return .other
+    }
+}
+
+protocol YTDLPServiceProtocol {
+    func download(
+        taskId: UUID,
+        url: String,
+        commandTemplate: String,
+        outputDirectory: String,
+        subtitleSelection: SubtitleSelection?,
+        audioSelection: AudioSelection?,
+        onProgress: @escaping ProgressCallback
+    ) async throws -> String
+
+    func cancel(taskId: UUID) async
+}
+
 /// 下載進度回調
 typealias ProgressCallback = (Double) -> Void
 
@@ -535,3 +561,5 @@ actor YTDLPService {
         return modifiedFormat
     }
 }
+
+extension YTDLPService: YTDLPServiceProtocol {}

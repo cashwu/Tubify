@@ -36,6 +36,19 @@ struct DownloadItemView: View {
         return isCookiesError && isPermError
     }
 
+    static func statusText(for task: DownloadTask) -> String {
+        switch task.status {
+        case .postLive:
+            return "直播處理中 (請稍後重試)"
+        default:
+            return task.status.displayText
+        }
+    }
+
+    static func showsRetryControl(for task: DownloadTask) -> Bool {
+        task.status == .failed || task.status == .cancelled || task.status == .scheduled || task.status == .livestreaming || task.status == .postLive
+    }
+
     var body: some View {
         HStack(spacing: 12) {
             // 縮圖
@@ -213,7 +226,7 @@ struct DownloadItemView: View {
             case .postLive:
                 Image(systemName: "gearshape.2")
                     .foregroundStyle(.purple)
-                Text("直播處理中 (請稍後重試)")
+                Text(Self.statusText(for: task))
             }
         }
         .font(.system(size: 18))
@@ -273,7 +286,7 @@ struct DownloadItemView: View {
             }
 
             // 重試按鈕（失敗、取消、首播尚未開始、首播串流中或直播處理中時）
-            if task.status == .failed || task.status == .cancelled || task.status == .scheduled || task.status == .livestreaming || task.status == .postLive {
+            if Self.showsRetryControl(for: task) {
                 Button(action: onRetry) {
                     Image(systemName: "arrow.clockwise")
                         .font(.system(size: 21))

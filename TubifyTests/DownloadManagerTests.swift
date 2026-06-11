@@ -17,6 +17,9 @@ final class DownloadManagerTests: XCTestCase {
 
     /// Mock 持久化服務
     var mockPersistence: MockPersistenceService!
+    var mockMetadataService: MockYouTubeMetadataService!
+    var mockYTDLPService: MockYTDLPService!
+    var mockNotificationService: MockNotificationService!
 
     // MARK: - Setup & Teardown
 
@@ -26,7 +29,15 @@ final class DownloadManagerTests: XCTestCase {
         // 建立 Mock 並注入到新的 DownloadManager
         mockPersistence = MockPersistenceService()
         mockPersistence.reset()
-        manager = DownloadManager(persistenceService: mockPersistence)
+        mockMetadataService = MockYouTubeMetadataService()
+        mockYTDLPService = MockYTDLPService()
+        mockNotificationService = MockNotificationService()
+        manager = DownloadManager(
+            persistenceService: mockPersistence,
+            metadataService: mockMetadataService,
+            ytdlpService: mockYTDLPService,
+            notificationService: mockNotificationService
+        )
 
         // 確保任務列表為空
         manager.tasks = []
@@ -36,6 +47,9 @@ final class DownloadManagerTests: XCTestCase {
     override func tearDown() async throws {
         manager = nil
         mockPersistence = nil
+        mockMetadataService = nil
+        mockYTDLPService = nil
+        mockNotificationService = nil
         try await super.tearDown()
     }
 
@@ -52,6 +66,246 @@ final class DownloadManagerTests: XCTestCase {
             title: title,
             status: status
         )
+    }
+
+    private func waitUntil(
+        timeout: TimeInterval = 2,
+        condition: @escaping () -> Bool
+    ) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() { return true }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        return condition()
+    }
+
+    // MARK: - Post-live replay metadata tests
+
+    func testPostLiveMetadataWithPairableFormatsStartsDownloadFlow() async {
+        // Arrange
+        let url = "https://www.youtube.com/watch?v=TR_NgGeXWGc"
+        mockMetadataService.videoInfo = VideoInfo(
+            id: "TR_NgGeXWGc",
+            title: "Post Live Replay",
+            thumbnail: nil,
+            duration: 120,
+            uploader: "Test",
+            url: url,
+            liveStatus: "post_live",
+            releaseTimestamp: nil,
+            formats: [
+                YTDLPFormat(formatID: "137", vcodec: "avc1.640028", acodec: "none", protocolName: "https", ext: "mp4"),
+                YTDLPFormat(formatID: "140", vcodec: "none", acodec: "mp4a.40.2", protocolName: "https", ext: "m4a")
+            ]
+        )
+        mockMetadataService.mediaOptions = (subtitles: [], audioTracks: [], formats: [])
+        mockYTDLPService.outputPath = "/tmp/Post Live Replay.mp4"
+
+        // Act
+        XCTAssertEqual(manager.addURL(url), .success)
+        let didStartDownload = await waitUntil {
+            self.mockYTDLPService.downloadedURLs.contains(url)
+        }
+
+        // Assert
+        XCTAssertTrue(didStartDownload, "post_live metadata with 137+140 should enter the normal download flow")
+        XCTAssertNotEqual(manager.tasks.first?.status, .postLive)
+    }
+
+    func testPostLiveFollowUpFormatLookupWithPairableFormatsStartsDownloadFlow() async {
+        // Arrange
+        let url = "https://www.youtube.com/watch?v=TR_NgGeXWGc"
+        mockMetadataService.videoInfo = VideoInfo(
+            id: "TR_NgGeXWGc",
+            title: "Post Live Replay",
+            thumbnail: nil,
+            duration: 120,
+            uploader: "Test",
+            url: url,
+            liveStatus: "post_live",
+            releaseTimestamp: nil
+        )
+        mockMetadataService.mediaOptions = (
+            subtitles: [],
+            audioTracks: [],
+            formats: [
+                YTDLPFormat(formatID: "137", vcodec: "avc1.640028", acodec: "none", protocolName: "https", ext: "mp4"),
+                YTDLPFormat(formatID: "140", vcodec: "none", acodec: "mp4a.40.2", protocolName: "https", ext: "m4a")
+            ]
+        )
+
+        // Act
+        XCTAssertEqual(manager.addURL(url), .success)
+        let didStartDownload = await waitUntil {
+            self.mockYTDLPService.downloadedURLs.contains(url)
+        }
+
+        // Assert
+        XCTAssertTrue(didStartDownload, "post_live follow-up lookup with 137+140 should enter the normal download flow")
+        XCTAssertNotEqual(manager.tasks.first?.status, .postLive)
+    }
+
+    func testPostLiveMetadataWithoutUsableFormatsStaysPostLiveAndDoesNotStartDownload() async {
+        // Arrange
+        let url = "https://www.youtube.com/watch?v=TR_NgGeXWGc"
+        mockMetadataService.videoInfo = VideoInfo(
+            id: "TR_NgGeXWGc",
+            title: "Post Live Replay",
+            thumbnail: nil,
+            duration: 120,
+            uploader: "Test",
+            url: url,
+            liveStatus: "post_live",
+            releaseTimestamp: nil
+        )
+        mockMetadataService.mediaOptions = (subtitles: [], audioTracks: [], formats: [])
+
+        // Act
+        XCTAssertEqual(manager.addURL(url), .success)
+        let becamePostLive = await waitUntil {
+            self.manager.tasks.first?.status == .postLive
+        }
+
+        // Assert
+        XCTAssertTrue(becamePostLive)
+        XCTAssertTrue(mockYTDLPService.downloadedURLs.isEmpty)
+        XCTAssertEqual(manager.tasks.first?.errorMessage, "直播回放仍在處理中，請稍後重試。")
+    }
+
+    func testPostLiveFormatLookupErrorsSetExpectedStatusAndNotifications() async {
+        // Arrange: ended-live lookup error
+        let endedLiveURL = "https://www.youtube.com/watch?v=TR_NgGeXWGc"
+        mockMetadataService.videoInfo = VideoInfo(
+            id: "TR_NgGeXWGc",
+            title: "Post Live Replay",
+            thumbnail: nil,
+            duration: 120,
+            uploader: "Test",
+            url: endedLiveURL,
+            liveStatus: "post_live",
+            releaseTimestamp: nil
+        )
+        mockMetadataService.mediaOptionsError = YTDLPError.executionFailed("ERROR: [youtube] TR_NgGeXWGc: This live event has ended.")
+
+        // Act
+        XCTAssertEqual(manager.addURL(endedLiveURL), .success)
+        let endedLiveHandled = await waitUntil {
+            self.manager.tasks.first?.status == .postLive
+        }
+
+        // Assert
+        XCTAssertTrue(endedLiveHandled)
+        XCTAssertTrue(mockYTDLPService.downloadedURLs.isEmpty)
+        XCTAssertTrue(mockNotificationService.failedNotifications.isEmpty)
+
+        // Arrange: non-ended lookup error
+        manager.tasks = []
+        mockPersistence.reset()
+        mockMetadataService.mediaOptionsError = YTDLPError.executionFailed("ERROR: [youtube] abc123: Video unavailable")
+        let unavailableURL = "https://www.youtube.com/watch?v=abc123"
+        mockMetadataService.videoInfo = VideoInfo(
+            id: "abc123",
+            title: "Unavailable Replay",
+            thumbnail: nil,
+            duration: 120,
+            uploader: "Test",
+            url: unavailableURL,
+            liveStatus: "post_live",
+            releaseTimestamp: nil
+        )
+
+        // Act
+        XCTAssertEqual(manager.addURL(unavailableURL), .success)
+        let failedHandled = await waitUntil {
+            self.manager.tasks.first?.status == .failed
+        }
+
+        // Assert
+        XCTAssertTrue(failedHandled)
+        XCTAssertTrue(manager.tasks.first?.errorMessage?.contains("Video unavailable") == true)
+        XCTAssertEqual(mockNotificationService.failedNotifications.count, 1)
+    }
+
+    func testDownloadEndedLiveErrorBecomesPostLiveWithoutFailedNotification() async {
+        // Arrange
+        let endedLiveTask = createTestTask(
+            url: "https://www.youtube.com/watch?v=TR_NgGeXWGc",
+            title: "Post Live Replay",
+            status: .pending
+        )
+        manager.tasks = [endedLiveTask]
+        mockYTDLPService.downloadError = YTDLPError.executionFailed("ERROR: [youtube] TR_NgGeXWGc: This live event has ended.")
+
+        // Act
+        manager.startDownloadQueue()
+        let becamePostLive = await waitUntil {
+            endedLiveTask.status == .postLive
+        }
+
+        // Assert
+        XCTAssertTrue(becamePostLive)
+        XCTAssertEqual(endedLiveTask.errorMessage, "直播回放仍在處理中，請稍後重試。")
+        XCTAssertTrue(mockNotificationService.failedNotifications.isEmpty)
+        _ = await waitUntil {
+            !self.manager.isDownloading
+        }
+
+        // Arrange
+        let unavailableTask = createTestTask(
+            url: "https://www.youtube.com/watch?v=abc123",
+            title: "Unavailable Video",
+            status: .pending
+        )
+        manager.tasks = [unavailableTask]
+        mockYTDLPService.downloadError = YTDLPError.executionFailed("ERROR: [youtube] abc123: Video unavailable")
+
+        // Act
+        manager.startDownloadQueue()
+        let becameFailed = await waitUntil {
+            unavailableTask.status == .failed
+        }
+
+        // Assert
+        XCTAssertTrue(becameFailed)
+        XCTAssertTrue(unavailableTask.errorMessage?.contains("Video unavailable") == true)
+        XCTAssertEqual(mockNotificationService.failedNotifications.count, 1)
+    }
+
+    func testRetryPostLiveTaskRerunsMetadataAndDownloadFlow() async {
+        // Arrange
+        let url = "https://www.youtube.com/watch?v=TR_NgGeXWGc"
+        let task = createTestTask(url: url, title: "Post Live Replay", status: .postLive)
+        task.errorMessage = "old post-live result"
+        task.progress = 0.75
+        manager.tasks = [task]
+        mockMetadataService.videoInfo = VideoInfo(
+            id: "TR_NgGeXWGc",
+            title: "Post Live Replay",
+            thumbnail: nil,
+            duration: 120,
+            uploader: "Test",
+            url: url,
+            liveStatus: "post_live",
+            releaseTimestamp: nil,
+            formats: [
+                YTDLPFormat(formatID: "137", vcodec: "avc1.640028", acodec: "none", protocolName: "https", ext: "mp4"),
+                YTDLPFormat(formatID: "140", vcodec: "none", acodec: "mp4a.40.2", protocolName: "https", ext: "m4a")
+            ]
+        )
+        mockMetadataService.mediaOptions = (subtitles: [], audioTracks: [], formats: [])
+
+        // Act
+        manager.retryTask(task)
+        XCTAssertNil(task.errorMessage)
+        XCTAssertEqual(task.progress, 0)
+        let didDownload = await waitUntil {
+            self.mockYTDLPService.downloadedURLs.contains(url)
+        }
+
+        // Assert
+        XCTAssertTrue(didDownload)
+        XCTAssertNotEqual(task.status, .postLive)
     }
 
     // MARK: - DownloadStatus.paused 基本測試
@@ -513,6 +767,137 @@ final class DownloadManagerTests: XCTestCase {
         XCTAssertTrue(mockPersistence.saveTasksCalled, "應該呼叫 saveTasks 持久化")
     }
 
+    func testConfirmPlaylistSelectionPostLiveVideoWithoutUsableFormatsStaysPostLive() async {
+        // Arrange
+        let placeholderTask = createTestTask(
+            url: "https://www.youtube.com/playlist?list=PLtest",
+            title: "載入播放清單中...",
+            status: .fetchingInfo
+        )
+        manager.tasks = [placeholderTask]
+        mockMetadataService.mediaOptions = (subtitles: [], audioTracks: [], formats: [])
+
+        let selectedVideos = [
+            VideoInfo(
+                id: "TR_NgGeXWGc",
+                title: "Post Live Replay",
+                thumbnail: nil,
+                duration: 120,
+                uploader: "Test",
+                url: "https://www.youtube.com/watch?v=TR_NgGeXWGc",
+                liveStatus: "post_live",
+                releaseTimestamp: nil
+            )
+        ]
+
+        let request = PlaylistSelectionRequest(
+            playlistTitle: "Test Playlist",
+            videos: selectedVideos,
+            placeholderTaskId: placeholderTask.id,
+            callbackScheme: nil,
+            requestId: nil
+        )
+
+        // Act
+        manager.confirmPlaylistSelection(request: request, selectedVideos: selectedVideos)
+        let becamePostLive = await waitUntil {
+            self.manager.tasks.first?.status == .postLive
+        }
+
+        // Assert
+        XCTAssertTrue(becamePostLive)
+        XCTAssertTrue(mockYTDLPService.downloadedURLs.isEmpty)
+        XCTAssertEqual(manager.tasks.first?.errorMessage, "直播回放仍在處理中，請稍後重試。")
+    }
+
+    func testConfirmPlaylistSelectionPostLiveEndedLiveLookupErrorStaysPostLiveWithoutFailedNotification() async {
+        // Arrange
+        let placeholderTask = createTestTask(
+            url: "https://www.youtube.com/playlist?list=PLtest",
+            title: "載入播放清單中...",
+            status: .fetchingInfo
+        )
+        manager.tasks = [placeholderTask]
+        mockMetadataService.mediaOptionsError = YTDLPError.executionFailed("ERROR: [youtube] TR_NgGeXWGc: This live event has ended.")
+
+        let selectedVideos = [
+            VideoInfo(
+                id: "TR_NgGeXWGc",
+                title: "Post Live Replay",
+                thumbnail: nil,
+                duration: 120,
+                uploader: "Test",
+                url: "https://www.youtube.com/watch?v=TR_NgGeXWGc",
+                liveStatus: "post_live",
+                releaseTimestamp: nil
+            )
+        ]
+
+        let request = PlaylistSelectionRequest(
+            playlistTitle: "Test Playlist",
+            videos: selectedVideos,
+            placeholderTaskId: placeholderTask.id,
+            callbackScheme: nil,
+            requestId: nil
+        )
+
+        // Act
+        manager.confirmPlaylistSelection(request: request, selectedVideos: selectedVideos)
+        let becamePostLive = await waitUntil {
+            self.manager.tasks.first?.status == .postLive
+        }
+
+        // Assert
+        XCTAssertTrue(becamePostLive)
+        XCTAssertTrue(mockYTDLPService.downloadedURLs.isEmpty)
+        XCTAssertTrue(mockNotificationService.failedNotifications.isEmpty)
+        XCTAssertEqual(manager.tasks.first?.errorMessage, "直播回放仍在處理中，請稍後重試。")
+    }
+
+    func testConfirmPlaylistSelectionPostLiveNonEndedLookupErrorFailsAndSendsNotification() async {
+        // Arrange
+        let placeholderTask = createTestTask(
+            url: "https://www.youtube.com/playlist?list=PLtest",
+            title: "載入播放清單中...",
+            status: .fetchingInfo
+        )
+        manager.tasks = [placeholderTask]
+        mockMetadataService.mediaOptionsError = YTDLPError.executionFailed("ERROR: [youtube] abc123: Video unavailable")
+
+        let selectedVideos = [
+            VideoInfo(
+                id: "abc123",
+                title: "Unavailable Replay",
+                thumbnail: nil,
+                duration: 120,
+                uploader: "Test",
+                url: "https://www.youtube.com/watch?v=abc123",
+                liveStatus: "post_live",
+                releaseTimestamp: nil
+            )
+        ]
+
+        let request = PlaylistSelectionRequest(
+            playlistTitle: "Test Playlist",
+            videos: selectedVideos,
+            placeholderTaskId: placeholderTask.id,
+            callbackScheme: nil,
+            requestId: nil
+        )
+
+        // Act
+        manager.confirmPlaylistSelection(request: request, selectedVideos: selectedVideos)
+        let failed = await waitUntil {
+            self.manager.tasks.first?.status == .failed
+        }
+
+        // Assert
+        XCTAssertTrue(failed)
+        XCTAssertTrue(mockYTDLPService.downloadedURLs.isEmpty)
+        XCTAssertTrue(manager.tasks.first?.errorMessage?.contains("Video unavailable") == true)
+        XCTAssertEqual(mockNotificationService.failedNotifications.count, 1)
+    }
+
     func testConfirmPlaylistSelection_SkipsDuplicateVideos() {
         // Arrange: 佇列中已存在一個影片
         let existingTask = createTestTask(
@@ -609,5 +994,80 @@ final class DownloadManagerTests: XCTestCase {
         XCTAssertNotNil(receivedRequest, "回調應該被觸發")
         XCTAssertEqual(receivedRequest?.playlistTitle, "Test Playlist", "播放清單標題應該正確")
         XCTAssertEqual(receivedRequest?.videos.count, 1, "影片數量應該正確")
+    }
+}
+
+final class MockYouTubeMetadataService: YouTubeMetadataServiceProtocol {
+    var videoInfo: VideoInfo!
+    var mediaOptions: (subtitles: [SubtitleTrack], audioTracks: [AudioTrack], formats: [YTDLPFormat]) = ([], [], [])
+    var videoInfoError: Error?
+    var mediaOptionsError: Error?
+
+    func fetchVideoInfo(url: String, cookiesArguments: [String]) async throws -> VideoInfo {
+        if let videoInfoError {
+            throw videoInfoError
+        }
+        return videoInfo
+    }
+
+    func fetchMediaOptions(url: String, cookiesArguments: [String]) async throws -> (subtitles: [SubtitleTrack], audioTracks: [AudioTrack], formats: [YTDLPFormat]) {
+        if let mediaOptionsError {
+            throw mediaOptionsError
+        }
+        return mediaOptions
+    }
+
+    func fetchPlaylistInfo(url: String, cookiesArguments: [String]) async throws -> (title: String, videos: [VideoInfo]) {
+        return ("", [])
+    }
+
+    func fetchTitleFromWebpage(url: String) async -> String? {
+        return nil
+    }
+}
+
+final class MockYTDLPService: YTDLPServiceProtocol {
+    var outputPath = "/tmp/test.mp4"
+    private(set) var downloadedURLs: [String] = []
+    private(set) var cancelledTaskIDs: [UUID] = []
+    var downloadError: Error?
+
+    func download(
+        taskId: UUID,
+        url: String,
+        commandTemplate: String,
+        outputDirectory: String,
+        subtitleSelection: SubtitleSelection?,
+        audioSelection: AudioSelection?,
+        onProgress: @escaping ProgressCallback
+    ) async throws -> String {
+        downloadedURLs.append(url)
+        if let downloadError {
+            throw downloadError
+        }
+        onProgress(1)
+        return outputPath
+    }
+
+    func cancel(taskId: UUID) async {
+        cancelledTaskIDs.append(taskId)
+    }
+}
+
+final class MockNotificationService: NotificationServiceProtocol {
+    private(set) var completedNotifications: [(title: String, outputPath: String)] = []
+    private(set) var failedNotifications: [(title: String, error: String)] = []
+    private(set) var allDownloadsCompleteCounts: [Int] = []
+
+    func sendDownloadCompleteNotification(title: String, outputPath: String) {
+        completedNotifications.append((title, outputPath))
+    }
+
+    func sendDownloadFailedNotification(title: String, error: String) {
+        failedNotifications.append((title, error))
+    }
+
+    func sendAllDownloadsCompleteNotification(count: Int) {
+        allDownloadsCompleteCounts.append(count)
     }
 }

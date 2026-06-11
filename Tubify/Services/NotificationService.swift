@@ -1,6 +1,12 @@
 import Foundation
 import UserNotifications
 
+protocol NotificationServiceProtocol {
+    func sendDownloadCompleteNotification(title: String, outputPath: String)
+    func sendDownloadFailedNotification(title: String, error: String)
+    func sendAllDownloadsCompleteNotification(count: Int)
+}
+
 /// 通知服務
 class NotificationService {
     static let shared = NotificationService()
@@ -96,3 +102,5 @@ class NotificationService {
         }
     }
 }
+
+extension NotificationService: NotificationServiceProtocol {}

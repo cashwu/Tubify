@@ -35,6 +35,13 @@ final class ContentViewTests: XCTestCase {
         XCTAssertEqual(result, "共 1 個 · 處理中 1")
     }
 
+    func testDownloadItemViewPostLiveStatusTextAndRetryControl() {
+        let task = DownloadTask(url: "https://www.youtube.com/watch?v=abc123", status: .postLive)
+
+        XCTAssertEqual(DownloadItemView.statusText(for: task), "直播處理中 (請稍後重試)")
+        XCTAssertTrue(DownloadItemView.showsRetryControl(for: task))
+    }
+
     func testTaskCountTextWithScheduledStatus() {
         let task = DownloadTask(url: "https://www.youtube.com/watch?v=abc123", status: .scheduled)
         let result = ContentView.buildTaskCountText(from: [task])

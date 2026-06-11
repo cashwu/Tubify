@@ -205,6 +205,44 @@ final class YouTubeMetadataServiceTests: XCTestCase {
         XCTAssertEqual(videoInfo.liveStatus, "not_live")
     }
 
+    func testVideoInfoDecodesRawFormats() throws {
+        let json = """
+        {
+            "id": "TR_NgGeXWGc",
+            "title": "Post Live Replay",
+            "webpage_url": "https://www.youtube.com/watch?v=TR_NgGeXWGc",
+            "live_status": "post_live",
+            "formats": [
+                {"format_id": "137", "vcodec": "avc1.640028", "acodec": "none", "protocol": "https", "ext": "mp4"},
+                {"format_id": "140", "vcodec": "none", "acodec": "mp4a.40.2", "protocol": "https", "ext": "m4a"}
+            ]
+        }
+        """.data(using: .utf8)!
+
+        let videoInfo = try JSONDecoder().decode(VideoInfo.self, from: json)
+
+        XCTAssertEqual(videoInfo.formats?.map(\.formatID), ["137", "140"])
+        XCTAssertTrue(videoInfo.hasUsableMediaFormats)
+    }
+
+    func testUsableMediaFormatsPredicateExcludesIncompleteEntries() {
+        let excludedCases: [[YTDLPFormat]] = [
+            [YTDLPFormat(formatID: "137", vcodec: "avc1.640028", acodec: "none", protocolName: "https", ext: "mp4")],
+            [YTDLPFormat(formatID: "140", vcodec: "none", acodec: "mp4a.40.2", protocolName: "https", ext: "m4a")],
+            [YTDLPFormat(formatID: "sb0", vcodec: "none", acodec: "none", protocolName: "mhtml", ext: "mhtml")],
+            [YTDLPFormat(formatID: "thumb", vcodec: "none", acodec: "none", protocolName: "https", ext: "jpg")],
+            [YTDLPFormat(formatID: "meta", vcodec: nil, acodec: nil, protocolName: nil, ext: nil)],
+            [YTDLPFormat(formatID: "manifest", vcodec: "none", acodec: "none", protocolName: "m3u8_native", ext: "mp4")],
+            [YTDLPFormat(formatID: "bad-video", vcodec: "avc1.640028", acodec: nil, protocolName: "https", ext: "mp4")],
+            [YTDLPFormat(formatID: "bad-audio", vcodec: nil, acodec: "mp4a.40.2", protocolName: "https", ext: "m4a")],
+            [YTDLPFormat(formatID: "empty", vcodec: "none", acodec: "none", protocolName: "https", ext: "mp4")]
+        ]
+
+        for formats in excludedCases {
+            XCTAssertFalse(YTDLPFormat.hasUsableMediaFormats(formats), "Excluded formats should not be treated as downloadable: \(formats)")
+        }
+    }
+
     // MARK: - PlaylistInfo 解碼測試
 
     func testPlaylistInfoDecoding() throws {

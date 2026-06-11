@@ -65,6 +65,9 @@ class DownloadManager {
 
     /// 持久化服務（可注入以供測試使用）
     private let persistenceService: PersistenceServiceProtocol
+    private let metadataService: YouTubeMetadataServiceProtocol
+    private let ytdlpService: YTDLPServiceProtocol
+    private let notificationService: NotificationServiceProtocol
 
     /// 設定（使用 UserDefaults 直接讀取，避免與 @Observable 衝突）
     var downloadCommand: String {
@@ -93,8 +96,16 @@ class DownloadManager {
     }
 
     /// 可注入初始化（供測試使用）
-    init(persistenceService: PersistenceServiceProtocol) {
+    init(
+        persistenceService: PersistenceServiceProtocol,
+        metadataService: YouTubeMetadataServiceProtocol = YouTubeMetadataService.shared,
+        ytdlpService: YTDLPServiceProtocol = YTDLPService.shared,
+        notificationService: NotificationServiceProtocol = NotificationService.shared
+    ) {
         self.persistenceService = persistenceService
+        self.metadataService = metadataService
+        self.ytdlpService = ytdlpService
+        self.notificationService = notificationService
 
         // 載入已儲存的任務
         tasks = persistenceService.loadTasks()
@@ -240,7 +251,6 @@ class DownloadManager {
     /// 獲取單一影片的元資料
     private func fetchMetadataForTask(_ task: DownloadTask) async {
         TubifyLogger.download.info("獲取影片元資料: \(task.url)")
-        let metadataService = YouTubeMetadataService.shared
 
         // 獲取 cookies 參數（解決 Bot 驗證問題）
         let cookiesArgs = getCookiesArguments()
@@ -277,33 +287,51 @@ class DownloadManager {
                 return  // 不加入下載佇列
             }
 
+            var mediaOptions: (subtitles: [SubtitleTrack], audioTracks: [AudioTrack], formats: [YTDLPFormat])?
+
             // 檢查是否為直播剛結束、正在處理中
             if videoInfo.liveStatus == "post_live" {
-                TubifyLogger.download.info("偵測到直播處理中: \(videoInfo.title)")
-                task.status = .postLive
-                persistenceService.saveTasks(tasks)
-                return  // 不加入下載佇列，等待 YouTube 處理完成
+                if !videoInfo.hasUsableMediaFormats {
+                    do {
+                        let fetchedOptions = try await metadataService.fetchMediaOptions(url: task.url, cookiesArguments: cookiesArgs)
+                        guard YTDLPFormat.hasUsableMediaFormats(fetchedOptions.formats) else {
+                            markTaskAsPostLive(task)
+                            persistenceService.saveTasks(tasks)
+                            return
+                        }
+                        mediaOptions = fetchedOptions
+                    } catch {
+                        handlePostLiveFormatLookupError(error, for: task)
+                        persistenceService.saveTasks(tasks)
+                        return
+                    }
+                }
             }
 
             // 獲取字幕和音軌資訊
-            let mediaOptions = try await metadataService.fetchMediaOptions(url: task.url, cookiesArguments: cookiesArgs)
+            let resolvedMediaOptions: (subtitles: [SubtitleTrack], audioTracks: [AudioTrack], formats: [YTDLPFormat])
+            if let mediaOptions {
+                resolvedMediaOptions = mediaOptions
+            } else {
+                resolvedMediaOptions = try await metadataService.fetchMediaOptions(url: task.url, cookiesArguments: cookiesArgs)
+            }
 
             // 過濾只保留支援的語言
-            let filteredSubtitles = mediaOptions.subtitles.filter { SubtitleTrack.isSupportedLanguage($0.languageCode) }
-            let filteredAudioTracks = mediaOptions.audioTracks.filter { AudioTrack.isSupportedLanguage($0.languageCode) }
+            let filteredSubtitles = resolvedMediaOptions.subtitles.filter { SubtitleTrack.isSupportedLanguage($0.languageCode) }
+            let filteredAudioTracks = resolvedMediaOptions.audioTracks.filter { AudioTrack.isSupportedLanguage($0.languageCode) }
 
             if !filteredSubtitles.isEmpty || filteredAudioTracks.count > 1 {
                 // 有字幕或多個音軌，等待用戶選擇
-                task.availableSubtitles = mediaOptions.subtitles
-                task.availableAudioTracks = mediaOptions.audioTracks
+                task.availableSubtitles = resolvedMediaOptions.subtitles
+                task.availableAudioTracks = resolvedMediaOptions.audioTracks
                 task.status = .waitingForMediaSelection
                 persistenceService.saveTasks(tasks)
 
                 // 通知 UI 顯示媒體選項選擇視窗
                 let request = MediaSelectionRequest(
                     tasks: [task],
-                    availableSubtitles: mediaOptions.subtitles,
-                    availableAudioTracks: mediaOptions.audioTracks,
+                    availableSubtitles: resolvedMediaOptions.subtitles,
+                    availableAudioTracks: resolvedMediaOptions.audioTracks,
                     videoTitle: task.title
                 )
                 onMediaSelectionNeeded?(request)
@@ -344,10 +372,25 @@ class DownloadManager {
         startDownloadQueue()
     }
 
+    private func markTaskAsPostLive(_ task: DownloadTask, message: String = "直播回放仍在處理中，請稍後重試。") {
+        TubifyLogger.download.info("偵測到直播處理中: \(task.title)")
+        task.status = .postLive
+        task.errorMessage = message
+    }
+
+    private func handlePostLiveFormatLookupError(_ error: Error, for task: DownloadTask) {
+        let errorMessage = error.localizedDescription
+        if YTDLPErrorClassification.classify(errorMessage) == .endedLive {
+            markTaskAsPostLive(task)
+        } else {
+            task.status = .failed
+            task.errorMessage = errorMessage
+            notificationService.sendDownloadFailedNotification(title: task.title, error: errorMessage)
+        }
+    }
+
     /// 展開播放清單
     private func expandPlaylist(placeholderTask: DownloadTask, urlString: String, callbackScheme: String? = nil, requestId: String? = nil) async {
-        let metadataService = YouTubeMetadataService.shared
-
         // 獲取 cookies 參數（解決 Bot 驗證問題）
         let cookiesArgs = getCookiesArguments()
 
@@ -395,6 +438,7 @@ class DownloadManager {
         tasks.removeAll { $0.id == request.placeholderTaskId }
 
         var newTasks: [DownloadTask] = []
+        var selectedTaskPairs: [(task: DownloadTask, video: VideoInfo)] = []
         for video in selectedVideos {
             // 檢查是否已存在
             if tasks.contains(where: { $0.url == video.url }) {
@@ -411,6 +455,7 @@ class DownloadManager {
             )
             tasks.append(task)
             newTasks.append(task)
+            selectedTaskPairs.append((task, video))
         }
 
         TubifyLogger.download.info("已新增播放清單中的 \(newTasks.count) 個影片（選取 \(selectedVideos.count)，共 \(request.videos.count) 個）")
@@ -418,17 +463,26 @@ class DownloadManager {
 
         // 收集所有影片的字幕和音軌資訊
         Task {
-            let metadataService = YouTubeMetadataService.shared
             let cookiesArgs = getCookiesArguments()
 
             var allSubtitleCodes: Set<String> = []
             var allAudioCodes: Set<String> = []
-            for task in newTasks {
-                if let mediaOptions = try? await metadataService.fetchMediaOptions(url: task.url, cookiesArguments: cookiesArgs) {
+            for pair in selectedTaskPairs {
+                let task = pair.task
+                do {
+                    let mediaOptions = try await metadataService.fetchMediaOptions(url: task.url, cookiesArguments: cookiesArgs)
+                    if pair.video.liveStatus == "post_live" && !YTDLPFormat.hasUsableMediaFormats(mediaOptions.formats) {
+                        markTaskAsPostLive(task)
+                        continue
+                    }
                     task.availableSubtitles = mediaOptions.subtitles
                     task.availableAudioTracks = mediaOptions.audioTracks
                     allSubtitleCodes.formUnion(mediaOptions.subtitles.map(\.languageCode))
                     allAudioCodes.formUnion(mediaOptions.audioTracks.map(\.languageCode))
+                } catch {
+                    if pair.video.liveStatus == "post_live" {
+                        handlePostLiveFormatLookupError(error, for: task)
+                    }
                 }
             }
 
@@ -437,9 +491,10 @@ class DownloadManager {
             let filteredAudioCodes = allAudioCodes.filter { AudioTrack.isSupportedLanguage($0) }
 
             let newStatus: DownloadStatus = isAllPaused ? .paused : .pending
+            let readyTasks = newTasks.filter { $0.status == .fetchingInfo }
 
             if !filteredSubtitleCodes.isEmpty || filteredAudioCodes.count > 1 {
-                for task in newTasks {
+                for task in readyTasks {
                     task.status = .waitingForMediaSelection
                 }
                 persistenceService.saveTasks(tasks)
@@ -450,18 +505,22 @@ class DownloadManager {
                     .sorted { $0.languageName.localizedCompare($1.languageName) == .orderedAscending }
 
                 let mediaRequest = MediaSelectionRequest(
-                    tasks: newTasks,
+                    tasks: readyTasks,
                     availableSubtitles: mergedSubtitles,
                     availableAudioTracks: mergedAudioTracks,
                     videoTitle: nil
                 )
-                onMediaSelectionNeeded?(mediaRequest)
+                if !readyTasks.isEmpty {
+                    onMediaSelectionNeeded?(mediaRequest)
+                }
             } else {
-                for task in newTasks {
+                for task in readyTasks {
                     task.status = newStatus
                 }
                 persistenceService.saveTasks(tasks)
-                startDownloadQueue()
+                if !readyTasks.isEmpty {
+                    startDownloadQueue()
+                }
             }
         }
     }
@@ -618,7 +677,7 @@ class DownloadManager {
         // 所有下載完成
         let completedCount = tasks.filter { $0.status == .completed }.count
         if completedCount > 0 {
-            NotificationService.shared.sendAllDownloadsCompleteNotification(count: completedCount)
+            notificationService.sendAllDownloadsCompleteNotification(count: completedCount)
         }
     }
 
@@ -628,7 +687,7 @@ class DownloadManager {
         task.progress = 0
 
         do {
-            let outputPath = try await YTDLPService.shared.download(
+            let outputPath = try await ytdlpService.download(
                 taskId: task.id,
                 url: task.url,
                 commandTemplate: downloadCommand,
@@ -655,7 +714,7 @@ class DownloadManager {
             }
 
             // 發送通知
-            NotificationService.shared.sendDownloadCompleteNotification(
+            notificationService.sendDownloadCompleteNotification(
                 title: task.title,
                 outputPath: outputPath
             )
@@ -687,7 +746,9 @@ class DownloadManager {
             }
 
             // 檢查是否為首播影片
-            if let premiereDate = PremiereErrorParser.parsePremiereDate(from: errorMsg) {
+            if YTDLPErrorClassification.classify(errorMsg) == .endedLive {
+                markTaskAsPostLive(task)
+            } else if let premiereDate = PremiereErrorParser.parsePremiereDate(from: errorMsg) {
                 task.status = .scheduled
                 task.premiereDate = premiereDate
                 task.errorMessage = errorMsg
@@ -696,7 +757,7 @@ class DownloadManager {
                 task.errorMessage = errorMsg
 
                 // 發送失敗通知
-                NotificationService.shared.sendDownloadFailedNotification(
+                notificationService.sendDownloadFailedNotification(
                     title: task.title,
                     error: errorMsg
                 )
@@ -711,7 +772,7 @@ class DownloadManager {
     func cancelTask(_ task: DownloadTask) {
         if task.status == .downloading {
             Task {
-                await YTDLPService.shared.cancel(taskId: task.id)
+                await ytdlpService.cancel(taskId: task.id)
             }
         }
 
@@ -722,7 +783,7 @@ class DownloadManager {
     /// 移除任務
     func removeTask(_ task: DownloadTask) async {
         if task.status == .downloading {
-            await YTDLPService.shared.cancel(taskId: task.id)
+            await ytdlpService.cancel(taskId: task.id)
         }
 
         tasks.removeAll { $0.id == task.id }
@@ -731,6 +792,17 @@ class DownloadManager {
 
     /// 重試任務
     func retryTask(_ task: DownloadTask) {
+        if task.status == .postLive {
+            task.status = .fetchingInfo
+            task.progress = 0
+            task.errorMessage = nil
+            persistenceService.saveTasks(tasks)
+            Task {
+                await fetchMetadataForTask(task)
+            }
+            return
+        }
+
         task.status = .pending
         task.progress = 0
         task.errorMessage = nil
@@ -749,7 +821,7 @@ class DownloadManager {
         // 取消所有進行中的下載
         let downloadingTasks = tasks.filter { $0.status == .downloading }
         for task in downloadingTasks {
-            await YTDLPService.shared.cancel(taskId: task.id)
+            await ytdlpService.cancel(taskId: task.id)
         }
 
         tasks.removeAll()
@@ -762,7 +834,7 @@ class DownloadManager {
 
         // 暫停所有正在下載的任務
         for task in tasks where task.status == .downloading {
-            await YTDLPService.shared.cancel(taskId: task.id)
+            await ytdlpService.cancel(taskId: task.id)
             task.status = .paused
         }
 
@@ -792,7 +864,7 @@ class DownloadManager {
     /// 暫停單一任務
     func pauseTask(_ task: DownloadTask) async {
         if task.status == .downloading {
-            await YTDLPService.shared.cancel(taskId: task.id)
+            await ytdlpService.cancel(taskId: task.id)
         }
         task.status = .paused
         persistenceService.saveTasks(tasks)

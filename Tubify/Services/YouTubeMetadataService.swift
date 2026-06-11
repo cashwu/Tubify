@@ -10,6 +10,7 @@ struct VideoInfo: Codable {
     let url: String
     let liveStatus: String?        // 直播狀態：is_live, was_live, not_live 等
     let releaseTimestamp: Int?     // 首播開始時間（Unix timestamp）
+    let formats: [YTDLPFormat]?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -20,7 +21,116 @@ struct VideoInfo: Codable {
         case url = "webpage_url"
         case liveStatus = "live_status"
         case releaseTimestamp = "release_timestamp"
+        case formats
     }
+
+    init(
+        id: String,
+        title: String,
+        thumbnail: String?,
+        duration: Int?,
+        uploader: String?,
+        url: String,
+        liveStatus: String?,
+        releaseTimestamp: Int?,
+        formats: [YTDLPFormat]? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.thumbnail = thumbnail
+        self.duration = duration
+        self.uploader = uploader
+        self.url = url
+        self.liveStatus = liveStatus
+        self.releaseTimestamp = releaseTimestamp
+        self.formats = formats
+    }
+
+    var hasUsableMediaFormats: Bool {
+        YTDLPFormat.hasUsableMediaFormats(formats ?? [])
+    }
+}
+
+/// yt-dlp format entry used to decide whether a post-live replay is downloadable.
+struct YTDLPFormat: Codable, Equatable, CustomStringConvertible {
+    let formatID: String?
+    let vcodec: String?
+    let acodec: String?
+    let protocolName: String?
+    let ext: String?
+
+    enum CodingKeys: String, CodingKey {
+        case formatID = "format_id"
+        case vcodec
+        case acodec
+        case protocolName = "protocol"
+        case ext
+    }
+
+    init(formatID: String?, vcodec: String?, acodec: String?, protocolName: String?, ext: String?) {
+        self.formatID = formatID
+        self.vcodec = vcodec
+        self.acodec = acodec
+        self.protocolName = protocolName
+        self.ext = ext
+    }
+
+    var description: String {
+        "YTDLPFormat(formatID: \(formatID ?? "nil"), vcodec: \(vcodec ?? "nil"), acodec: \(acodec ?? "nil"), protocolName: \(protocolName ?? "nil"), ext: \(ext ?? "nil"))"
+    }
+
+    static func hasUsableMediaFormats(_ formats: [YTDLPFormat]) -> Bool {
+        let mediaFormats = formats.filter(\.isMediaFormat)
+        if mediaFormats.contains(where: \.isCombinedAudioVideo) {
+            return true
+        }
+        return mediaFormats.contains(where: \.isVideoOnly) && mediaFormats.contains(where: \.isAudioOnly)
+    }
+
+    private enum CodecState {
+        case missing
+        case none
+        case present
+    }
+
+    private var isMediaFormat: Bool {
+        guard let formatID, !formatID.isEmpty else { return false }
+        let excludedExtensions: Set<String> = ["jpg", "jpeg", "png", "webp", "mhtml"]
+        if let ext, excludedExtensions.contains(ext.lowercased()) {
+            return false
+        }
+        if protocolName?.lowercased() == "mhtml" {
+            return false
+        }
+        return isCombinedAudioVideo || isVideoOnly || isAudioOnly
+    }
+
+    private var isCombinedAudioVideo: Bool {
+        codecState(vcodec) == .present && codecState(acodec) == .present
+    }
+
+    private var isVideoOnly: Bool {
+        codecState(vcodec) == .present && codecState(acodec) == .none
+    }
+
+    private var isAudioOnly: Bool {
+        codecState(vcodec) == .none && codecState(acodec) == .present
+    }
+
+    private func codecState(_ value: String?) -> CodecState {
+        guard let value else { return .missing }
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalized.isEmpty { return .missing }
+        if normalized == "none" { return .none }
+        return .present
+    }
+}
+
+protocol YouTubeMetadataServiceProtocol {
+    func fetchVideoInfo(url: String, cookiesArguments: [String]) async throws -> VideoInfo
+    func fetchMediaOptions(url: String, cookiesArguments: [String]) async throws -> (subtitles: [SubtitleTrack], audioTracks: [AudioTrack], formats: [YTDLPFormat])
+    func fetchPlaylistInfo(url: String, cookiesArguments: [String]) async throws -> (title: String, videos: [VideoInfo])
+    func fetchTitleFromWebpage(url: String) async -> String?
 }
 
 /// 播放清單資訊
@@ -547,7 +657,7 @@ actor YouTubeMetadataService {
     }
 
     /// 同時獲取字幕和音軌資訊（單次 yt-dlp 呼叫，更有效率）
-    func fetchMediaOptions(url: String, cookiesArguments: [String] = []) async throws -> (subtitles: [SubtitleTrack], audioTracks: [AudioTrack]) {
+    func fetchMediaOptions(url: String, cookiesArguments: [String] = []) async throws -> (subtitles: [SubtitleTrack], audioTracks: [AudioTrack], formats: [YTDLPFormat]) {
         guard let ytdlpPath = await YTDLPService.shared.findYTDLPPath() else {
             throw MetadataError.ytdlpNotFound
         }
@@ -613,15 +723,24 @@ actor YouTubeMetadataService {
         // 解析 JSON 並提取字幕和音軌資訊
         do {
             guard let json = try JSONSerialization.jsonObject(with: outputData) as? [String: Any] else {
-                return ([], [])
+                return ([], [], [])
             }
             let subtitles = parseSubtitles(from: json)
             let audioTracks = parseAudioTracks(from: json)
-            return (subtitles, audioTracks)
+            let formats = parseFormats(from: json)
+            return (subtitles, audioTracks, formats)
         } catch {
             TubifyLogger.ytdlp.error("解析媒體選項失敗: \(error.localizedDescription)")
-            return ([], [])
+            return ([], [], [])
         }
+    }
+
+    private func parseFormats(from json: [String: Any]) -> [YTDLPFormat] {
+        guard let rawFormats = json["formats"] as? [[String: Any]],
+              let data = try? JSONSerialization.data(withJSONObject: rawFormats) else {
+            return []
+        }
+        return (try? JSONDecoder().decode([YTDLPFormat].self, from: data)) ?? []
     }
 
     /// 從 YouTube 網頁直接獲取標題（用於首播影片等 yt-dlp 無法獲取的情況）
@@ -664,3 +783,5 @@ actor YouTubeMetadataService {
         }
     }
 }
+
+extension YouTubeMetadataService: YouTubeMetadataServiceProtocol {}
