@@ -99,6 +99,8 @@ actor YTDLPService {
     static let shared = YTDLPService()
 
     private var runningProcesses: [UUID: Process] = [:]
+    /// 已被使用者取消的任務 ID，用於避免取消後仍觸發 cookies 重試
+    private var cancelledTaskIds: Set<UUID> = []
 
     private init() {}
 
@@ -148,6 +150,14 @@ actor YTDLPService {
     }
 
     /// 下載影片
+    ///
+    /// 策略：先「不帶 cookies」下載——公開影片用此即可，且能避開帶 cookies 時
+    /// YouTube 對串流網址的綁定驗證所造成的 HTTP 403。只有在失敗且錯誤顯示需要登入
+    /// （會員 / 年齡限制 / 私人影片 / 機器人驗證）時，才自動帶 Safari cookies 重試。
+    /// 整個流程全自動，使用者無需手動切換。
+    ///
+    /// 註：重試僅在 commandTemplate 原本含 `--cookies-from-browser safari` 時啟用
+    /// （預設指令即包含）。若使用者自訂指令移除了該參數，視為不使用 cookies，不會重試。
     func download(
         taskId: UUID,
         url: String,
@@ -157,23 +167,85 @@ actor YTDLPService {
         audioSelection: AudioSelection? = nil,
         onProgress: @escaping ProgressCallback
     ) async throws -> String {
-        guard let ytdlpPath = await findYTDLPPath() else {
-            throw YTDLPError.notFound
-        }
-
-        // 如果指令包含 --cookies-from-browser safari，使用 SafariCookiesService 轉換
-        // 這是因為 yt-dlp 子進程沒有完整磁碟存取權限，但 Tubify 有
-        var processedTemplate = commandTemplate
+        // 開始新下載前清除舊的取消標記
+        cancelledTaskIds.remove(taskId)
 
         // 如果有選擇特定音軌語言，修改 format 字串
+        var template = commandTemplate
         if let audioSel = audioSelection, let lang = audioSel.selectedLanguage {
-            processedTemplate = injectAudioLanguage(into: processedTemplate, language: lang)
+            template = injectAudioLanguage(into: template, language: lang)
             TubifyLogger.ytdlp.info("選擇音軌語言: \(lang)")
         }
 
-        if SafariCookiesService.shared.commandNeedsSafariCookies(processedTemplate) {
-            TubifyLogger.cookies.info("偵測到 Safari cookies 參數，轉換為 cookies 文件")
-            processedTemplate = SafariCookiesService.shared.transformCommand(processedTemplate)
+        let hasCookies = SafariCookiesService.shared.commandNeedsSafariCookies(template)
+
+        // 第一次嘗試：移除 cookies 參數（避免帶 cookies 觸發 YouTube 403）
+        let firstTemplate = hasCookies
+            ? SafariCookiesService.shared.removeSafariCookies(template)
+            : template
+
+        do {
+            return try await executeDownload(
+                taskId: taskId,
+                url: url,
+                processedTemplate: firstTemplate,
+                outputDirectory: outputDirectory,
+                subtitleSelection: subtitleSelection,
+                onProgress: onProgress
+            )
+        } catch let error as YTDLPError {
+            // 只有在模板原本帶 cookies、且錯誤顯示需要登入時，才帶 cookies 重試
+            guard hasCookies, Self.shouldRetryWithCookies(error) else { throw error }
+
+            TubifyLogger.ytdlp.info("下載失敗（疑似需要登入），改用 Safari cookies 重試: \(url)")
+            TubifyLogger.cookies.info("偵測到需登入內容，轉換 Safari cookies 文件後重試")
+            let cookieTemplate = SafariCookiesService.shared.transformCommand(template)
+            return try await executeDownload(
+                taskId: taskId,
+                url: url,
+                processedTemplate: cookieTemplate,
+                outputDirectory: outputDirectory,
+                subtitleSelection: subtitleSelection,
+                onProgress: onProgress
+            )
+        }
+    }
+
+    /// 判斷下載錯誤是否可能因「需要登入」而起，需帶 cookies 重試
+    /// 公開影片不帶 cookies 即可成功，因此只在錯誤訊息含登入相關訊號時才重試
+    private static func shouldRetryWithCookies(_ error: YTDLPError) -> Bool {
+        guard case .executionFailed(let message) = error else { return false }
+        let lowered = message.lowercased()
+        // 僅匹配明確的「需登入」訊號，避免如 "account" 之類過於寬鬆的字串
+        // 誤判公開影片的其他錯誤，反而把它推回會觸發 403 的帶 cookies 路徑
+        let loginSignals = [
+            "sign in",
+            "log in",
+            "login required",
+            "members-only",
+            "members only",
+            "available to this channel's members",
+            "join this channel",
+            "private video",
+            "this video is private",
+            "age-restricted",
+            "confirm your age",
+            "confirm you're not a bot"
+        ]
+        return loginSignals.contains { lowered.contains($0) }
+    }
+
+    /// 實際執行一次 yt-dlp 下載（template 已完成音軌與 cookies 處理）
+    private func executeDownload(
+        taskId: UUID,
+        url: String,
+        processedTemplate: String,
+        outputDirectory: String,
+        subtitleSelection: SubtitleSelection?,
+        onProgress: @escaping ProgressCallback
+    ) async throws -> String {
+        guard let ytdlpPath = await findYTDLPPath() else {
+            throw YTDLPError.notFound
         }
 
         // 解析命令模板
@@ -333,6 +405,10 @@ actor YTDLPService {
 
         // 檢查結果
         if terminationStatus != 0 {
+            // 若任務已被使用者取消，視為取消（避免被當成「需登入」而觸發 cookies 重試）
+            if cancelledTaskIds.contains(taskId) {
+                throw YTDLPError.cancelled
+            }
             let errorMessage = resultHolder.lastError ?? "未知錯誤 (退出碼: \(terminationStatus))"
             LogFileManager.shared.logDownloadError(taskId: taskId, error: errorMessage)
             throw YTDLPError.executionFailed(errorMessage)
@@ -411,6 +487,8 @@ actor YTDLPService {
 
     /// 取消下載
     func cancel(taskId: UUID) {
+        // 標記為已取消，避免取消後 executeDownload 把錯誤誤判為「需登入」而帶 cookies 重試
+        cancelledTaskIds.insert(taskId)
         if let process = runningProcesses[taskId] {
             process.terminate()
             runningProcesses.removeValue(forKey: taskId)

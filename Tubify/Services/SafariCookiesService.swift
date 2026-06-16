@@ -98,6 +98,17 @@ class SafariCookiesService {
                command.contains("--cookies-from-browser=safari")
     }
 
+    /// 從指令中移除 Safari cookies 參數
+    /// 用於「先不帶 cookies 下載」的第一次嘗試，避免帶 cookies 觸發 YouTube 403
+    func removeSafariCookies(_ command: String) -> String {
+        return command
+            .replacingOccurrences(of: "--cookies-from-browser safari", with: "")
+            .replacingOccurrences(of: "--cookies-from-browser=safari", with: "")
+            // 將移除後殘留的連續空白收斂為單一空白
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
+    }
+
     // MARK: - BinaryCookies 解析
 
     /// Cookie 結構
