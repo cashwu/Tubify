@@ -143,6 +143,58 @@ final class YTDLPServiceTests: XCTestCase {
         XCTAssertEqual(YTDLPErrorClassification.classify(unavailableError), .other)
     }
 
+    // MARK: - 帶 cookies 重試判斷測試（shouldRetryWithCookies）
+
+    /// 迴歸測試：Instagram「empty media response / 需登入 / 改用 cookies」錯誤
+    /// 必須觸發帶 cookies 重試。先前因訊號清單未涵蓋此訊息，導致非 YouTube
+    /// 需登入內容第一次（不帶 cookies）失敗後不重試，直接報錯。
+    func testShouldRetryWithCookiesForInstagramEmptyMediaResponse() {
+        let igError = YTDLPError.executionFailed(
+            "ERROR: [Instagram] DaILLiOzKyk: Instagram sent an empty media response. " +
+            "Check if this post is accessible in your browser without being logged-in. " +
+            "If it is not, then use --cookies-from-browser or --cookies for the authentication."
+        )
+        XCTAssertTrue(YTDLPService.shouldRetryWithCookies(igError))
+    }
+
+    /// 既有的 YouTube 需登入訊號仍應觸發重試（避免迴歸）。
+    func testShouldRetryWithCookiesForKnownLoginSignals() {
+        let signals = [
+            "ERROR: Private video. Sign in if you've been granted access to this video",
+            "ERROR: This video is age-restricted and only available on YouTube",
+            "ERROR: Join this channel to get access to members-only content",
+            "ERROR: Sign in to confirm you're not a bot"
+        ]
+        for message in signals {
+            XCTAssertTrue(
+                YTDLPService.shouldRetryWithCookies(.executionFailed(message)),
+                "應觸發帶 cookies 重試：\(message)"
+            )
+        }
+    }
+
+    /// 公開影片的其他錯誤不應觸發帶 cookies 重試（避免把公開影片推回會觸發 403 的帶 cookies 路徑）。
+    func testShouldNotRetryWithCookiesForPublicVideoErrors() {
+        let nonLoginErrors = [
+            "ERROR: [youtube] abc123: Video unavailable",
+            "ERROR: Unable to download webpage: HTTP Error 404: Not Found",
+            "ERROR: Unsupported URL: https://www.threads.com/@user/post/abc/media"
+        ]
+        for message in nonLoginErrors {
+            XCTAssertFalse(
+                YTDLPService.shouldRetryWithCookies(.executionFailed(message)),
+                "不應觸發帶 cookies 重試：\(message)"
+            )
+        }
+    }
+
+    /// 非 executionFailed 的錯誤一律不重試。
+    func testShouldNotRetryWithCookiesForNonExecutionErrors() {
+        XCTAssertFalse(YTDLPService.shouldRetryWithCookies(.notFound))
+        XCTAssertFalse(YTDLPService.shouldRetryWithCookies(.cancelled))
+        XCTAssertFalse(YTDLPService.shouldRetryWithCookies(.parseError("bad output")))
+    }
+
     // MARK: - DownloadResultHolder 測試
 
     func testDownloadResultHolderSetOutputPath() {

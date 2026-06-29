@@ -213,7 +213,7 @@ actor YTDLPService {
 
     /// 判斷下載錯誤是否可能因「需要登入」而起，需帶 cookies 重試
     /// 公開影片不帶 cookies 即可成功，因此只在錯誤訊息含登入相關訊號時才重試
-    private static func shouldRetryWithCookies(_ error: YTDLPError) -> Bool {
+    static func shouldRetryWithCookies(_ error: YTDLPError) -> Bool {
         guard case .executionFailed(let message) = error else { return false }
         let lowered = message.lowercased()
         // 僅匹配明確的「需登入」訊號，避免如 "account" 之類過於寬鬆的字串
@@ -222,6 +222,8 @@ actor YTDLPService {
             "sign in",
             "log in",
             "login required",
+            "logged-in",
+            "logged in",
             "members-only",
             "members only",
             "available to this channel's members",
@@ -230,7 +232,12 @@ actor YTDLPService {
             "this video is private",
             "age-restricted",
             "confirm your age",
-            "confirm you're not a bot"
+            "confirm you're not a bot",
+            // yt-dlp 在多數需登入的網站（Instagram 等）會建議改用 cookies；
+            // 以此通用提示作為帶 cookies 重試的訊號。
+            "use --cookies",
+            "--cookies-from-browser",
+            "empty media response"
         ]
         return loginSignals.contains { lowered.contains($0) }
     }
