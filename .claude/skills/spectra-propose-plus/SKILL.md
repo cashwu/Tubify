@@ -75,6 +75,17 @@ If no argument is provided, the workflow will extract requirements from conversa
    - If related specs are found, display them but do NOT stop or ask for confirmation — continue to the next step
    - If no related specs are found, silently proceed without mentioning the scan
 
+
+**Read open signals for prioritization (propose-plus only)**
+
+<!-- SIGNALS-READ-STEP -->
+
+   After scanning existing specs, read the signals under `openspec/signals/` whose frontmatter `status` is `open`, and use them to inform how you prioritize this change's scope. This step belongs to `spectra-propose-plus` only.
+
+   - Read every signal file under `openspec/signals/` and keep only those whose frontmatter `status` is `open`. Selecting which `open` signals are relevant to the current requirement is best-effort agent judgment.
+   - Surface the relevant `open` signals as an INFORMATIONAL prioritization summary — for example, which recurring issue classes or frictions might relate to this change — to help decide what to include in or exclude from scope.
+   - This read is purely informational. It MUST NOT block the workflow, MUST NOT require user confirmation to continue, and MUST NOT modify, create, or delete any signal. Read signals only; never write them.
+   - If `openspec/signals/` is absent or contains no `open` signal, continue SILENTLY without printing any summary.
 4. **Create the change directory**
 
    ```bash
@@ -305,7 +316,8 @@ If no argument is provided, the workflow will extract requirements from conversa
 
    **Round limit and pass condition**
    - Run max 6 rounds.
-   - A round passes only when `quality_score > 9` and `critical_gap == false`.
+   - After the confidence filter, the main agent derives the round decision mechanically (no scoring sub-agent): if any surviving finding has `severity == Critical`, the decision is `next_round`; otherwise if any surviving finding has `severity == Warning`, the decision is `next_round`; otherwise (only `Suggestion` findings remain, or none) the decision is `passed`.
+   - A round passes only when, after the confidence filter, there is no surviving Critical and no surviving Warning finding.
    - If round 6 still does not meet the pass condition, write `decision: aborted`, print the unresolved findings, and end the plus workflow.
    - If a round passes, write `decision: passed`, stop the loop, and continue to the normal final validation or completion summary.
 
@@ -314,11 +326,10 @@ If no argument is provided, the workflow will extract requirements from conversa
      - **Reviewer A — Adherence**: checks that the artifacts (and for apply-plus, the implementation diff) match the prior artifacts. For propose-plus: proposal ↔ design ↔ spec ↔ tasks internal consistency, scope coverage, and acceptance criteria completeness. For apply-plus: implementation matches `design.md` Implementation Contract, `tasks.md` task descriptions, and `spec.md` requirements; `implementation-notes.md` deviations are justified.
      - **Reviewer B — Quality**: scans for bugs, regressions, missing tests, security sharp edges, and risks NOT directly named in the artifacts. For propose-plus: missing risks, unstated assumptions, scope gaps. For apply-plus: logic bugs, error-handling gaps at real boundaries, untested edge cases from spec `##### Example:` blocks.
    - Both reviewers receive identical context (artifact paths and, for apply-plus, the changed-file list) and return findings independently. Do not pass Reviewer A output into Reviewer B or vice versa.
-   - After both reviewers complete, the main agent aggregates findings (deduplicate identical issues by `location + summary`) and applies the confidence filter (see below) before passing the filtered set to the rater.
-   - Each round MUST spawn a separate fresh sub-agent for the rater role.
-   - The reviewer roles and the rater are independent sub-agent calls; do not perform any of them inline in the main agent context.
+   - After both reviewers complete, the main agent aggregates findings (deduplicate identical issues by `location + summary`) and applies the confidence filter (see below).
+   - The reviewer roles are independent sub-agent calls; do not perform either of them inline in the main agent context.
    - Do not reuse a sub-agent across rounds, and do not pass prior sub-agent state into the next round.
-   - The rater receives the filtered, aggregated reviewer findings as input, then independently returns `quality_score`, `critical_gap`, and rationale.
+   - After the confidence filter, the main agent derives the round decision mechanically from the filtered findings (see "Round limit and pass condition"); there is no separate scoring sub-agent.
 
    **Reviewer output requirements**
    - Both reviewers MUST classify each finding into Critical, Warning, or Suggestion.
@@ -339,12 +350,12 @@ If no argument is provided, the workflow will extract requirements from conversa
    - `100` — Certain. Evidence directly confirms the issue, OR the finding cites a specific artifact clause (a `SHALL` in `spec.md`, an Implementation Contract item in `design.md`, a task description line in `tasks.md`, a non-goal in `proposal.md`) that the artifact set or implementation provably does not satisfy.
    - **Direct artifact-requirement violations MUST score `100`.** If a reviewer can name the exact SHALL / contract item / task line being violated, the finding is objectively verifiable and SHALL NOT be downgraded below `100`. This invariant guarantees the confidence filter never demotes an artifact violation to Suggestion.
 
-   **Confidence filter (applied by main agent before rater)**
+   **Confidence filter (applied by main agent before the decision)**
    - Drop any finding with `confidence < 50`. These do not appear in the round file.
    - Downgrade findings with `confidence ∈ [50, 80)` to `Suggestion` regardless of original severity. They appear in the round file under Suggestion for visibility but do NOT count as Critical.
    - Only findings with `confidence ≥ 80` may be classified as Critical or Warning in the final round file.
    - `critical_gap` is `true` only when at least one finding survives filtering with `severity == Critical` AND `confidence ≥ 80`.
-   - The filter exists to keep the review loop signal-to-noise high; the rater sees only the filtered set.
+   - The filter exists to keep the review loop signal-to-noise high; only the filtered set feeds the mechanical decision.
 
    **Common false positives — do NOT flag**
    The following SHOULD NOT be reported, or if reported MUST be scored ≤ 25:
@@ -358,18 +369,17 @@ If no argument is provided, the workflow will extract requirements from conversa
    - Suggestions to refactor unrelated code touched only incidentally — these conflict with Surgical Changes.
 
    **Failure handling**
-   - If a reviewer or the rater returns no response or malformed output, retry once with a fresh sub-agent invocation for the same role.
+   - If a reviewer returns no response or malformed output, retry once with a fresh sub-agent invocation for the reviewer role.
    - If both parallel reviewers fail in the same round, treat it as a single role failure (the reviewer role); retry once.
    - If the same role fails two consecutive times in a single round, abort the entire plus workflow.
    - On abort from sub-agent failure, write the current round file with `decision: aborted` and include the failure note in `## Decision`.
    - Do not mark a malformed or failed round as passed, and do not continue to the next round after two consecutive failures.
 
-   **Rater output requirements**
-   - The rater writes `quality_score` as a number from 0 to 10.
-   - The rater writes `critical_gap` as `true` or `false`.
-   - The rater writes one concise rationale paragraph.
-   - The rater must not override missing reviewer evidence by optimism alone.
-   - The rater SHALL only consider findings that survived the confidence filter; do not re-introduce filtered-out findings.
+   **Decision record requirements**
+   - The main agent records the count of surviving `Critical` findings and the count of surviving `Warning` findings after the confidence filter.
+   - The main agent records `critical_gap` as `true` or `false` (`true` only when at least one surviving finding is `Critical`).
+   - The main agent records one concise rationale paragraph explaining why the round is `passed`, `next_round`, or `aborted`.
+   - The decision MUST follow only from findings that survived the confidence filter; do not re-introduce filtered-out findings, and do not pass a round that has a surviving Critical or Warning finding.
 
    **Round file path**
    - Create the reviews directory if needed: `openspec/changes/<change>/reviews/`.
@@ -381,7 +391,7 @@ If no argument is provided, the workflow will extract requirements from conversa
    **Round file schema**
    - `# Propose Plus Review — Round <N>` or `# Apply Plus Review — Round <N>`
    - `## Reviewer Findings` — list aggregated, post-filter findings grouped under Critical / Warning / Suggestion. Each entry MUST include `severity`, `confidence`, `location`, `summary`, `recommendation`, and which reviewer raised it (`A` or `B`; `A+B` if both raised it independently).
-   - `## Rating` — `quality_score`, `critical_gap`, rationale paragraph.
+   - `## Rating` — surviving `Critical` count, surviving `Warning` count, `critical_gap`, rationale paragraph.
    - `## Fix Actions`
    - `## Decision` — value MUST be exactly one of `passed`, `next_round`, or `aborted`.
 
@@ -392,15 +402,26 @@ If no argument is provided, the workflow will extract requirements from conversa
    - If no fixes are needed because the round passed, write `None; pass condition met.`
 
    **Round file language**
-   - The Round file (`openspec/changes/<change>/reviews/<skill>-r<N>.md`) prose content — Reviewer Findings, Rater rationale, Fix Actions descriptions, and the `## Decision` explanation — MUST be written in Traditional Chinese.
+   - The Round file (`openspec/changes/<change>/reviews/<skill>-r<N>.md`) prose content — Reviewer Findings, Rating rationale, Fix Actions descriptions, and the `## Decision` explanation — MUST be written in Traditional Chinese.
    - **Keep the following verbatim (do not translate):**
      - Section headings: `# Propose Plus Review — Round <N>`, `# Apply Plus Review — Round <N>`, `## Reviewer Findings`, `## Rating`, `## Fix Actions`, `## Decision`.
      - The `decision` value: one of `passed`, `next_round`, `aborted`.
-     - Field names and their values: `quality_score` (number 0–10), `critical_gap` (`true` / `false`), `severity`, `confidence`, `location`, `summary`, `recommendation`.
+     - Field names and their values: `critical_gap` (`true` / `false`), `severity`, `confidence`, `location`, `summary`, `recommendation`.
      - Direct quotations from spec delta, master spec, or any other English-language artifact.
      - CLI commands, file paths, code identifiers, artifact IDs, capability slugs.
    - This rule applies to both `spectra-propose-plus` and `spectra-apply-plus` round files because they share this review-loop template.
    - If the user explicitly requests another language later, follow the latest user instruction.
+
+   **Signals write step**
+
+   <!-- SIGNALS-WRITE-STEP -->
+   - **When it runs**: Run this step only after the review loop has ENDED — that is, the final round file's `decision` is `passed` or `aborted` — and the mechanical decision has already been recorded. This step MUST run only after that decision is recorded, and it MUST NOT change the `decision` of any round file. It applies to both `spectra-propose-plus` and `spectra-apply-plus`, since this template is shared.
+   - **Target set**: The target set is every finding that, in ANY single round of THIS change's loop, survived the confidence filter classified as `Critical` or `Warning`. Cover findings from every round, not only the final round — a finding that was caught and fixed in an early round of an otherwise-passing loop still produces a signal. Deduplicate the target set by issue class, so an issue class seen across multiple rounds is processed exactly once. This issue-class deduplication is INDEPENDENT of any per-round `location + summary` aggregation deduplication used elsewhere in the loop. Findings classified `Suggestion`, and any finding with `confidence < 80`, MUST NOT produce a signal.
+   - **Matching rubric**: For each deduplicated finding class, read the existing signals under `openspec/signals/` and judge issue-class match by: SAME capability or domain AND SAME underlying rule or anti-pattern. Differing free-text wording alone does NOT make a different class; a different root cause DOES make a different class. When uncertain, PREFER creating a new signal over merging into an existing one.
+   - **On match to an existing `open` signal**: Reuse that signal's slug and update it in place — increment `occurrences`, update `last_seen` to today (`YYYY-MM-DD`), append one `## Occurrences` entry (date, change name, source skill + round, and a one-line context), and append the source round file path to `links`. Do NOT change its `status`.
+   - **On no `open` match** (including when only an `addressed` or `dismissed` signal matches): Create a NEW signal. Before coining the `<slug>`, list the existing `openspec/signals/*.md` files and choose a `<slug>` that does NOT already exist. The slug is a short semantic ASCII kebab-case issue-class identifier matching `^[a-z0-9]+(-[a-z0-9]+)*$` (e.g. `spec-requirement-no-backing-task`); it is NOT a mechanical transform of `location + summary`. If the natural slug is already taken, disambiguate with a suffix. Creating a signal MUST NOT overwrite any existing signal file and MUST NOT change any existing signal's human-maintained `status`. The new signal has `status: open`, `occurrences: 1`, and `first_seen` = `last_seen` = today.
+   - **Signal file schema**: Each signal file has frontmatter with `id` (= slug), `type` (default `recurring-finding` for review-loop-written signals), `status`, `occurrences`, `first_seen`, `last_seen`, and `links`; followed by a title, a description paragraph, and a `## Occurrences` section.
+   - **Failure handling**: If writing under `openspec/signals/` fails, print a warning but do NOT fail the plus workflow — signals are an auxiliary layer. If there are no qualifying findings, write nothing.
 10. **Validation**
 
     ```bash
