@@ -520,8 +520,6 @@ struct ContentView: View {
             break
         case .invalidFormat:
             urlErrorMessage = "URL 格式不正確"
-        case .notYouTubeURL:
-            urlErrorMessage = "僅支援 YouTube 網址"
         }
     }
 
@@ -534,8 +532,7 @@ struct ContentView: View {
             guard !trimmed.isEmpty else { continue }
 
             // 只處理看起來像 URL 的文字
-            guard trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") ||
-                  trimmed.contains("youtube.com") || trimmed.contains("youtu.be") else {
+            guard trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") else {
                 continue
             }
 

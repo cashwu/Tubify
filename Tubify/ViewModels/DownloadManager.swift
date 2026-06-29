@@ -5,7 +5,6 @@ import SwiftUI
 enum URLValidationResult {
     case success
     case invalidFormat      // 格式不正確（如 markdown 連結）
-    case notYouTubeURL     // 非 YouTube 網址
     case alreadyExists     // 已在佇列中
 }
 
@@ -171,20 +170,15 @@ class DownloadManager {
             return .invalidFormat
         }
 
-        // 驗證是否為 YouTube URL
-        guard isValidYouTubeURL(urlString) else {
-            TubifyLogger.download.error("非 YouTube URL: \(urlString)")
-            return .notYouTubeURL
-        }
-
         // 檢查是否已存在
         if tasks.contains(where: { $0.url == urlString }) {
             TubifyLogger.download.info("URL 已在佇列中: \(urlString)")
             return .alreadyExists
         }
 
-        // 使用靜態方法檢查是否為播放清單（不需要 await）
-        let isPlaylist = YouTubeMetadataService.isPlaylistSync(url: urlString)
+        // 播放清單偵測／展開與混合 URL 提示僅適用於 YouTube 網址；
+        // 非 YouTube 網址一律走單一任務路徑，由 yt-dlp 自行處理清單。
+        let isPlaylist = isValidYouTubeURL(urlString) && YouTubeMetadataService.isPlaylistSync(url: urlString)
 
         // 檢查是否同時包含影片 ID 和播放清單 ID（混合 URL）
         if isPlaylist, let components = URLComponents(string: urlString),
@@ -218,8 +212,10 @@ class DownloadManager {
             task.callbackScheme = callbackScheme
             task.requestId = requestId
 
-            // 使用靜態方法提取 video ID 來獲取縮圖（不需要 await）
-            if let videoId = YouTubeMetadataService.extractVideoIdSync(from: urlString) {
+            // 僅 YouTube 網址預取 ytimg 縮圖；extractVideoIdSync 的 11 碼樣式會誤命中
+            // 非 YouTube 網址（如 Instagram）的路徑片段，故須閘控。
+            if isValidYouTubeURL(urlString),
+               let videoId = YouTubeMetadataService.extractVideoIdSync(from: urlString) {
                 task.thumbnailURL = "https://i.ytimg.com/vi/\(videoId)/mqdefault.jpg"
             }
 
@@ -690,7 +686,7 @@ class DownloadManager {
             let outputPath = try await ytdlpService.download(
                 taskId: task.id,
                 url: task.url,
-                commandTemplate: downloadCommand,
+                commandTemplate: effectiveDownloadCommand(for: task.url),
                 outputDirectory: downloadFolder,
                 subtitleSelection: task.subtitleSelection,
                 audioSelection: task.audioSelection
@@ -902,6 +898,13 @@ class DownloadManager {
         }
 
         return true
+    }
+
+    /// 依網址選擇下載指令模板：YouTube 網址沿用使用者可設定的 downloadCommand，
+    /// 其他網址使用固定的通用指令 genericDownloadCommand。
+    /// 設為 internal 以便測試透過 @testable import 直接呼叫。
+    func effectiveDownloadCommand(for urlString: String) -> String {
+        isValidYouTubeURL(urlString) ? downloadCommand : AppSettingsDefaults.genericDownloadCommand
     }
 
     /// 驗證 YouTube URL

@@ -12,6 +12,9 @@ enum AppSettingsKeys {
 enum AppSettingsDefaults {
     // 使用 Safari cookies 下載（需要完整磁碟存取權限）
     static let downloadCommand = "yt-dlp -f \"bv[ext=mp4][vcodec^=avc]+ba[ext=m4a]/b[ext=mp4][vcodec^=avc]\" --cookies-from-browser safari \"$youtubeUrl\""
+    // 非 YouTube 網址使用的通用下載指令（固定常數，不可由使用者編輯）。
+    // 結構與 downloadCommand 相同，僅 -f 格式選擇器改為通用值，以涵蓋 yt-dlp 支援的其他網站。
+    static let genericDownloadCommand = "yt-dlp -f \"bv*+ba/b\" --cookies-from-browser safari \"$youtubeUrl\""
     static let downloadFolder = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first?.path ?? "~/Downloads"
     static let maxConcurrentDownloads: Int = 2 // 最大同時下載數量（1-5）
     static let autoRemoveCompleted: Bool = true // 下載完成後自動從列表移除

@@ -272,6 +272,82 @@ final class DownloadManagerTests: XCTestCase {
         XCTAssertEqual(mockNotificationService.failedNotifications.count, 1)
     }
 
+    // MARK: - 依網址分流下載指令（command routing）
+
+    /// YouTube 任務經 queue flow 下載時，downloadSingleTask 實際使用既有 downloadCommand（零回退）。
+    func testDownloadSingleTaskUsesExistingCommandForYouTubeURL() async {
+        // Arrange：直接放入 .pending YouTube 任務，不走 addURL 的 metadata async flow
+        let youtubeTask = createTestTask(
+            url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            status: .pending
+        )
+        manager.tasks = [youtubeTask]
+
+        // Act
+        manager.startDownloadQueue()
+        let didDownload = await waitUntil {
+            !self.mockYTDLPService.downloadedCommandTemplates.isEmpty
+        }
+
+        // Assert
+        XCTAssertTrue(didDownload)
+        XCTAssertEqual(mockYTDLPService.downloadedCommandTemplates.first, manager.downloadCommand)
+    }
+
+    /// 非 YouTube 任務經 queue flow 下載時，downloadSingleTask 使用 genericDownloadCommand。
+    func testDownloadSingleTaskUsesGenericCommandForNonYouTubeURL() async {
+        // Arrange
+        let nonYouTubeTask = createTestTask(
+            url: "https://x.com/user/status/123",
+            status: .pending
+        )
+        manager.tasks = [nonYouTubeTask]
+
+        // Act
+        manager.startDownloadQueue()
+        let didDownload = await waitUntil {
+            !self.mockYTDLPService.downloadedCommandTemplates.isEmpty
+        }
+
+        // Assert
+        XCTAssertTrue(didDownload)
+        XCTAssertEqual(mockYTDLPService.downloadedCommandTemplates.first, AppSettingsDefaults.genericDownloadCommand)
+    }
+
+    /// effectiveDownloadCommand(for:) 對 YouTube 支援形狀回傳 downloadCommand。
+    func testEffectiveDownloadCommandReturnsDownloadCommandForYouTubeURLs() {
+        let youtubeURLs = [
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "https://youtu.be/dQw4w9WgXcQ",
+            "https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf"
+        ]
+        for url in youtubeURLs {
+            XCTAssertEqual(
+                manager.effectiveDownloadCommand(for: url),
+                manager.downloadCommand,
+                "YouTube 網址應使用 downloadCommand：\(url)"
+            )
+        }
+    }
+
+    /// effectiveDownloadCommand(for:) 對非 YouTube 網址與「不受支援的 YouTube-domain 形狀」皆回傳 genericDownloadCommand，
+    /// 藉此排除以 domain 為判斷的實作。
+    func testEffectiveDownloadCommandReturnsGenericForNonYouTubeAndUnsupportedShapes() {
+        let genericURLs = [
+            "https://x.com/user/status/123",
+            "https://www.instagram.com/reel/abc123/",
+            "https://www.youtube.com/@channelname",
+            "https://www.youtube.com/watch?list=PL123"
+        ]
+        for url in genericURLs {
+            XCTAssertEqual(
+                manager.effectiveDownloadCommand(for: url),
+                AppSettingsDefaults.genericDownloadCommand,
+                "應使用 genericDownloadCommand：\(url)"
+            )
+        }
+    }
+
     func testRetryPostLiveTaskRerunsMetadataAndDownloadFlow() async {
         // Arrange
         let url = "https://www.youtube.com/watch?v=TR_NgGeXWGc"
@@ -1029,6 +1105,7 @@ final class MockYouTubeMetadataService: YouTubeMetadataServiceProtocol {
 final class MockYTDLPService: YTDLPServiceProtocol {
     var outputPath = "/tmp/test.mp4"
     private(set) var downloadedURLs: [String] = []
+    private(set) var downloadedCommandTemplates: [String] = []
     private(set) var cancelledTaskIDs: [UUID] = []
     var downloadError: Error?
 
@@ -1042,6 +1119,7 @@ final class MockYTDLPService: YTDLPServiceProtocol {
         onProgress: @escaping ProgressCallback
     ) async throws -> String {
         downloadedURLs.append(url)
+        downloadedCommandTemplates.append(commandTemplate)
         if let downloadError {
             throw downloadError
         }
