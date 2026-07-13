@@ -80,6 +80,551 @@ final class DownloadManagerTests: XCTestCase {
         return condition()
     }
 
+    private func makeManager(with tasks: [DownloadTask]) -> DownloadManager {
+        mockPersistence.savedTasks = tasks
+        mockMetadataService.videoInfo = VideoInfo(
+            id: "recovered",
+            title: "Recovered Video",
+            thumbnail: nil,
+            duration: 60,
+            uploader: "Test",
+            url: tasks.first?.url ?? "https://www.youtube.com/watch?v=recovered",
+            liveStatus: nil,
+            releaseTimestamp: nil
+        )
+        return DownloadManager(
+            persistenceService: mockPersistence,
+            metadataService: mockMetadataService,
+            ytdlpService: mockYTDLPService,
+            notificationService: mockNotificationService
+        )
+    }
+
+    // MARK: - UI-activated persisted task recovery
+
+    func testPersistedTasksDoNotRecoverBeforeUIActivation() async {
+        let task = createTestTask(status: .downloading)
+        manager = makeManager(with: [task])
+
+        try? await Task.sleep(for: .milliseconds(50))
+
+        XCTAssertEqual(task.status, .downloading)
+        XCTAssertTrue(mockYTDLPService.downloadedURLs.isEmpty)
+        XCTAssertTrue(mockMetadataService.fetchedVideoURLs.isEmpty)
+    }
+
+    func testRecoveryStartsInterruptedAndPendingDownloadsOnlyOnce() async {
+        let downloading = createTestTask(url: "https://example.com/downloading", status: .downloading)
+        let pending = createTestTask(url: "https://example.com/pending", status: .pending)
+        manager = makeManager(with: [downloading, pending])
+        let sessionID = UUID()
+
+        manager.resumePersistedTasksAfterUIActivation(sessionID: sessionID)
+        manager.resumePersistedTasksAfterUIActivation(sessionID: sessionID)
+        let completed = await waitUntil {
+            self.mockYTDLPService.downloadedURLs.count == 2
+        }
+
+        XCTAssertTrue(completed)
+        XCTAssertEqual(Set(mockYTDLPService.downloadedURLs), Set([downloading.url, pending.url]))
+    }
+
+    func testRecoveryRoutesFetchingInfoByPersistedSource() async {
+        let single = createTestTask(url: "https://www.youtube.com/watch?v=single", title: "載入中...", status: .fetchingInfo)
+        let child = createTestTask(url: "https://www.youtube.com/watch?v=child&list=PLtest", title: "Playlist Child", status: .fetchingInfo)
+        let placeholder = createTestTask(url: "https://www.youtube.com/playlist?list=PLtest", title: "載入播放清單中...", status: .fetchingInfo)
+        mockMetadataService.playlistInfo = (
+            "Recovered Playlist",
+            [VideoInfo(id: "one", title: "One", thumbnail: nil, duration: 60, uploader: nil, url: "https://www.youtube.com/watch?v=one", liveStatus: nil, releaseTimestamp: nil)]
+        )
+        manager = makeManager(with: [single, child, placeholder])
+        var playlistRequests: [PlaylistSelectionRequest] = []
+        manager.onPlaylistSelectionNeeded = { playlistRequests.append($0) }
+
+        manager.resumePersistedTasksAfterUIActivation(sessionID: UUID())
+        let routed = await waitUntil {
+            self.mockMetadataService.fetchedVideoURLs.count == 2 &&
+            self.mockMetadataService.fetchedPlaylistURLs.count == 1 &&
+            playlistRequests.count == 1
+        }
+
+        XCTAssertTrue(routed)
+        XCTAssertEqual(Set(mockMetadataService.fetchedVideoURLs), Set([single.url, child.url]))
+        XCTAssertEqual(mockMetadataService.fetchedPlaylistURLs, [placeholder.url])
+    }
+
+    func testRecoveryRebuildsMediaRequestAndReplaysItOncePerUISession() {
+        let waiting = createTestTask(title: "Waiting", status: .waitingForMediaSelection)
+        waiting.availableSubtitles = [SubtitleTrack(languageCode: "en")]
+        waiting.availableAudioTracks = []
+        manager = makeManager(with: [waiting])
+        var receivedTaskIDs: [[UUID]] = []
+        manager.onMediaSelectionNeeded = { request in
+            receivedTaskIDs.append(request.tasks.map(\.id))
+        }
+        let firstSession = UUID()
+
+        manager.resumePersistedTasksAfterUIActivation(sessionID: firstSession)
+        manager.resumePersistedTasksAfterUIActivation(sessionID: firstSession)
+        manager.deactivateUI(sessionID: firstSession)
+        manager.onMediaSelectionNeeded = { request in
+            receivedTaskIDs.append(request.tasks.map(\.id))
+        }
+        manager.resumePersistedTasksAfterUIActivation(sessionID: UUID())
+
+        XCTAssertEqual(receivedTaskIDs, [[waiting.id], [waiting.id]])
+        XCTAssertTrue(mockMetadataService.fetchedVideoURLs.isEmpty)
+    }
+
+    func testRecoveryReplaysPlaylistRequestOncePerUISessionWithoutRefetching() async {
+        let placeholder = createTestTask(
+            url: "https://www.youtube.com/playlist?list=PLreplay",
+            title: "載入播放清單中...",
+            status: .fetchingInfo
+        )
+        mockMetadataService.playlistInfo = (
+            "Replay Playlist",
+            [VideoInfo(
+                id: "one",
+                title: "One",
+                thumbnail: nil,
+                duration: 60,
+                uploader: nil,
+                url: "https://www.youtube.com/watch?v=one",
+                liveStatus: nil,
+                releaseTimestamp: nil
+            )]
+        )
+        manager = makeManager(with: [placeholder])
+        var receivedRequestIDs: [UUID] = []
+        manager.onPlaylistSelectionNeeded = { receivedRequestIDs.append($0.id) }
+        let firstSession = UUID()
+
+        manager.resumePersistedTasksAfterUIActivation(sessionID: firstSession)
+        let firstRequestArrived = await waitUntil { receivedRequestIDs.count == 1 }
+        manager.resumePersistedTasksAfterUIActivation(sessionID: firstSession)
+        manager.deactivateUI(sessionID: firstSession)
+        manager.onPlaylistSelectionNeeded = { receivedRequestIDs.append($0.id) }
+        manager.resumePersistedTasksAfterUIActivation(sessionID: UUID())
+
+        XCTAssertTrue(firstRequestArrived)
+        XCTAssertEqual(receivedRequestIDs.count, 2)
+        XCTAssertEqual(receivedRequestIDs.first, receivedRequestIDs.last)
+        XCTAssertEqual(mockMetadataService.fetchedPlaylistURLs, [placeholder.url])
+    }
+
+    func testVideoOrPlaylistChoiceRequestReplaysOncePerUISession() {
+        manager = makeManager(with: [])
+        var receivedRequestIDs: [UUID] = []
+        manager.onVideoOrPlaylistChoiceNeeded = { receivedRequestIDs.append($0.id) }
+        let firstSession = UUID()
+        manager.resumePersistedTasksAfterUIActivation(sessionID: firstSession)
+
+        XCTAssertEqual(
+            manager.addURL("https://www.youtube.com/watch?v=abcdefghijk&list=PLreplay"),
+            .success
+        )
+        manager.resumePersistedTasksAfterUIActivation(sessionID: firstSession)
+        manager.deactivateUI(sessionID: firstSession)
+        manager.onVideoOrPlaylistChoiceNeeded = { receivedRequestIDs.append($0.id) }
+        manager.resumePersistedTasksAfterUIActivation(sessionID: UUID())
+
+        XCTAssertEqual(receivedRequestIDs.count, 2)
+        XCTAssertEqual(receivedRequestIDs.first, receivedRequestIDs.last)
+        XCTAssertTrue(mockMetadataService.fetchedVideoURLs.isEmpty)
+        XCTAssertTrue(mockMetadataService.fetchedPlaylistURLs.isEmpty)
+    }
+
+    func testRecoveryRefetchesWaitingTaskWithoutPersistedOptions() async {
+        let waiting = createTestTask(status: .waitingForMediaSelection)
+        manager = makeManager(with: [waiting])
+
+        manager.resumePersistedTasksAfterUIActivation(sessionID: UUID())
+        let refetched = await waitUntil {
+            self.mockMetadataService.fetchedVideoURLs == [waiting.url]
+        }
+
+        XCTAssertTrue(refetched)
+    }
+
+    func testRecoveryPreservesNonInterruptedStatesWithoutSideEffects() async {
+        let statuses: [DownloadStatus] = [.completed, .failed, .cancelled, .paused, .scheduled, .livestreaming, .postLive]
+        let tasks = statuses.enumerated().map { index, status in
+            createTestTask(url: "https://example.com/\(index)", status: status)
+        }
+        manager = makeManager(with: tasks)
+        var mediaRequestCount = 0
+        var playlistRequestCount = 0
+        var videoOrPlaylistRequestCount = 0
+        manager.onMediaSelectionNeeded = { _ in mediaRequestCount += 1 }
+        manager.onPlaylistSelectionNeeded = { _ in playlistRequestCount += 1 }
+        manager.onVideoOrPlaylistChoiceNeeded = { _ in videoOrPlaylistRequestCount += 1 }
+
+        manager.resumePersistedTasksAfterUIActivation(sessionID: UUID())
+        try? await Task.sleep(for: .milliseconds(50))
+
+        XCTAssertEqual(tasks.map(\.status), statuses)
+        XCTAssertTrue(mockMetadataService.fetchedVideoURLs.isEmpty)
+        XCTAssertTrue(mockMetadataService.fetchedPlaylistURLs.isEmpty)
+        XCTAssertTrue(mockYTDLPService.downloadedURLs.isEmpty)
+        XCTAssertEqual(mediaRequestCount, 0)
+        XCTAssertEqual(playlistRequestCount, 0)
+        XCTAssertEqual(videoOrPlaylistRequestCount, 0)
+    }
+
+    func testSelectionCreatedWithoutActiveUIIsDeliveredToNextSession() async {
+        let fetching = createTestTask(status: .fetchingInfo)
+        mockMetadataService.fetchDelayNanoseconds = 100_000_000
+        mockMetadataService.mediaOptions = (
+            subtitles: [SubtitleTrack(languageCode: "en")],
+            audioTracks: [],
+            formats: []
+        )
+        manager = makeManager(with: [fetching])
+        let firstSession = UUID()
+        var receivedRequests = 0
+        manager.onMediaSelectionNeeded = { _ in receivedRequests += 1 }
+
+        manager.resumePersistedTasksAfterUIActivation(sessionID: firstSession)
+        manager.deactivateUI(sessionID: firstSession)
+        try? await Task.sleep(for: .milliseconds(250))
+        manager.onMediaSelectionNeeded = { _ in receivedRequests += 1 }
+        manager.resumePersistedTasksAfterUIActivation(sessionID: UUID())
+
+        XCTAssertEqual(receivedRequests, 1)
+    }
+
+    func testRemovingWaitingTaskPreventsMediaRequestReplay() async {
+        let waiting = createTestTask(status: .waitingForMediaSelection)
+        waiting.availableSubtitles = [SubtitleTrack(languageCode: "en")]
+        manager = makeManager(with: [waiting])
+        var receivedRequests = 0
+        let firstSession = UUID()
+        manager.onMediaSelectionNeeded = { _ in receivedRequests += 1 }
+        manager.resumePersistedTasksAfterUIActivation(sessionID: firstSession)
+
+        await manager.removeTask(waiting)
+        manager.deactivateUI(sessionID: firstSession)
+        manager.onMediaSelectionNeeded = { _ in receivedRequests += 1 }
+        manager.resumePersistedTasksAfterUIActivation(sessionID: UUID())
+
+        XCTAssertEqual(receivedRequests, 1)
+    }
+
+    func testAsyncMetadataDoesNotRegisterRequestAfterTaskIsRemoved() async {
+        let fetching = createTestTask(status: .fetchingInfo)
+        mockMetadataService.fetchDelayNanoseconds = 100_000_000
+        mockMetadataService.mediaOptions = (
+            subtitles: [SubtitleTrack(languageCode: "en")],
+            audioTracks: [],
+            formats: []
+        )
+        manager = makeManager(with: [fetching])
+        let firstSession = UUID()
+        var receivedRequests = 0
+        manager.onMediaSelectionNeeded = { _ in receivedRequests += 1 }
+
+        manager.resumePersistedTasksAfterUIActivation(sessionID: firstSession)
+        await manager.removeTask(fetching)
+        try? await Task.sleep(for: .milliseconds(250))
+        manager.deactivateUI(sessionID: firstSession)
+        manager.onMediaSelectionNeeded = { _ in receivedRequests += 1 }
+        manager.resumePersistedTasksAfterUIActivation(sessionID: UUID())
+
+        XCTAssertEqual(receivedRequests, 0)
+        XCTAssertTrue(manager.tasks.isEmpty)
+    }
+
+    func testAsyncPlaylistDoesNotRegisterRequestAfterPlaceholderIsRemoved() async {
+        let placeholder = createTestTask(
+            url: "https://www.youtube.com/playlist?list=PLstale",
+            title: "載入播放清單中...",
+            status: .fetchingInfo
+        )
+        mockMetadataService.fetchDelayNanoseconds = 100_000_000
+        mockMetadataService.playlistInfo = (
+            "Stale Playlist",
+            [VideoInfo(
+                id: "one",
+                title: "One",
+                thumbnail: nil,
+                duration: 60,
+                uploader: nil,
+                url: "https://www.youtube.com/watch?v=one",
+                liveStatus: nil,
+                releaseTimestamp: nil
+            )]
+        )
+        manager = makeManager(with: [placeholder])
+        let firstSession = UUID()
+        var receivedRequests = 0
+        manager.onPlaylistSelectionNeeded = { _ in receivedRequests += 1 }
+
+        manager.resumePersistedTasksAfterUIActivation(sessionID: firstSession)
+        await manager.removeTask(placeholder)
+        try? await Task.sleep(for: .milliseconds(250))
+        manager.deactivateUI(sessionID: firstSession)
+        manager.onPlaylistSelectionNeeded = { _ in receivedRequests += 1 }
+        manager.resumePersistedTasksAfterUIActivation(sessionID: UUID())
+
+        XCTAssertEqual(receivedRequests, 0)
+        XCTAssertTrue(manager.tasks.isEmpty)
+    }
+
+    func testClearAllPreventsEveryUnresolvedRequestFromReplaying() async {
+        let waiting = createTestTask(status: .waitingForMediaSelection)
+        waiting.availableSubtitles = [SubtitleTrack(languageCode: "en")]
+        let placeholder = createTestTask(
+            url: "https://www.youtube.com/playlist?list=PLclear",
+            title: "載入播放清單中...",
+            status: .fetchingInfo
+        )
+        mockMetadataService.playlistInfo = (
+            "Clear Playlist",
+            [VideoInfo(
+                id: "one",
+                title: "One",
+                thumbnail: nil,
+                duration: 60,
+                uploader: nil,
+                url: "https://www.youtube.com/watch?v=one",
+                liveStatus: nil,
+                releaseTimestamp: nil
+            )]
+        )
+        manager = makeManager(with: [waiting, placeholder])
+        var mediaRequests = 0
+        var playlistRequests = 0
+        var choiceRequests = 0
+        manager.onMediaSelectionNeeded = { _ in mediaRequests += 1 }
+        manager.onPlaylistSelectionNeeded = { _ in playlistRequests += 1 }
+        manager.onVideoOrPlaylistChoiceNeeded = { _ in choiceRequests += 1 }
+        let firstSession = UUID()
+
+        manager.resumePersistedTasksAfterUIActivation(sessionID: firstSession)
+        let initialRequestsArrived = await waitUntil {
+            mediaRequests == 1 && playlistRequests == 1
+        }
+        _ = manager.addURL("https://www.youtube.com/watch?v=abcdefghijk&list=PLchoice")
+        await manager.clearAllTasks()
+        manager.deactivateUI(sessionID: firstSession)
+        manager.onMediaSelectionNeeded = { _ in mediaRequests += 1 }
+        manager.onPlaylistSelectionNeeded = { _ in playlistRequests += 1 }
+        manager.onVideoOrPlaylistChoiceNeeded = { _ in choiceRequests += 1 }
+        manager.resumePersistedTasksAfterUIActivation(sessionID: UUID())
+
+        XCTAssertTrue(initialRequestsArrived)
+        XCTAssertEqual(mediaRequests, 1)
+        XCTAssertEqual(playlistRequests, 1)
+        XCTAssertEqual(choiceRequests, 1)
+    }
+
+    func testPlaylistBatchStillRequestsMediaSelectionAfterOneChildIsRemoved() async {
+        let placeholder = createTestTask(
+            url: "https://www.youtube.com/playlist?list=PLpartial",
+            title: "載入播放清單中...",
+            status: .fetchingInfo
+        )
+        manager = makeManager(with: [])
+        mockMetadataService.fetchDelayNanoseconds = 100_000_000
+        mockMetadataService.mediaOptions = (
+            subtitles: [SubtitleTrack(languageCode: "en")],
+            audioTracks: [],
+            formats: []
+        )
+        let request = PlaylistSelectionRequest(
+            playlistTitle: "Partial Playlist",
+            videos: [
+                VideoInfo(id: "one", title: "One", thumbnail: nil, duration: 60, uploader: nil, url: "https://www.youtube.com/watch?v=one", liveStatus: nil, releaseTimestamp: nil),
+                VideoInfo(id: "two", title: "Two", thumbnail: nil, duration: 60, uploader: nil, url: "https://www.youtube.com/watch?v=two", liveStatus: nil, releaseTimestamp: nil)
+            ],
+            placeholderTaskId: placeholder.id,
+            callbackScheme: nil,
+            requestId: nil
+        )
+        var receivedTaskIDs: [[UUID]] = []
+        manager.onMediaSelectionNeeded = { mediaRequest in
+            receivedTaskIDs.append(mediaRequest.tasks.map(\.id))
+        }
+        manager.resumePersistedTasksAfterUIActivation(sessionID: UUID())
+        manager.tasks = [placeholder]
+
+        manager.confirmPlaylistSelection(request: request, selectedVideos: request.videos)
+        let removedTask = manager.tasks[0]
+        let remainingTaskID = manager.tasks[1].id
+        await manager.removeTask(removedTask)
+        let requestArrived = await waitUntil(timeout: 1) {
+            receivedTaskIDs.count == 1
+        }
+
+        XCTAssertTrue(requestArrived)
+        XCTAssertEqual(receivedTaskIDs, [[remainingTaskID]])
+        XCTAssertEqual(manager.tasks.map(\.id), [remainingTaskID])
+    }
+
+    func testRegisteredPlaylistMediaRequestReplaysRemainingChildAfterOneIsRemoved() async {
+        let placeholder = createTestTask(
+            url: "https://www.youtube.com/playlist?list=PLregistered",
+            title: "載入播放清單中...",
+            status: .fetchingInfo
+        )
+        manager = makeManager(with: [])
+        mockMetadataService.mediaOptions = (
+            subtitles: [SubtitleTrack(languageCode: "en")],
+            audioTracks: [],
+            formats: []
+        )
+        let request = PlaylistSelectionRequest(
+            playlistTitle: "Registered Playlist",
+            videos: [
+                VideoInfo(id: "one", title: "One", thumbnail: nil, duration: 60, uploader: nil, url: "https://www.youtube.com/watch?v=one", liveStatus: nil, releaseTimestamp: nil),
+                VideoInfo(id: "two", title: "Two", thumbnail: nil, duration: 60, uploader: nil, url: "https://www.youtube.com/watch?v=two", liveStatus: nil, releaseTimestamp: nil)
+            ],
+            placeholderTaskId: placeholder.id,
+            callbackScheme: nil,
+            requestId: nil
+        )
+        var receivedTaskIDs: [[UUID]] = []
+        let firstSession = UUID()
+        manager.onMediaSelectionNeeded = { mediaRequest in
+            receivedTaskIDs.append(mediaRequest.tasks.map(\.id))
+        }
+        manager.resumePersistedTasksAfterUIActivation(sessionID: firstSession)
+        manager.tasks = [placeholder]
+
+        manager.confirmPlaylistSelection(request: request, selectedVideos: request.videos)
+        let initialRequestArrived = await waitUntil {
+            receivedTaskIDs.count == 1
+        }
+        let removedTask = manager.tasks[0]
+        let remainingTaskID = manager.tasks[1].id
+        await manager.removeTask(removedTask)
+        manager.deactivateUI(sessionID: firstSession)
+        manager.onMediaSelectionNeeded = { mediaRequest in
+            receivedTaskIDs.append(mediaRequest.tasks.map(\.id))
+        }
+        manager.resumePersistedTasksAfterUIActivation(sessionID: UUID())
+
+        XCTAssertTrue(initialRequestArrived)
+        XCTAssertEqual(receivedTaskIDs.count, 2)
+        XCTAssertEqual(receivedTaskIDs.last, [remainingTaskID])
+    }
+
+    func testRemovedPlaylistChildDoesNotContributeMediaOptionsToRemainingChild() async {
+        let placeholder = createTestTask(
+            url: "https://www.youtube.com/playlist?list=PLoptions",
+            title: "載入播放清單中...",
+            status: .fetchingInfo
+        )
+        manager = makeManager(with: [])
+        manager.isAllPaused = true
+        mockMetadataService.fetchDelayNanoseconds = 100_000_000
+        mockMetadataService.mediaOptionsByURL = [
+            "https://www.youtube.com/watch?v=one": (
+                subtitles: [SubtitleTrack(languageCode: "en")],
+                audioTracks: [],
+                formats: []
+            ),
+            "https://www.youtube.com/watch?v=two": (
+                subtitles: [],
+                audioTracks: [],
+                formats: []
+            )
+        ]
+        let request = PlaylistSelectionRequest(
+            playlistTitle: "Options Playlist",
+            videos: [
+                VideoInfo(id: "one", title: "One", thumbnail: nil, duration: 60, uploader: nil, url: "https://www.youtube.com/watch?v=one", liveStatus: nil, releaseTimestamp: nil),
+                VideoInfo(id: "two", title: "Two", thumbnail: nil, duration: 60, uploader: nil, url: "https://www.youtube.com/watch?v=two", liveStatus: nil, releaseTimestamp: nil)
+            ],
+            placeholderTaskId: placeholder.id,
+            callbackScheme: nil,
+            requestId: nil
+        )
+        var receivedRequests = 0
+        manager.onMediaSelectionNeeded = { _ in receivedRequests += 1 }
+        manager.resumePersistedTasksAfterUIActivation(sessionID: UUID())
+        manager.tasks = [placeholder]
+
+        manager.confirmPlaylistSelection(request: request, selectedVideos: request.videos)
+        let firstLookupCompleted = await waitUntil {
+            self.mockMetadataService.fetchedMediaOptionURLs.count == 1
+        }
+        let removedTask = manager.tasks[0]
+        let remainingTask = manager.tasks[1]
+        await manager.removeTask(removedTask)
+        let allLookupsCompleted = await waitUntil {
+            self.mockMetadataService.fetchedMediaOptionURLs.count == 2
+                && remainingTask.status != .fetchingInfo
+        }
+
+        XCTAssertTrue(firstLookupCompleted)
+        XCTAssertTrue(allLookupsCompleted)
+        XCTAssertEqual(receivedRequests, 0)
+        XCTAssertEqual(remainingTask.status, .paused)
+    }
+
+    func testRegisteredPlaylistMediaRequestAutoResolvesAfterRemovingOnlyChildWithOptions() async {
+        let firstURL = "https://www.youtube.com/watch?v=one"
+        let secondURL = "https://www.youtube.com/watch?v=two"
+        let placeholder = createTestTask(
+            url: "https://www.youtube.com/playlist?list=PLresolve",
+            title: "載入播放清單中...",
+            status: .fetchingInfo
+        )
+        manager = makeManager(with: [])
+        manager.isAllPaused = true
+        mockMetadataService.mediaOptionsByURL = [
+            firstURL: (
+                subtitles: [SubtitleTrack(languageCode: "en")],
+                audioTracks: [],
+                formats: []
+            ),
+            secondURL: (
+                subtitles: [],
+                audioTracks: [],
+                formats: []
+            )
+        ]
+        let playlistRequest = PlaylistSelectionRequest(
+            playlistTitle: "Resolve Playlist",
+            videos: [
+                VideoInfo(id: "one", title: "One", thumbnail: nil, duration: 60, uploader: nil, url: firstURL, liveStatus: nil, releaseTimestamp: nil),
+                VideoInfo(id: "two", title: "Two", thumbnail: nil, duration: 60, uploader: nil, url: secondURL, liveStatus: nil, releaseTimestamp: nil)
+            ],
+            placeholderTaskId: placeholder.id,
+            callbackScheme: nil,
+            requestId: nil
+        )
+        var receivedRequests: [MediaSelectionRequest] = []
+        let firstSession = UUID()
+        manager.onMediaSelectionNeeded = { receivedRequests.append($0) }
+        manager.resumePersistedTasksAfterUIActivation(sessionID: firstSession)
+        manager.tasks = [placeholder]
+
+        manager.confirmPlaylistSelection(request: playlistRequest, selectedVideos: playlistRequest.videos)
+        let initialRequestArrived = await waitUntil {
+            receivedRequests.count == 1
+        }
+        let staleRequest = try! XCTUnwrap(receivedRequests.first)
+        let removedTask = try! XCTUnwrap(manager.tasks.first { $0.url == firstURL })
+        let remainingTask = try! XCTUnwrap(manager.tasks.first { $0.url == secondURL })
+        await manager.removeTask(removedTask)
+        manager.deactivateUI(sessionID: firstSession)
+        manager.onMediaSelectionNeeded = { receivedRequests.append($0) }
+        manager.resumePersistedTasksAfterUIActivation(sessionID: UUID())
+        manager.confirmMediaSelection(
+            for: staleRequest.tasks,
+            subtitleSelection: SubtitleSelection(selectedLanguages: ["en"]),
+            audioSelection: nil
+        )
+
+        XCTAssertTrue(initialRequestArrived)
+        XCTAssertEqual(receivedRequests.count, 1)
+        XCTAssertNil(remainingTask.subtitleSelection)
+        XCTAssertEqual(remainingTask.status, .paused)
+    }
+
     // MARK: - Post-live replay metadata tests
 
     func testPostLiveMetadataWithPairableFormatsStartsDownloadFlow() async {
@@ -312,6 +857,56 @@ final class DownloadManagerTests: XCTestCase {
         // Assert
         XCTAssertTrue(didDownload)
         XCTAssertEqual(mockYTDLPService.downloadedCommandTemplates.first, AppSettingsDefaults.genericDownloadCommand)
+    }
+
+    // MARK: - Completed task retention
+
+    func testCompletedTaskRemainsWhenAutoRemovePreferenceIsMissing() async {
+        let defaults = UserDefaults.standard
+        let originalPreference = defaults.object(forKey: AppSettingsKeys.autoRemoveCompleted)
+        defaults.removeObject(forKey: AppSettingsKeys.autoRemoveCompleted)
+        defer {
+            if let originalPreference {
+                defaults.set(originalPreference, forKey: AppSettingsKeys.autoRemoveCompleted)
+            } else {
+                defaults.removeObject(forKey: AppSettingsKeys.autoRemoveCompleted)
+            }
+        }
+
+        let task = createTestTask(url: "https://example.com/keep-completed", status: .pending)
+        manager.tasks = [task]
+
+        manager.startDownloadQueue()
+        let completed = await waitUntil {
+            task.status == .completed
+        }
+
+        XCTAssertTrue(completed)
+        XCTAssertEqual(manager.tasks.map(\.id), [task.id])
+    }
+
+    func testCompletedTaskIsRemovedWhenAutoRemovePreferenceIsExplicitlyEnabled() async {
+        let defaults = UserDefaults.standard
+        let originalPreference = defaults.object(forKey: AppSettingsKeys.autoRemoveCompleted)
+        defaults.set(true, forKey: AppSettingsKeys.autoRemoveCompleted)
+        defer {
+            if let originalPreference {
+                defaults.set(originalPreference, forKey: AppSettingsKeys.autoRemoveCompleted)
+            } else {
+                defaults.removeObject(forKey: AppSettingsKeys.autoRemoveCompleted)
+            }
+        }
+
+        let task = createTestTask(url: "https://example.com/remove-completed", status: .pending)
+        manager.tasks = [task]
+
+        manager.startDownloadQueue()
+        let removed = await waitUntil {
+            self.manager.tasks.contains(where: { $0.id == task.id }) == false
+        }
+
+        XCTAssertTrue(removed)
+        XCTAssertEqual(mockNotificationService.completedNotifications.count, 1)
     }
 
     /// effectiveDownloadCommand(for:) 對 YouTube 支援形狀回傳 downloadCommand。
@@ -1076,10 +1671,20 @@ final class DownloadManagerTests: XCTestCase {
 final class MockYouTubeMetadataService: YouTubeMetadataServiceProtocol {
     var videoInfo: VideoInfo!
     var mediaOptions: (subtitles: [SubtitleTrack], audioTracks: [AudioTrack], formats: [YTDLPFormat]) = ([], [], [])
+    var mediaOptionsByURL: [String: (subtitles: [SubtitleTrack], audioTracks: [AudioTrack], formats: [YTDLPFormat])] = [:]
     var videoInfoError: Error?
     var mediaOptionsError: Error?
+    var playlistInfo: (title: String, videos: [VideoInfo]) = ("", [])
+    var fetchDelayNanoseconds: UInt64 = 0
+    private(set) var fetchedVideoURLs: [String] = []
+    private(set) var fetchedMediaOptionURLs: [String] = []
+    private(set) var fetchedPlaylistURLs: [String] = []
 
     func fetchVideoInfo(url: String, cookiesArguments: [String]) async throws -> VideoInfo {
+        fetchedVideoURLs.append(url)
+        if fetchDelayNanoseconds > 0 {
+            try? await Task.sleep(nanoseconds: fetchDelayNanoseconds)
+        }
         if let videoInfoError {
             throw videoInfoError
         }
@@ -1087,14 +1692,22 @@ final class MockYouTubeMetadataService: YouTubeMetadataServiceProtocol {
     }
 
     func fetchMediaOptions(url: String, cookiesArguments: [String]) async throws -> (subtitles: [SubtitleTrack], audioTracks: [AudioTrack], formats: [YTDLPFormat]) {
+        if fetchDelayNanoseconds > 0 {
+            try? await Task.sleep(nanoseconds: fetchDelayNanoseconds)
+        }
         if let mediaOptionsError {
             throw mediaOptionsError
         }
-        return mediaOptions
+        fetchedMediaOptionURLs.append(url)
+        return mediaOptionsByURL[url] ?? mediaOptions
     }
 
     func fetchPlaylistInfo(url: String, cookiesArguments: [String]) async throws -> (title: String, videos: [VideoInfo]) {
-        return ("", [])
+        fetchedPlaylistURLs.append(url)
+        if fetchDelayNanoseconds > 0 {
+            try? await Task.sleep(nanoseconds: fetchDelayNanoseconds)
+        }
+        return playlistInfo
     }
 
     func fetchTitleFromWebpage(url: String) async -> String? {

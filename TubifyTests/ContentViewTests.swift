@@ -1,8 +1,96 @@
+import AppKit
+import SwiftUI
 import XCTest
 @testable import Tubify
 
 /// ContentView 測試
 final class ContentViewTests: XCTestCase {
+
+    // MARK: - Paste routing tests
+
+    func testPasteRoutingConsumesCommandVInMainDownloadWindowWithoutTextResponder() {
+        let shouldConsume = shouldConsumePasteEvent(
+            isCommandV: true,
+            windowIdentifier: mainDownloadWindowIdentifier,
+            firstResponderIsTextInput: false
+        )
+
+        XCTAssertTrue(shouldConsume)
+    }
+
+    func testPasteRoutingPreservesCommandVForTextResponderInMainDownloadWindow() {
+        let shouldConsume = shouldConsumePasteEvent(
+            isCommandV: true,
+            windowIdentifier: mainDownloadWindowIdentifier,
+            firstResponderIsTextInput: true
+        )
+
+        XCTAssertFalse(shouldConsume)
+    }
+
+    func testPasteRoutingPreservesCommandVInSettingsWindowWithoutTextResponder() {
+        let shouldConsume = shouldConsumePasteEvent(
+            isCommandV: true,
+            windowIdentifier: NSUserInterfaceItemIdentifier("Tubify.settings"),
+            firstResponderIsTextInput: false
+        )
+
+        XCTAssertFalse(shouldConsume)
+    }
+
+    @MainActor
+    func testPasteMonitorControllerInstallsAndUninstallsOnlyOncePerLifecycle() {
+        var installCount = 0
+        var removedTokens: [AnyObject] = []
+        let token = NSObject()
+        let controller = PasteMonitorController(
+            addMonitor: { _, _ in
+                installCount += 1
+                return token
+            },
+            removeMonitor: { removedTokens.append($0 as AnyObject) }
+        )
+
+        controller.install { $0 }
+        controller.install { $0 }
+
+        XCTAssertEqual(installCount, 1)
+
+        controller.uninstall()
+        controller.uninstall()
+
+        XCTAssertEqual(removedTokens.count, 1)
+        XCTAssertTrue(removedTokens.first === token)
+
+        controller.install { $0 }
+        controller.install { $0 }
+
+        XCTAssertEqual(installCount, 2)
+
+        controller.uninstall()
+        XCTAssertEqual(removedTokens.count, 2)
+    }
+
+    @MainActor
+    func testMainWindowMarkerIsRestoredWhenWindowBecomesKeyAgain() async {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 400),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        defer { window.contentViewController = nil }
+        window.contentViewController = NSHostingController(rootView: ContentView())
+        window.contentView?.layoutSubtreeIfNeeded()
+        try? await Task.sleep(for: .milliseconds(100))
+
+        XCTAssertEqual(window.identifier, mainDownloadWindowIdentifier)
+
+        window.identifier = NSUserInterfaceItemIdentifier("SwiftUI.restoredWindow")
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
+
+        XCTAssertEqual(window.identifier, mainDownloadWindowIdentifier)
+    }
 
     // MARK: - buildTaskCountText 測試
 

@@ -10,11 +10,25 @@ enum URLValidationResult {
 
 /// 媒體選項選擇請求（字幕 + 音軌）
 struct MediaSelectionRequest: Identifiable {
-    let id = UUID()
+    let id: UUID
     let tasks: [DownloadTask]
     let availableSubtitles: [SubtitleTrack]
     let availableAudioTracks: [AudioTrack]
     let videoTitle: String?  // 單一影片為標題，播放清單為 nil
+
+    init(
+        id: UUID = UUID(),
+        tasks: [DownloadTask],
+        availableSubtitles: [SubtitleTrack],
+        availableAudioTracks: [AudioTrack],
+        videoTitle: String?
+    ) {
+        self.id = id
+        self.tasks = tasks
+        self.availableSubtitles = availableSubtitles
+        self.availableAudioTracks = availableAudioTracks
+        self.videoTitle = videoTitle
+    }
 }
 
 /// 影片或播放清單選擇請求
@@ -61,6 +75,13 @@ class DownloadManager {
 
     /// 影片或播放清單選擇回調（由 UI 設置）
     var onVideoOrPlaylistChoiceNeeded: ((VideoOrPlaylistChoiceRequest) -> Void)?
+
+    private var unresolvedMediaRequests: [MediaSelectionRequest] = []
+    private var unresolvedPlaylistRequests: [PlaylistSelectionRequest] = []
+    private var unresolvedVideoOrPlaylistRequests: [VideoOrPlaylistChoiceRequest] = []
+    private var deliveredRequestIDsBySession: [UUID: Set<UUID>] = [:]
+    private var activeUISessionID: UUID?
+    private var didRecoverPersistedTasks = false
 
     /// 持久化服務（可注入以供測試使用）
     private let persistenceService: PersistenceServiceProtocol
@@ -109,26 +130,6 @@ class DownloadManager {
         // 載入已儲存的任務
         tasks = persistenceService.loadTasks()
 
-        // 處理卡在 fetchingInfo 狀態的任務（可能是上次啟動時中斷的）
-        // 這些任務需要重新獲取元資料，以確保能正確檢測字幕和音軌
-        let stuckTasks = tasks.filter { $0.status == .fetchingInfo }
-        for task in stuckTasks {
-            TubifyLogger.download.info("重新獲取卡住任務的元資料: \(task.url)")
-            if task.title == "載入中..." {
-                task.title = "重新載入中..."
-            }
-            // 異步重新獲取元資料
-            Task {
-                await fetchMetadataForTask(task)
-            }
-        }
-
-        // 如果有待處理的任務（非 fetchingInfo），開始下載
-        if tasks.contains(where: { $0.status == .pending }) {
-            persistenceService.saveTasks(tasks)
-            startDownloadQueue()
-        }
-
         // 監聽外部下載請求
         NotificationCenter.default.addObserver(
             self,
@@ -136,6 +137,169 @@ class DownloadManager {
             name: .externalDownloadRequest,
             object: nil
         )
+    }
+
+    func resumePersistedTasksAfterUIActivation(sessionID: UUID) {
+        activeUISessionID = sessionID
+        deliverUnresolvedRequests(to: sessionID)
+
+        guard !didRecoverPersistedTasks else { return }
+        didRecoverPersistedTasks = true
+
+        var shouldStartQueue = false
+        for task in tasks {
+            switch task.status {
+            case .downloading:
+                task.status = .pending
+                task.progress = 0
+                shouldStartQueue = true
+            case .pending:
+                shouldStartQueue = true
+            case .fetchingInfo:
+                recoverFetchingInfoTask(task)
+            case .waitingForMediaSelection:
+                recoverWaitingForMediaSelectionTask(task)
+            case .completed, .failed, .cancelled, .paused, .scheduled, .livestreaming, .postLive:
+                break
+            }
+        }
+
+        persistenceService.saveTasks(tasks)
+        if shouldStartQueue {
+            startDownloadQueue()
+        }
+    }
+
+    func deactivateUI(sessionID: UUID) {
+        guard activeUISessionID == sessionID else { return }
+        activeUISessionID = nil
+        onMediaSelectionNeeded = nil
+        onPlaylistSelectionNeeded = nil
+        onVideoOrPlaylistChoiceNeeded = nil
+    }
+
+    private func recoverFetchingInfoTask(_ task: DownloadTask) {
+        if task.title == "載入播放清單中...",
+           isValidYouTubeURL(task.url),
+           YouTubeMetadataService.isPlaylistSync(url: task.url) {
+            Task {
+                await expandPlaylist(
+                    placeholderTask: task,
+                    urlString: task.url,
+                    callbackScheme: task.callbackScheme,
+                    requestId: task.requestId
+                )
+            }
+            return
+        }
+
+        if task.title == "載入中..." {
+            task.title = "重新載入中..."
+        }
+        Task {
+            await fetchMetadataForTask(task)
+        }
+    }
+
+    private func recoverWaitingForMediaSelectionTask(_ task: DownloadTask) {
+        let subtitles = task.availableSubtitles ?? []
+        let audioTracks = task.availableAudioTracks ?? []
+        guard !subtitles.isEmpty || !audioTracks.isEmpty else {
+            task.status = .fetchingInfo
+            recoverFetchingInfoTask(task)
+            return
+        }
+
+        registerMediaRequest(MediaSelectionRequest(
+            tasks: [task],
+            availableSubtitles: subtitles,
+            availableAudioTracks: audioTracks,
+            videoTitle: task.title
+        ))
+    }
+
+    private func registerMediaRequest(_ request: MediaSelectionRequest) {
+        guard !request.tasks.isEmpty,
+              request.tasks.allSatisfy({ requestedTask in
+                  tasks.contains { $0.id == requestedTask.id }
+              }) else {
+            return
+        }
+        unresolvedMediaRequests.append(request)
+        deliver(request, using: onMediaSelectionNeeded)
+    }
+
+    private func registerPlaylistRequest(_ request: PlaylistSelectionRequest) {
+        guard tasks.contains(where: { $0.id == request.placeholderTaskId }) else {
+            return
+        }
+        unresolvedPlaylistRequests.append(request)
+        deliver(request, using: onPlaylistSelectionNeeded)
+    }
+
+    private func registerVideoOrPlaylistRequest(_ request: VideoOrPlaylistChoiceRequest) {
+        unresolvedVideoOrPlaylistRequests.append(request)
+        deliver(request, using: onVideoOrPlaylistChoiceNeeded)
+    }
+
+    private func deliver<Request: Identifiable>(
+        _ request: Request,
+        using callback: ((Request) -> Void)?
+    ) where Request.ID == UUID {
+        guard let sessionID = activeUISessionID,
+              let callback,
+              deliveredRequestIDsBySession[sessionID, default: []].contains(request.id) == false else {
+            return
+        }
+        deliveredRequestIDsBySession[sessionID, default: []].insert(request.id)
+        callback(request)
+    }
+
+    private func deliverUnresolvedRequests(to sessionID: UUID) {
+        guard activeUISessionID == sessionID else { return }
+        for request in unresolvedMediaRequests {
+            deliver(request, using: onMediaSelectionNeeded)
+        }
+        for request in unresolvedPlaylistRequests {
+            deliver(request, using: onPlaylistSelectionNeeded)
+        }
+        for request in unresolvedVideoOrPlaylistRequests {
+            deliver(request, using: onVideoOrPlaylistChoiceNeeded)
+        }
+    }
+
+    private func removeUnresolvedRequests(referencing taskIDs: Set<UUID>) -> Bool {
+        var shouldStartQueue = false
+        unresolvedMediaRequests = unresolvedMediaRequests.compactMap { request in
+            let remainingTasks = request.tasks.filter { !taskIDs.contains($0.id) }
+            guard !remainingTasks.isEmpty else { return nil }
+            guard remainingTasks.count != request.tasks.count else { return request }
+
+            let subtitleCodes = Set(remainingTasks.flatMap { $0.availableSubtitles ?? [] }.map(\.languageCode))
+            let audioCodes = Set(remainingTasks.flatMap { $0.availableAudioTracks ?? [] }.map(\.languageCode))
+            let needsSelection = subtitleCodes.contains(where: SubtitleTrack.isSupportedLanguage)
+                || audioCodes.filter(AudioTrack.isSupportedLanguage).count > 1
+            guard needsSelection else {
+                let newStatus: DownloadStatus = isAllPaused ? .paused : .pending
+                for task in remainingTasks {
+                    task.status = newStatus
+                }
+                shouldStartQueue = shouldStartQueue || newStatus == .pending
+                return nil
+            }
+
+            return MediaSelectionRequest(
+                id: request.id,
+                tasks: remainingTasks,
+                availableSubtitles: request.availableSubtitles.filter { subtitleCodes.contains($0.languageCode) },
+                availableAudioTracks: request.availableAudioTracks.filter { audioCodes.contains($0.languageCode) },
+                videoTitle: request.videoTitle
+            )
+        }
+        unresolvedPlaylistRequests.removeAll { request in
+            taskIDs.contains(request.placeholderTaskId)
+        }
+        return shouldStartQueue
     }
 
     @objc private func handleExternalDownloadRequest(_ notification: Notification) {
@@ -189,7 +353,7 @@ class DownloadManager {
                 callbackScheme: callbackScheme,
                 requestId: requestId
             )
-            onVideoOrPlaylistChoiceNeeded?(request)
+            registerVideoOrPlaylistRequest(request)
             return .success
         }
 
@@ -330,7 +494,7 @@ class DownloadManager {
                     availableAudioTracks: resolvedMediaOptions.audioTracks,
                     videoTitle: task.title
                 )
-                onMediaSelectionNeeded?(request)
+                registerMediaRequest(request)
                 return
             } else {
                 task.status = newStatus
@@ -414,7 +578,7 @@ class DownloadManager {
                 callbackScheme: callbackScheme,
                 requestId: requestId
             )
-            onPlaylistSelectionNeeded?(request)
+            registerPlaylistRequest(request)
             return
         } catch {
             TubifyLogger.download.error("處理播放清單失敗: \(error.localizedDescription)")
@@ -430,6 +594,7 @@ class DownloadManager {
 
     /// 確認播放清單選集（由 UI 呼叫）
     func confirmPlaylistSelection(request: PlaylistSelectionRequest, selectedVideos: [VideoInfo]) {
+        unresolvedPlaylistRequests.removeAll { $0.id == request.id }
         // 移除佔位任務
         tasks.removeAll { $0.id == request.placeholderTaskId }
 
@@ -461,8 +626,6 @@ class DownloadManager {
         Task {
             let cookiesArgs = getCookiesArguments()
 
-            var allSubtitleCodes: Set<String> = []
-            var allAudioCodes: Set<String> = []
             for pair in selectedTaskPairs {
                 let task = pair.task
                 do {
@@ -473,8 +636,6 @@ class DownloadManager {
                     }
                     task.availableSubtitles = mediaOptions.subtitles
                     task.availableAudioTracks = mediaOptions.audioTracks
-                    allSubtitleCodes.formUnion(mediaOptions.subtitles.map(\.languageCode))
-                    allAudioCodes.formUnion(mediaOptions.audioTracks.map(\.languageCode))
                 } catch {
                     if pair.video.liveStatus == "post_live" {
                         handlePostLiveFormatLookupError(error, for: task)
@@ -482,12 +643,17 @@ class DownloadManager {
                 }
             }
 
+            let newStatus: DownloadStatus = isAllPaused ? .paused : .pending
+            let activeTaskIDs = Set(tasks.map(\.id))
+            let readyTasks = newTasks.filter {
+                $0.status == .fetchingInfo && activeTaskIDs.contains($0.id)
+            }
+            let allSubtitleCodes = Set(readyTasks.flatMap { $0.availableSubtitles ?? [] }.map(\.languageCode))
+            let allAudioCodes = Set(readyTasks.flatMap { $0.availableAudioTracks ?? [] }.map(\.languageCode))
+
             // 過濾只保留支援的語言
             let filteredSubtitleCodes = allSubtitleCodes.filter { SubtitleTrack.isSupportedLanguage($0) }
             let filteredAudioCodes = allAudioCodes.filter { AudioTrack.isSupportedLanguage($0) }
-
-            let newStatus: DownloadStatus = isAllPaused ? .paused : .pending
-            let readyTasks = newTasks.filter { $0.status == .fetchingInfo }
 
             if !filteredSubtitleCodes.isEmpty || filteredAudioCodes.count > 1 {
                 for task in readyTasks {
@@ -507,7 +673,7 @@ class DownloadManager {
                     videoTitle: nil
                 )
                 if !readyTasks.isEmpty {
-                    onMediaSelectionNeeded?(mediaRequest)
+                    registerMediaRequest(mediaRequest)
                 }
             } else {
                 for task in readyTasks {
@@ -529,6 +695,7 @@ class DownloadManager {
     }
 
     func confirmVideoOrPlaylistChoice(request: VideoOrPlaylistChoiceRequest, choice: VideoOrPlaylistChoice) {
+        unresolvedVideoOrPlaylistRequests.removeAll { $0.id == request.id }
         switch choice {
         case .video:
             // 去除播放清單相關參數，直接走單一影片流程
@@ -591,17 +758,34 @@ class DownloadManager {
 
     /// 取消播放清單選集（由 UI 呼叫）
     func cancelPlaylistSelection(placeholderTaskId: UUID) {
+        unresolvedPlaylistRequests.removeAll { $0.placeholderTaskId == placeholderTaskId }
         tasks.removeAll { $0.id == placeholderTaskId }
         persistenceService.saveTasks(tasks)
     }
 
     /// 確認媒體選項選擇（由 UI 呼叫）
     func confirmMediaSelection(for tasks: [DownloadTask], subtitleSelection: SubtitleSelection?, audioSelection: AudioSelection?) {
+        let taskIDs = Set(tasks.map(\.id))
+        unresolvedMediaRequests.removeAll { request in
+            Set(request.tasks.map(\.id)).isSubset(of: taskIDs)
+        }
         let newStatus: DownloadStatus = isAllPaused ? .paused : .pending
+        let activeTaskIDs = Set(self.tasks.map(\.id))
 
-        for task in tasks {
-            task.subtitleSelection = subtitleSelection
-            task.audioSelection = audioSelection
+        for task in tasks where activeTaskIDs.contains(task.id) {
+            let availableSubtitleCodes = Set((task.availableSubtitles ?? []).map(\.languageCode))
+            let selectedSubtitleCodes = subtitleSelection?.selectedLanguages.filter(availableSubtitleCodes.contains) ?? []
+            task.subtitleSelection = selectedSubtitleCodes.isEmpty
+                ? nil
+                : SubtitleSelection(selectedLanguages: selectedSubtitleCodes)
+
+            let availableAudioCodes = Set((task.availableAudioTracks ?? []).map(\.languageCode))
+            if let selectedAudioCode = audioSelection?.selectedLanguage,
+               availableAudioCodes.contains(selectedAudioCode) {
+                task.audioSelection = AudioSelection(selectedLanguage: selectedAudioCode)
+            } else {
+                task.audioSelection = nil
+            }
             task.status = newStatus
         }
 
@@ -782,8 +966,12 @@ class DownloadManager {
             await ytdlpService.cancel(taskId: task.id)
         }
 
+        let shouldStartQueue = removeUnresolvedRequests(referencing: [task.id])
         tasks.removeAll { $0.id == task.id }
         persistenceService.saveTasks(tasks)
+        if shouldStartQueue {
+            startDownloadQueue()
+        }
     }
 
     /// 重試任務
@@ -821,6 +1009,10 @@ class DownloadManager {
         }
 
         tasks.removeAll()
+        unresolvedMediaRequests.removeAll()
+        unresolvedPlaylistRequests.removeAll()
+        unresolvedVideoOrPlaylistRequests.removeAll()
+        deliveredRequestIDsBySession.removeAll()
         persistenceService.clearTasks()
     }
 

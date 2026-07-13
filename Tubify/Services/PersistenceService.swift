@@ -65,15 +65,6 @@ class PersistenceService: PersistenceServiceProtocol {
 
             let tasks = try decoder.decode([DownloadTask].self, from: data)
 
-            // 重置下載中的任務為等待中
-            for task in tasks {
-                if task.status == .downloading {
-                    task.status = .pending
-                    task.progress = 0
-                }
-                // fetchingInfo 狀態的任務由 DownloadManager.init() 重新獲取元資料
-            }
-
             TubifyLogger.persistence.info("已載入 \(tasks.count) 個任務")
             return tasks
         } catch {

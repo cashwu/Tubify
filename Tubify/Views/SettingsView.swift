@@ -1,5 +1,20 @@
 import SwiftUI
 
+enum DownloadCommandValidation: Equatable {
+    case valid
+    case empty
+    case missingYouTubeURLPlaceholder
+}
+
+func validateDownloadCommand(_ command: String) -> DownloadCommandValidation {
+    let trimmedCommand = command.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmedCommand.isEmpty else { return .empty }
+    guard trimmedCommand.contains("$youtubeUrl") else {
+        return .missingYouTubeURLPlaceholder
+    }
+    return .valid
+}
+
 /// 設定視圖
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
@@ -44,7 +59,7 @@ struct SettingsView: View {
             // 標題
             HStack {
                 Text("設定")
-                    .font(.system(size: 33, weight: .semibold))
+                    .font(.largeTitle.bold())
 
                 Spacer()
 
@@ -84,12 +99,12 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         if case .notFound = ffmpegStatus {
                             Text("ffmpeg 用於合併高畫質影音串流、格式轉換及後製處理。安裝指令：brew install ffmpeg")
-                                .font(.system(size: 18))
+                                .font(.callout)
                                 .foregroundStyle(.orange)
                         }
                         if case .notGranted = fullDiskAccessStatus, PermissionService.shared.commandUsesSafariCookies(downloadCommand) {
                             Text("使用 Safari cookies 需要完整磁碟存取權限。請在系統設定 > 隱私與安全性 > 完整磁碟存取 中加入 Tubify。")
-                                .font(.system(size: 18))
+                                .font(.callout)
                                 .foregroundStyle(.orange)
                         }
                     }
@@ -113,14 +128,20 @@ struct SettingsView: View {
                             }
 
                         Text("使用 $youtubeUrl 作為 URL 佔位符")
-                            .font(.system(size: 18))
+                            .font(.callout)
                             .foregroundStyle(.secondary)
+
+                        if let validationMessage {
+                            Text(validationMessage)
+                                .font(.callout)
+                                .foregroundStyle(.red)
+                        }
 
                         Button("重置為預設值") {
                             downloadCommand = AppSettingsDefaults.downloadCommand
                         }
                         .buttonStyle(.link)
-                        .font(.system(size: 18))
+                        .font(.callout)
                     }
 
                     // 下載資料夾
@@ -152,7 +173,7 @@ struct SettingsView: View {
                     }
 
                     Text("同時進行下載的最大任務數量")
-                        .font(.system(size: 18))
+                        .font(.callout)
                         .foregroundStyle(.secondary)
 
                     // 自動移除已完成的下載
@@ -183,7 +204,6 @@ struct SettingsView: View {
                 }
             }
             .formStyle(.grouped)
-            .font(.system(size: 20)) // Apply base font size to form
             .scrollContentBackground(.hidden)
         }
         .frame(width: 500, height: 500)
@@ -232,7 +252,7 @@ struct SettingsView: View {
                     }
                 }
                 .buttonStyle(.link)
-                .font(.system(size: 18))
+                .font(.callout)
             }
         }
     }
@@ -295,7 +315,7 @@ struct SettingsView: View {
                     PermissionService.shared.openFullDiskAccessSettings()
                 }
                 .buttonStyle(.link)
-                .font(.system(size: 18))
+                .font(.callout)
             }
         }
     }
@@ -313,6 +333,17 @@ struct SettingsView: View {
         return path
     }
 
+    private var validationMessage: String? {
+        switch validateDownloadCommand(downloadCommand) {
+        case .valid:
+            nil
+        case .empty:
+            "下載指令不可為空"
+        case .missingYouTubeURLPlaceholder:
+            "下載指令必須包含 $youtubeUrl"
+        }
+    }
+
     // MARK: - 選擇下載資料夾
 
     private func selectDownloadFolder() {
@@ -324,9 +355,7 @@ struct SettingsView: View {
         panel.prompt = "選擇"
         panel.message = "選擇下載資料夾"
 
-        if let currentURL = URL(string: downloadFolder) {
-            panel.directoryURL = currentURL
-        }
+        panel.directoryURL = URL(fileURLWithPath: downloadFolder, isDirectory: true)
 
         if panel.runModal() == .OK, let url = panel.url {
             downloadFolder = url.path

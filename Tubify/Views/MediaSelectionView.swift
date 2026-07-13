@@ -44,7 +44,7 @@ struct MediaSelectionView: View {
             // 標題欄
             HStack {
                 Text("選擇下載選項")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.headline)
                 Spacer()
             }
             .padding()
@@ -55,12 +55,12 @@ struct MediaSelectionView: View {
             HStack {
                 if let title = videoTitle {
                     Text(title)
-                        .font(.system(size: 11))
+                        .font(.callout)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 } else {
                     Text("\(videoCount) 部影片")
-                        .font(.system(size: 11))
+                        .font(.callout)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -88,7 +88,7 @@ struct MediaSelectionView: View {
                                     Text(track.languageName)
                                     Text("(\(track.languageCode))")
                                         .foregroundStyle(.tertiary)
-                                        .font(.system(size: 10))
+                                        .font(.caption)
                                 }
                             }
                             .toggleStyle(.checkbox)
@@ -106,7 +106,7 @@ struct MediaSelectionView: View {
                                     Text(track.languageName)
                                     Text("(\(track.languageCode))")
                                         .foregroundStyle(.tertiary)
-                                        .font(.system(size: 10))
+                                        .font(.caption)
                                 }
                                 .tag(track.languageCode as String?)
                             }

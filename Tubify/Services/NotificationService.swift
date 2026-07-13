@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import UserNotifications
 
@@ -7,13 +8,51 @@ protocol NotificationServiceProtocol {
     func sendAllDownloadsCompleteNotification(count: Int)
 }
 
+struct NotificationOutputRouter {
+    let fileExists: (String) -> Bool
+    let revealInFinder: (String) -> Void
+
+    func route(userInfo: [AnyHashable: Any]) {
+        guard let outputPath = userInfo["outputPath"] as? String,
+              !outputPath.isEmpty,
+              fileExists(outputPath) else {
+            return
+        }
+
+        revealInFinder(outputPath)
+    }
+
+    static let live = NotificationOutputRouter(
+        fileExists: { FileManager.default.fileExists(atPath: $0) },
+        revealInFinder: { outputPath in
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: outputPath)])
+        }
+    )
+}
+
 /// 通知服務
-class NotificationService {
+final class NotificationService: NSObject {
     static let shared = NotificationService()
 
-    private let notificationCenter = UNUserNotificationCenter.current()
+    private let notificationCenter: UNUserNotificationCenter
+    private let outputRouter: NotificationOutputRouter
 
-    private init() {}
+    private override init() {
+        notificationCenter = .current()
+        outputRouter = .live
+        super.init()
+        notificationCenter.delegate = self
+    }
+
+    init(
+        outputRouter: NotificationOutputRouter,
+        notificationCenter: UNUserNotificationCenter = .current()
+    ) {
+        self.notificationCenter = notificationCenter
+        self.outputRouter = outputRouter
+        super.init()
+        notificationCenter.delegate = self
+    }
 
     /// 請求通知權限
     func requestAuthorization() async -> Bool {
@@ -101,6 +140,27 @@ class NotificationService {
             }
         }
     }
+
+    func handleActivatedNotification(
+        userInfo: [AnyHashable: Any],
+        completionHandler: () -> Void
+    ) {
+        defer { completionHandler() }
+        outputRouter.route(userInfo: userInfo)
+    }
 }
 
 extension NotificationService: NotificationServiceProtocol {}
+
+extension NotificationService: UNUserNotificationCenterDelegate {
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        handleActivatedNotification(
+            userInfo: response.notification.request.content.userInfo,
+            completionHandler: completionHandler
+        )
+    }
+}

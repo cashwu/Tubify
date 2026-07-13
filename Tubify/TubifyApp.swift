@@ -19,13 +19,6 @@ struct TubifyApp: App {
         .windowResizability(.contentSize)
         .commands {
             CommandGroup(replacing: .newItem) { }
-
-            CommandGroup(after: .appSettings) {
-                Button("設定...") {
-                    NSApp.sendAction(#selector(AppDelegate.openSettings), to: nil, from: nil)
-                }
-                .keyboardShortcut(",", modifiers: .command)
-            }
         }
 
         Settings {
@@ -37,6 +30,22 @@ struct TubifyApp: App {
 // MARK: - App Delegate
 
 class AppDelegate: NSObject, NSApplicationDelegate {
+    private let initializeNotificationService: () -> Void
+
+    override init() {
+        initializeNotificationService = { _ = NotificationService.shared }
+        super.init()
+    }
+
+    init(initializeNotificationService: @escaping () -> Void) {
+        self.initializeNotificationService = initializeNotificationService
+        super.init()
+    }
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        initializeNotificationService()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // 請求通知權限
         Task {
@@ -60,10 +69,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return true
-    }
-
-    @objc func openSettings() {
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
     }
 
     // MARK: - URL Scheme 處理

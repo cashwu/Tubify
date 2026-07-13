@@ -1,12 +1,102 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+let mainDownloadWindowIdentifier = NSUserInterfaceItemIdentifier("Tubify.mainDownloadWindow")
+
+func shouldConsumePasteEvent(
+    isCommandV: Bool,
+    windowIdentifier: NSUserInterfaceItemIdentifier?,
+    firstResponderIsTextInput: Bool
+) -> Bool {
+    isCommandV
+        && windowIdentifier == mainDownloadWindowIdentifier
+        && !firstResponderIsTextInput
+}
+
+@MainActor
+final class PasteMonitorController {
+    typealias EventHandler = (NSEvent) -> NSEvent?
+    typealias AddMonitor = (NSEvent.EventTypeMask, @escaping EventHandler) -> Any?
+    typealias RemoveMonitor = (Any) -> Void
+
+    private let addMonitor: AddMonitor
+    private let removeMonitor: RemoveMonitor
+    private var token: Any?
+
+    init(
+        addMonitor: @escaping AddMonitor = { mask, handler in
+            NSEvent.addLocalMonitorForEvents(matching: mask, handler: handler)
+        },
+        removeMonitor: @escaping RemoveMonitor = { NSEvent.removeMonitor($0) }
+    ) {
+        self.addMonitor = addMonitor
+        self.removeMonitor = removeMonitor
+    }
+
+    func install(handler: @escaping EventHandler) {
+        guard token == nil else { return }
+        token = addMonitor(.keyDown, handler)
+    }
+
+    func uninstall() {
+        guard let token else { return }
+        removeMonitor(token)
+        self.token = nil
+    }
+}
+
+private final class MainDownloadWindowMarkerView: NSView {
+    private weak var observedWindow: NSWindow?
+
+    override func viewDidMoveToWindow() {
+        if let observedWindow {
+            NotificationCenter.default.removeObserver(
+                self,
+                name: NSWindow.didBecomeKeyNotification,
+                object: observedWindow
+            )
+        }
+        super.viewDidMoveToWindow()
+        observedWindow = window
+        markMainDownloadWindow()
+        if let window {
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(windowDidBecomeKey),
+                name: NSWindow.didBecomeKeyNotification,
+                object: window
+            )
+        }
+    }
+
+    @objc private func windowDidBecomeKey() {
+        markMainDownloadWindow()
+    }
+
+    private func markMainDownloadWindow() {
+        window?.identifier = mainDownloadWindowIdentifier
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+}
+
+private struct MainDownloadWindowMarker: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        MainDownloadWindowMarkerView()
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
 /// 主視窗
 @MainActor
 struct ContentView: View {
+    @Environment(\.openSettings) private var openSettings
+
     @State private var downloadManager = DownloadManager.shared
     @State private var isTargeted = false
-    @State private var showingSettings = false
     @State private var needsFullDiskAccess = false
     @State private var ytdlpNotInstalled = false
     @State private var urlErrorMessage: String?
@@ -15,6 +105,8 @@ struct ContentView: View {
     @State private var playlistRequests: [PlaylistSelectionRequest] = []
     @State private var videoOrPlaylistRequests: [VideoOrPlaylistChoiceRequest] = []
     @State private var showVideoOrPlaylistAlert = false
+    @State private var uiSessionID = UUID()
+    @State private var pasteMonitorController = PasteMonitorController()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -42,6 +134,7 @@ struct ContentView: View {
         }
         .frame(minWidth: 500, minHeight: 400)
         .background(Color(nsColor: .windowBackgroundColor))
+        .background(MainDownloadWindowMarker())
         .overlay {
             // 拖放指示器
             if isTargeted {
@@ -51,9 +144,6 @@ struct ContentView: View {
         .onDrop(of: [.url, .text, .plainText], isTargeted: $isTargeted) { providers in
             handleDrop(providers: providers)
             return true
-        }
-        .sheet(isPresented: $showingSettings) {
-            SettingsView()
         }
         .sheet(item: Binding(
             get: { playlistRequests.first },
@@ -106,9 +196,14 @@ struct ContentView: View {
             setupMediaSelectionCallback()
             setupPlaylistSelectionCallback()
             setupVideoOrPlaylistChoiceCallback()
+            downloadManager.resumePersistedTasksAfterUIActivation(sessionID: uiSessionID)
             Task {
                 await checkYTDLP()
             }
+        }
+        .onDisappear {
+            pasteMonitorController.uninstall()
+            downloadManager.deactivateUI(sessionID: uiSessionID)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             checkPermissions()
@@ -156,14 +251,14 @@ struct ContentView: View {
     private var permissionBanner: some View {
         HStack(spacing: 12) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 33))
+                .font(.title2)
                 .foregroundStyle(.orange)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("完整磁碟存取")
-                    .font(.system(size: 26, weight: .bold))
+                    .font(.title2.bold())
                 Text("使用 Safari cookies 需要完整磁碟存取權限")
-                    .font(.system(size: 18))
+                    .font(.body)
                     .foregroundStyle(.secondary)
             }
 
@@ -174,7 +269,7 @@ struct ContentView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .font(.system(size: 18))
+            .font(.body)
         }
         .padding(12)
         .background(Color(nsColor: .controlBackgroundColor))
@@ -185,14 +280,14 @@ struct ContentView: View {
     private var ytdlpBanner: some View {
         HStack(spacing: 12) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 33))
+                .font(.title2)
                 .foregroundStyle(.red)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("yt-dlp 未安裝")
-                    .font(.system(size: 26, weight: .bold))
+                    .font(.title2.bold())
                 Text("需要安裝 yt-dlp 才能下載影片")
-                    .font(.system(size: 18))
+                    .font(.body)
                     .foregroundStyle(.secondary)
             }
 
@@ -205,7 +300,7 @@ struct ContentView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .font(.system(size: 18))
+            .font(.body)
         }
         .padding(12)
         .background(Color(nsColor: .controlBackgroundColor))
@@ -270,13 +365,21 @@ struct ContentView: View {
     // MARK: - 貼上快捷鍵設定
 
     private func setupPasteShortcut() {
-        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            // 檢查是否為 ⌘V
-            if event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == "v" {
-                pasteFromClipboard()
-                return nil // 消耗此事件
+        pasteMonitorController.install { event in
+            let isCommandV = event.modifierFlags.contains(.command)
+                && event.charactersIgnoringModifiers?.lowercased() == "v"
+            let firstResponderIsTextInput = event.window?.firstResponder is any NSTextInputClient
+
+            guard shouldConsumePasteEvent(
+                isCommandV: isCommandV,
+                windowIdentifier: event.window?.identifier,
+                firstResponderIsTextInput: firstResponderIsTextInput
+            ) else {
+                return event
             }
-            return event
+
+            pasteFromClipboard()
+            return nil
         }
     }
 
@@ -335,11 +438,11 @@ struct ContentView: View {
 
             VStack(spacing: 12) {
                 Image(systemName: "arrow.down.circle.fill")
-                    .font(.system(size: 72))
+                    .font(.largeTitle)
                     .foregroundStyle(Color.accentColor)
 
                 Text("放開以新增下載")
-                    .font(.system(size: 33))
+                    .font(.title)
                     .foregroundStyle(Color.accentColor)
             }
         }
@@ -356,12 +459,12 @@ struct ContentView: View {
     private var bottomToolbar: some View {
         HStack {
             // 設定按鈕
-            Button(action: { showingSettings = true }) {
+            Button(action: openSettings.callAsFunction) {
                 Image(systemName: "gearshape")
-                    .font(.system(size: 21))
+                    .font(.title2)
             }
             .buttonStyle(.borderless)
-            .focusable(false)
+            .accessibilityLabel("設定")
             .help("設定")
 
             // 暫停全部按鈕
@@ -370,10 +473,10 @@ struct ContentView: View {
                     Task { await downloadManager.pauseAll() }
                 }) {
                     Image(systemName: "pause.circle")
-                        .font(.system(size: 21))
+                        .font(.title2)
                 }
                 .buttonStyle(.borderless)
-                .focusable(false)
+                .accessibilityLabel("暫停全部")
                 .help("暫停全部")
             }
 
@@ -383,10 +486,10 @@ struct ContentView: View {
                     downloadManager.resumeAll()
                 }) {
                     Image(systemName: "play.circle")
-                        .font(.system(size: 21))
+                        .font(.title2)
                 }
                 .buttonStyle(.borderless)
-                .focusable(false)
+                .accessibilityLabel("繼續全部")
                 .help("繼續全部")
             }
 
@@ -394,7 +497,7 @@ struct ContentView: View {
 
             // 任務計數
             Text(taskCountText)
-                .font(.system(size: 18))
+                .font(.callout)
                 .foregroundStyle(.secondary)
 
             Spacer()
@@ -405,10 +508,10 @@ struct ContentView: View {
                     downloadManager.clearCompletedTasks()
                 }) {
                     Image(systemName: "checkmark.circle")
-                        .font(.system(size: 21))
+                        .font(.title2)
                 }
                 .buttonStyle(.borderless)
-                .focusable(false)
+                .accessibilityLabel("清除已完成")
                 .help("清除已完成")
             }
 
@@ -418,10 +521,10 @@ struct ContentView: View {
                     showDeleteAllAlert = true
                 }) {
                     Image(systemName: "trash")
-                        .font(.system(size: 21))
+                        .font(.title2)
                 }
                 .buttonStyle(.borderless)
-                .focusable(false)
+                .accessibilityLabel("清除全部")
                 .help("清除全部")
             }
         }

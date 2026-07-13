@@ -8,7 +8,6 @@ struct PlaylistSelectionView: View {
     let onCancel: () -> Void
 
     @State private var selectedIndices: Set<Int> = []
-    @State private var didConfirm = false
     @Environment(\.dismiss) private var dismiss
 
     private var allSelected: Bool {
@@ -21,10 +20,10 @@ struct PlaylistSelectionView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(playlistTitle)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.headline)
                         .lineLimit(2)
                     Text("共 \(videos.count) 集")
-                        .font(.system(size: 11))
+                        .font(.callout)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -43,12 +42,12 @@ struct PlaylistSelectionView: View {
                     }
                 }
                 .buttonStyle(.borderless)
-                .font(.system(size: 11))
+                .font(.callout)
 
                 Spacer()
 
                 Text("已選 \(selectedIndices.count) 集")
-                    .font(.system(size: 11))
+                    .font(.callout)
                     .foregroundStyle(.secondary)
             }
             .padding(.horizontal)
@@ -72,11 +71,11 @@ struct PlaylistSelectionView: View {
                         )) {
                             HStack(spacing: 6) {
                                 Text("\(index + 1).")
-                                    .font(.system(size: 11))
+                                    .font(.callout)
                                     .foregroundStyle(.tertiary)
                                     .frame(width: 28, alignment: .trailing)
                                 Text(video.title)
-                                    .font(.system(size: 11))
+                                    .font(.callout)
                                     .lineLimit(1)
                             }
                         }
@@ -92,6 +91,7 @@ struct PlaylistSelectionView: View {
             // 按鈕
             HStack {
                 Button("取消") {
+                    onCancel()
                     dismiss()
                 }
                 .keyboardShortcut(.escape)
@@ -99,7 +99,6 @@ struct PlaylistSelectionView: View {
                 Spacer()
 
                 Button("下載 (\(selectedIndices.count))") {
-                    didConfirm = true
                     let selected = selectedIndices.sorted().map { videos[$0] }
                     onConfirm(selected)
                     dismiss()
@@ -115,12 +114,7 @@ struct PlaylistSelectionView: View {
             // 預設全選
             selectedIndices = Set(videos.indices)
         }
-        .onDisappear {
-            // 若非確認下載而關閉（如按 Esc、點擊外部），自動取消
-            if !didConfirm {
-                onCancel()
-            }
-        }
+        .interactiveDismissDisabled()
     }
 }
 

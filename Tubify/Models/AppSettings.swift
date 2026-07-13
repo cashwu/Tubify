@@ -17,7 +17,7 @@ enum AppSettingsDefaults {
     static let genericDownloadCommand = "yt-dlp -f \"bv*+ba/b\" --cookies-from-browser safari \"$youtubeUrl\""
     static let downloadFolder = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first?.path ?? "~/Downloads"
     static let maxConcurrentDownloads: Int = 2 // 最大同時下載數量（1-5）
-    static let autoRemoveCompleted: Bool = true // 下載完成後自動從列表移除
+    static let autoRemoveCompleted: Bool = false // 下載完成後保留在列表中
 }
 
 /// 下載相關常數

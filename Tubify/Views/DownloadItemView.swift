@@ -12,11 +12,20 @@ struct DownloadItemView: View {
 
     @State private var isHovering = false
     @State private var showDeleteAlert = false
+    @State private var showErrorDetails = false
+
+    private static let errorFallbackSummary = String(localized: "無法取得錯誤詳細資訊")
 
     /// 複製 URL 到剪貼簿
     private func copyURL() {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(task.url, forType: .string)
+    }
+
+    /// 複製完整錯誤訊息到剪貼簿
+    private func copyErrorDetails() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(errorDetails, forType: .string)
     }
 
     /// 用預設瀏覽器打開 URL
@@ -34,6 +43,27 @@ struct DownloadItemView: View {
                              error.contains("Cookies.binarycookies")
         let isPermError = error.contains("Operation not permitted") || error.contains("Permission denied")
         return isCookiesError && isPermError
+    }
+
+    private var errorDetails: String {
+        guard let errorMessage = task.errorMessage,
+              !errorMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return Self.errorFallbackSummary
+        }
+        return errorMessage
+    }
+
+    static func errorSummary(for errorMessage: String?) -> String {
+        guard let firstLine = errorMessage?
+            .split(whereSeparator: \Character.isNewline)
+            .lazy
+            .map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) })
+            .first(where: { !$0.isEmpty }) else {
+            return errorFallbackSummary
+        }
+
+        guard firstLine.count > 160 else { return firstLine }
+        return String(firstLine.prefix(159)) + "…"
     }
 
     static func statusText(for task: DownloadTask) -> String {
@@ -58,13 +88,13 @@ struct DownloadItemView: View {
             VStack(alignment: .leading, spacing: 4) {
                 // 標題
                 Text(task.title)
-                    .font(.system(size: 26, weight: .bold))
+                    .font(.headline)
                     .lineLimit(2)
                     .foregroundStyle(.primary)
 
                 // URL
                 Text(task.url)
-                    .font(.system(size: 18))
+                    .font(.callout)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
 
@@ -76,7 +106,7 @@ struct DownloadItemView: View {
 
 
                         Text("\(Int(task.progress * 100))%")
-                            .font(.system(size: 18))
+                            .font(.callout)
                             .foregroundStyle(.secondary)
                             .monospacedDigit()
                     } else {
@@ -107,6 +137,14 @@ struct DownloadItemView: View {
             }
         } message: {
             Text(task.status == .downloading ? "確定要取消正在進行的下載嗎？" : "確定要從列表中移除此項目嗎？")
+        }
+        .alert("下載錯誤", isPresented: $showErrorDetails) {
+            Button("複製") {
+                copyErrorDetails()
+            }
+            Button("關閉", role: .cancel) {}
+        } message: {
+            Text(errorDetails)
         }
         .contextMenu {
             Button {
@@ -156,7 +194,7 @@ struct DownloadItemView: View {
             .frame(width: 120, height: 68)
             .overlay {
                 Image(systemName: "play.rectangle")
-                    .font(.system(size: 33))
+                    .font(.title)
                     .foregroundStyle(.secondary)
             }
     }
@@ -193,15 +231,18 @@ struct DownloadItemView: View {
             case .failed:
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(.red)
+                Text(Self.errorSummary(for: task.errorMessage))
+                    .lineLimit(1)
+                Button("詳細資訊") {
+                    showErrorDetails = true
+                }
+                .buttonStyle(.link)
                 if isPermissionError {
-                    Text("權限不足")
                     Button("前往設定") {
                         PermissionService.shared.openFullDiskAccessSettings()
                     }
                     .buttonStyle(.link)
-                    .font(.system(size: 18))
-                } else {
-                    Text("失敗")
+                    .font(.callout)
                 }
             case .cancelled:
                 Image(systemName: "xmark.circle.fill")
@@ -229,7 +270,7 @@ struct DownloadItemView: View {
                 Text(Self.statusText(for: task))
             }
         }
-        .font(.system(size: 18))
+        .font(.callout)
         .foregroundStyle(.secondary)
     }
 
@@ -256,10 +297,10 @@ struct DownloadItemView: View {
             if task.status == .completed {
                 Button(action: onShowInFinder) {
                     Image(systemName: "folder")
-                        .font(.system(size: 21))
+                        .font(.title2)
                 }
                 .buttonStyle(.borderless)
-                .focusable(false)
+                .accessibilityLabel("在 Finder 中顯示")
                 .help("在 Finder 中顯示")
             }
 
@@ -267,10 +308,10 @@ struct DownloadItemView: View {
             if task.status == .downloading || task.status == .pending {
                 Button(action: onPause) {
                     Image(systemName: "pause.circle")
-                        .font(.system(size: 21))
+                        .font(.title2)
                 }
                 .buttonStyle(.borderless)
-                .focusable(false)
+                .accessibilityLabel("暫停")
                 .help("暫停")
             }
 
@@ -278,10 +319,10 @@ struct DownloadItemView: View {
             if task.status == .paused {
                 Button(action: onResume) {
                     Image(systemName: "play.circle")
-                        .font(.system(size: 21))
+                        .font(.title2)
                 }
                 .buttonStyle(.borderless)
-                .focusable(false)
+                .accessibilityLabel("繼續")
                 .help("繼續")
             }
 
@@ -289,10 +330,10 @@ struct DownloadItemView: View {
             if Self.showsRetryControl(for: task) {
                 Button(action: onRetry) {
                     Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 21))
+                        .font(.title2)
                 }
                 .buttonStyle(.borderless)
-                .focusable(false)
+                .accessibilityLabel("重試")
                 .help("重試")
             }
 
@@ -301,11 +342,11 @@ struct DownloadItemView: View {
                 showDeleteAlert = true
             }) {
                 Image(systemName: task.status == .downloading ? "xmark.circle" : "trash")
-                    .font(.system(size: 21))
+                    .font(.title2)
                     .foregroundStyle(task.status == .downloading ? .orange : .secondary)
             }
             .buttonStyle(.borderless)
-            .focusable(false)
+            .accessibilityLabel(task.status == .downloading ? "取消下載" : "移除")
             .help(task.status == .downloading ? "取消下載" : "移除")
         }
         .opacity(isHovering ? 1 : 0.5)
