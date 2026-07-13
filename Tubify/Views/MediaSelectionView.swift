@@ -1,5 +1,9 @@
 import SwiftUI
 
+func clearSelectedSubtitles(_ selectedLanguages: inout Set<String>) {
+    selectedLanguages.removeAll()
+}
+
 /// 媒體選項選擇視窗（字幕 + 音軌）
 struct MediaSelectionView: View {
     let videoTitle: String?  // 單一影片標題，播放清單為 nil
@@ -72,7 +76,7 @@ struct MediaSelectionView: View {
             Form {
                 // 字幕區塊
                 if !filteredSubtitles.isEmpty {
-                    Section("字幕（可多選）") {
+                    Section {
                         ForEach(filteredSubtitles) { track in
                             Toggle(isOn: Binding(
                                 get: { selectedSubtitleLanguages.contains(track.languageCode) },
@@ -92,6 +96,16 @@ struct MediaSelectionView: View {
                                 }
                             }
                             .toggleStyle(.checkbox)
+                        }
+                    } header: {
+                        HStack {
+                            Text("字幕（可多選）")
+                            Spacer()
+                            Button("全部取消") {
+                                clearSelectedSubtitles(&selectedSubtitleLanguages)
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.callout)
                         }
                     }
                 }

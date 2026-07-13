@@ -21,6 +21,27 @@ final class MediaSelectionLogicTests: XCTestCase {
         return (0..<count).map { SubtitleTrack(languageCode: supportedLanguages[$0 % supportedLanguages.count]) }
     }
 
+    // MARK: - 字幕選取邏輯測試
+
+    func testClearSelectedSubtitles_RemovesAllLanguagesWithoutChangingAudioSelection() {
+        var selectedSubtitleLanguages: Set<String> = ["zh-TW", "en", "ja"]
+        let selectedAudioLanguage: String? = "ja"
+
+        clearSelectedSubtitles(&selectedSubtitleLanguages)
+
+        XCTAssertTrue(selectedSubtitleLanguages.isEmpty)
+        XCTAssertEqual(selectedAudioLanguage, "ja")
+    }
+
+    func testClearSelectedSubtitles_AllowsSelectingOnlyEnglishAfterClearing() {
+        var selectedSubtitleLanguages: Set<String> = ["zh-TW", "en", "ja"]
+
+        clearSelectedSubtitles(&selectedSubtitleLanguages)
+        selectedSubtitleLanguages.insert("en")
+
+        XCTAssertEqual(selectedSubtitleLanguages, ["en"])
+    }
+
     // MARK: - 音軌選擇顯示邏輯測試
 
     func testShouldNotShowAudioSelection_WhenZeroTracks() {
