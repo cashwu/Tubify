@@ -25,6 +25,8 @@ Have a focused discussion about a topic and reach a conclusion.
 
 ---
 
+**Response language**: All user-facing responses in this workflow MUST be written in Traditional Chinese unless the user explicitly requests another language. Keep shell commands, file paths, code identifiers, schema field names, and quoted source text verbatim.
+
 ## Before You Speak
 
 Before asking anything, load the shared vocabulary, then do a quick codebase scout to decide how to run this discussion.

@@ -20,6 +20,8 @@ This tool uses conversation context to update artifacts (no plan file directory)
 - `$cash-ingest agile-discovering-rocket`
 - `$cash-ingest` (use conversation context or auto-detect plan file)
 
+**Response language**: All user-facing responses in this workflow MUST be written in Traditional Chinese unless the user explicitly requests another language. Keep shell commands, file paths, code identifiers, schema field names, and quoted source text verbatim.
+
 **Steps**
 
 1. **Locate the requirement source**
@@ -110,7 +112,7 @@ This tool uses conversation context to update artifacts (no plan file directory)
 
    Use the `template` from instructions as the output structure. Apply `context` and `rules` as constraints but do NOT copy them into the file.
 
-   The instructions JSON includes `locale` — the language to write artifacts in. If present, you MUST write the artifact content in that language. Exception: spec files (specs/\*/\*.md) MUST always be written in English regardless of locale, because they use normative language (SHALL/MUST).
+   The instructions JSON includes `locale` — the language to write artifacts in. If present, you MUST write the artifact content in that language. For spec files (specs/\*/\*.md), the spec-file language policy takes precedence over `locale`: Traditional Chinese prose with English structural keywords (`### Requirement:`, `#### Scenario:`, GIVEN/WHEN/THEN/AND) and English normative verbs (SHALL / MUST and their NOT forms); every MODIFIED/REMOVED requirement title and every RENAMED FROM title MUST be copied byte-for-byte from the current master spec, because `spectra archive` matches titles verbatim and silently drops non-matching blocks.
 
    **Plan-to-Artifact Mapping** (when using a plan file):
 

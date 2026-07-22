@@ -21,6 +21,8 @@ Analyze the diff through the Scoundrel, Lazy Developer, and Confused Developer l
 
 ---
 
+**Response language**: All user-facing responses in this workflow MUST be written in Traditional Chinese unless the user explicitly requests another language. Keep shell commands, file paths, code identifiers, schema field names, and quoted source text verbatim.
+
 ## Core Framework
 
 ### Three Adversaries

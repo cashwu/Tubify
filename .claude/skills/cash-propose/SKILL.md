@@ -20,6 +20,8 @@ If no argument is provided, the workflow will extract requirements from conversa
 
 **Prerequisites**: This skill requires the `spectra` CLI. If any `spectra` command fails with "command not found" or similar, report the error and STOP.
 
+**Response language**: All user-facing responses in this workflow MUST be written in Traditional Chinese unless the user explicitly requests another language. Keep shell commands, file paths, code identifiers, schema field names, and quoted source text verbatim.
+
 **Steps**
 
 1. **Determine the requirement source**
@@ -74,7 +76,7 @@ If no argument is provided, the workflow will extract requirements from conversa
    - If no related specs are found, silently proceed without mentioning the scan
 
 
-**Read open signals for prioritization (cash-propose only)**
+3b. **Read open signals for prioritization (cash-propose only)**
 
 <!-- SIGNALS-READ-STEP -->
 
@@ -253,7 +255,7 @@ If no argument is provided, the workflow will extract requirements from conversa
      - `instruction`: Schema-specific guidance
      - `outputPath`: Where to write the artifact
      - `dependencies`: Completed artifacts to read for context
-     - `locale`: The language to write the artifact in (e.g., "Japanese (日本語)"). If present, you MUST write the artifact content in this language. Exception: spec files (specs/\*_/_.md) MUST always be written in English regardless of locale, because they use normative language (SHALL/MUST).
+     - `locale`: The language to write the artifact in (e.g., "Japanese (日本語)"). If present, you MUST write the artifact content in this language. For spec files (specs/\*_/_.md), the Spec-file language policy below takes precedence over `locale`.
    - Read any completed dependency files for context
    - Generate the artifact content using `template` as the structure
    - Apply `context` and `rules` as constraints - but do NOT copy them into the file
@@ -295,12 +297,12 @@ If no argument is provided, the workflow will extract requirements from conversa
 
    This applies to artifacts generated in step 5 (proposal) and step 7 (remaining artifacts), and to any artifacts modified during the review loop fix actions.
 
-   **Exception — spec files stay in English:**
+   **Spec-file language policy (delta and master specs):**
 
    - `openspec/changes/<change>/specs/<capability>/spec.md` (delta spec)
    - `openspec/specs/<capability>/spec.md` (master spec)
 
-   The spec files MUST be written in English because they use normative SHALL/MUST wording, and delta specs are later merged into master specs — mixing languages would cause merge conflicts and semantic drift. This is consistent with the existing `locale` rule documented above for spec files.
+   Spec files are written in Traditional Chinese prose with English structural keywords. Keep the following verbatim in English: `## ADDED Requirements`, `## MODIFIED Requirements`, `## REMOVED Requirements`, `## RENAMED Requirements`, `### Requirement:`, `#### Scenario:`, `##### Example:`, and the **GIVEN** / **WHEN** / **THEN** / **AND** step markers. Normative verbs (SHALL / MUST / SHOULD / MAY and their NOT forms) stay in English embedded inside Chinese sentences. Code identifiers, file paths, CLI commands, schema field names, and quoted source text stay verbatim. Requirement titles are written in Chinese; every title under `## MODIFIED Requirements` or `## REMOVED Requirements`, and the FROM title of every `## RENAMED Requirements` entry, MUST be copied byte-for-byte from the current master spec — never retyped, reworded, or translated — because `spectra archive` matches requirement titles verbatim and silently drops non-matching MODIFIED/REMOVED blocks. Historical spec files under `openspec/changes/archive/` are historical records and are not retroactively translated.
 
    **Keep the following verbatim (do not translate) even inside Chinese prose:**
 
@@ -341,6 +343,7 @@ If no argument is provided, the workflow will extract requirements from conversa
      - **Comment/annotation lint**: in every spec delta file, `<!--` and `-->` counts MUST match; no unclosed annotation block (e.g. a dangling `<!-- @trace` line) and no stray `---` separator may remain inside a requirement or scenario section.
      - **Count-consistency scan**: every numeric claim one artifact makes about another (e.g. proposal or design stating a scenario, requirement, or task count) MUST match the actual count in the referenced artifact. Recount at the source and update stale numbers.
      - **Identifier cross-grep**: for each function name, entry point, file path, flag, or artifact ID that `design.md` defines, grep ALL artifacts (and for cash-apply, the changed files) and verify every occurrence is consistent in spelling and meaning.
+     - **Spec delta title-identity check**: for every `### Requirement:` title under a `## MODIFIED Requirements` or `## REMOVED Requirements` section in a delta spec, and for the FROM title of every entry under `## RENAMED Requirements`, verify the same title exists byte-for-byte as a `### Requirement:` heading in the corresponding master spec `openspec/specs/<capability>/spec.md`. Skip capabilities whose master spec does not exist. A missing title is a self-check failure: copy the title verbatim from the master spec and fix the delta before spawning reviewers, because `spectra archive` silently drops non-matching MODIFIED/REMOVED blocks.
      - **Signal-derived checks**:
        1. For EVERY `open` signal whose frontmatter contains a `check` field, execute the `check` value from the project root by passing it as the single command-string argument to `sh -c`, without applying relevance filtering. Executing a `check` command MUST NOT modify any file. Exit `0` means the check passed. Exit `1` means the anti-pattern is present: inspect any project-root-relative paths printed by the `check` command and compare them with this change's artifacts and, for cash-apply, changed files. If at least one printed path is in that artifact/source file set, treat the failure as in scope. If the `check` command prints no usable project-root-relative path, or the output cannot be reliably mapped to a project-root-relative path, fail closed and treat the detected instance as in scope unless the already-read repository state proves the instance is pre-existing or the required fix location is outside the structured scope declarations. If the detected instance is in scope and the fix location is not a protected grader path that is not covered by the structured-scope exception, fix it before spawning reviewers. If the detected instance is pre-existing, or its fix lies outside this change's structured scope declarations, or its fix lies inside a protected grader path that is not covered by the structured-scope exception, do not fix it, record one `範圍外 check 失敗` note in that round file's `## Fix Actions`, include the failing check result in the reviewers' context, and proceed to spawn reviewers. Any other exit code is an execution error: fall back to the existing best-effort judgment for that signal and record one fallback note in `## Fix Actions`. These note lines coexist with `None; pass condition met.` and do not count toward ledger `fixed_files`.
        2. For `open` signals without a `check` field, or signals whose `check` execution fell back because of an execution error, keep the existing best-effort behavior: if any relevant signal (see "Signals in reviewer context" below) describes a machine-checkable anti-pattern, run a corresponding check for it.
@@ -503,7 +506,7 @@ If no argument is provided, the workflow will extract requirements from conversa
    - **Structured scope declarations**: A file counts as explicitly named only when its project-root-relative path appears in a structured scope declaration: an affected-code entry in proposal `## Impact`, or a `tasks.md` path that is explicitly identified as a delivery target. A path that appears only in a verification command, a rule description, an example, a review finding, reviewer context, or other incidental prose MUST NOT count as a structured scope declaration. Naming a directory path in a structured scope declaration names every file under it.
    - A loop already in progress continues under the instruction version it started with; regenerated instructions take effect only from the next loop run.
    - The main agent MUST NOT add, modify, or remove the `check` frontmatter field of any signal under `openspec/signals/`, regardless of declared scope. The `check` field is grader input for the pre-round mechanical self-check.
-   - If fixing a surviving finding would require modifying a protected file outside the structured scope declarations, or touching any signal's `check` field, do not make that modification. Record `未修復：裁判面保護` (an unfixed-due-to-grader-protection note) in `## Fix Actions`, naming the protected file and finding. The finding remains surviving for the round decision. This is the explicit exception to the obligations to fix Critical/Warning findings before the next round in the `cash-propose quality gate` and `cash-apply quality gate` requirements: fixes are required except any finding withheld under the grader-immutability rule.
+   - If fixing a surviving finding would require modifying a protected file outside the structured scope declarations, or touching any signal's `check` field, do not make that modification. Record `未修復：裁判面保護` (an unfixed-due-to-grader-protection note) in `## Fix Actions`, naming the protected file and finding. The finding remains surviving for the round decision. This is the explicit exception to the obligations to fix Critical/Warning findings before the next round in the `cash-propose 品質關卡` and `cash-apply 品質關卡` requirements: fixes are required except any finding withheld under the grader-immutability rule.
    - A protected file modified under the declared-scope exception does not alter the position-derived next round type. If the loop reaches round 6 without passing because protected findings remain, write `decision: aborted` under the existing round-limit rule.
    - The cash workflow completion output MUST list every `未修復：裁判面保護` record from every round, even if a later round passes: for `cash-propose` with `decision: passed`, list the records in the final summary; for `cash-apply` with `decision: passed`, list the records in the gate-complete final response; for any `decision: aborted`, list the records in the unresolved-findings warning.
 
@@ -529,7 +532,7 @@ If no argument is provided, the workflow will extract requirements from conversa
      - Section headings: `# Cash Propose Review — Round <N>`, `# Cash Apply Review — Round <N>`, `## Reviewer Findings`, `## Rating`, `## Fix Actions`, `## Decision`.
      - The `decision` value: one of `passed`, `next_round`, `aborted`.
      - Field names and their values: `critical_gap` (`true` / `false`), `round_type` (`full` / `micro`), `severity`, `confidence`, `layer` (`design` / `text`), `disposition` (`unresolved-prior` / `fix-introduced` / `new`), `introduced_by`, `location`, `summary`, `recommendation`.
-     - Direct quotations from spec delta, master spec, or any other English-language artifact.
+     - Direct quotations from any source artifact, kept in the source's original language.
      - CLI commands, file paths, code identifiers, artifact IDs, capability slugs.
    - This rule applies to both `cash-propose` and `cash-apply` round files because they share this review-loop template.
    - If the user explicitly requests another language later, follow the latest user instruction.

@@ -364,7 +364,7 @@ Simplicity First 與 Surgical Changes 的目的是「不寫不必要的東西」
 
 
 
-11. **Cash-apply response language**
+**Cash-apply response language**
 
    For `cash-apply`, ai 的回覆要用中文.
 
@@ -395,7 +395,7 @@ Simplicity First 與 Surgical Changes 的目的是「不寫不必要的東西」
    When the cash-apply workflow modifies an artifact — during review-loop fix actions, or after `/cash-ingest` updates `tasks.md` / `design.md` / `proposal.md` — the updated artifact content MUST follow the same Chinese language rule as cash-propose:
 
    - `tasks.md`, `design.md`, `proposal.md`, and other non-spec artifacts under `openspec/changes/<change>/`: Traditional Chinese.
-   - Spec files (`openspec/changes/<change>/specs/**/spec.md` and `openspec/specs/**/spec.md`): always English, regardless of any other language rule. Delta specs are merged into master specs and must use normative SHALL/MUST wording.
+   - Spec files (`openspec/changes/<change>/specs/**/spec.md` and `openspec/specs/**/spec.md`): follow the Spec-file language policy — Traditional Chinese prose with English structural keywords (`### Requirement:`, `#### Scenario:`, GIVEN/WHEN/THEN/AND) and English normative verbs (SHALL / MUST and their NOT forms) embedded in Chinese sentences. Every MODIFIED/REMOVED requirement title and every RENAMED FROM title MUST be copied byte-for-byte from the current master spec, because `spectra archive` matches titles verbatim and silently drops non-matching blocks.
 
    Keep CLI commands, file paths, code identifiers, schema field names, artifact IDs, capability slugs, and existing quoted source text verbatim. If the user explicitly requests another language later, follow the latest user instruction.
 
@@ -406,7 +406,7 @@ Simplicity First 與 Surgical Changes 的目的是「不寫不必要的東西」
    - If the final round decision is `passed`, the final response MAY tell the user they can archive with `/cash-archive`.
    - If the final round decision is `aborted`, do NOT suggest archive; summarize the unresolved findings and point to the final round file.
 
-12. **Sub-Agent Review/Rating/Fix Loop**
+11. **Sub-Agent Review/Rating/Fix Loop**
 
    Run this review/rating/fix loop once per change, after the normal workflow has completed its required artifact or task work.
 
@@ -423,6 +423,7 @@ Simplicity First 與 Surgical Changes 的目的是「不寫不必要的東西」
      - **Comment/annotation lint**: in every spec delta file, `<!--` and `-->` counts MUST match; no unclosed annotation block (e.g. a dangling `<!-- @trace` line) and no stray `---` separator may remain inside a requirement or scenario section.
      - **Count-consistency scan**: every numeric claim one artifact makes about another (e.g. proposal or design stating a scenario, requirement, or task count) MUST match the actual count in the referenced artifact. Recount at the source and update stale numbers.
      - **Identifier cross-grep**: for each function name, entry point, file path, flag, or artifact ID that `design.md` defines, grep ALL artifacts (and for cash-apply, the changed files) and verify every occurrence is consistent in spelling and meaning.
+     - **Spec delta title-identity check**: for every `### Requirement:` title under a `## MODIFIED Requirements` or `## REMOVED Requirements` section in a delta spec, and for the FROM title of every entry under `## RENAMED Requirements`, verify the same title exists byte-for-byte as a `### Requirement:` heading in the corresponding master spec `openspec/specs/<capability>/spec.md`. Skip capabilities whose master spec does not exist. A missing title is a self-check failure: copy the title verbatim from the master spec and fix the delta before spawning reviewers, because `spectra archive` silently drops non-matching MODIFIED/REMOVED blocks.
      - **Signal-derived checks**:
        1. For EVERY `open` signal whose frontmatter contains a `check` field, execute the `check` value from the project root by passing it as the single command-string argument to `sh -c`, without applying relevance filtering. Executing a `check` command MUST NOT modify any file. Exit `0` means the check passed. Exit `1` means the anti-pattern is present: inspect any project-root-relative paths printed by the `check` command and compare them with this change's artifacts and, for cash-apply, changed files. If at least one printed path is in that artifact/source file set, treat the failure as in scope. If the `check` command prints no usable project-root-relative path, or the output cannot be reliably mapped to a project-root-relative path, fail closed and treat the detected instance as in scope unless the already-read repository state proves the instance is pre-existing or the required fix location is outside the structured scope declarations. If the detected instance is in scope and the fix location is not a protected grader path that is not covered by the structured-scope exception, fix it before spawning reviewers. If the detected instance is pre-existing, or its fix lies outside this change's structured scope declarations, or its fix lies inside a protected grader path that is not covered by the structured-scope exception, do not fix it, record one `範圍外 check 失敗` note in that round file's `## Fix Actions`, include the failing check result in the reviewers' context, and proceed to spawn reviewers. Any other exit code is an execution error: fall back to the existing best-effort judgment for that signal and record one fallback note in `## Fix Actions`. These note lines coexist with `None; pass condition met.` and do not count toward ledger `fixed_files`.
        2. For `open` signals without a `check` field, or signals whose `check` execution fell back because of an execution error, keep the existing best-effort behavior: if any relevant signal (see "Signals in reviewer context" below) describes a machine-checkable anti-pattern, run a corresponding check for it.
@@ -585,7 +586,7 @@ Simplicity First 與 Surgical Changes 的目的是「不寫不必要的東西」
    - **Structured scope declarations**: A file counts as explicitly named only when its project-root-relative path appears in a structured scope declaration: an affected-code entry in proposal `## Impact`, or a `tasks.md` path that is explicitly identified as a delivery target. A path that appears only in a verification command, a rule description, an example, a review finding, reviewer context, or other incidental prose MUST NOT count as a structured scope declaration. Naming a directory path in a structured scope declaration names every file under it.
    - A loop already in progress continues under the instruction version it started with; regenerated instructions take effect only from the next loop run.
    - The main agent MUST NOT add, modify, or remove the `check` frontmatter field of any signal under `openspec/signals/`, regardless of declared scope. The `check` field is grader input for the pre-round mechanical self-check.
-   - If fixing a surviving finding would require modifying a protected file outside the structured scope declarations, or touching any signal's `check` field, do not make that modification. Record `未修復：裁判面保護` (an unfixed-due-to-grader-protection note) in `## Fix Actions`, naming the protected file and finding. The finding remains surviving for the round decision. This is the explicit exception to the obligations to fix Critical/Warning findings before the next round in the `cash-propose quality gate` and `cash-apply quality gate` requirements: fixes are required except any finding withheld under the grader-immutability rule.
+   - If fixing a surviving finding would require modifying a protected file outside the structured scope declarations, or touching any signal's `check` field, do not make that modification. Record `未修復：裁判面保護` (an unfixed-due-to-grader-protection note) in `## Fix Actions`, naming the protected file and finding. The finding remains surviving for the round decision. This is the explicit exception to the obligations to fix Critical/Warning findings before the next round in the `cash-propose 品質關卡` and `cash-apply 品質關卡` requirements: fixes are required except any finding withheld under the grader-immutability rule.
    - A protected file modified under the declared-scope exception does not alter the position-derived next round type. If the loop reaches round 6 without passing because protected findings remain, write `decision: aborted` under the existing round-limit rule.
    - The cash workflow completion output MUST list every `未修復：裁判面保護` record from every round, even if a later round passes: for `cash-propose` with `decision: passed`, list the records in the final summary; for `cash-apply` with `decision: passed`, list the records in the gate-complete final response; for any `decision: aborted`, list the records in the unresolved-findings warning.
 
@@ -611,7 +612,7 @@ Simplicity First 與 Surgical Changes 的目的是「不寫不必要的東西」
      - Section headings: `# Cash Propose Review — Round <N>`, `# Cash Apply Review — Round <N>`, `## Reviewer Findings`, `## Rating`, `## Fix Actions`, `## Decision`.
      - The `decision` value: one of `passed`, `next_round`, `aborted`.
      - Field names and their values: `critical_gap` (`true` / `false`), `round_type` (`full` / `micro`), `severity`, `confidence`, `layer` (`design` / `text`), `disposition` (`unresolved-prior` / `fix-introduced` / `new`), `introduced_by`, `location`, `summary`, `recommendation`.
-     - Direct quotations from spec delta, master spec, or any other English-language artifact.
+     - Direct quotations from any source artifact, kept in the source's original language.
      - CLI commands, file paths, code identifiers, artifact IDs, capability slugs.
    - This rule applies to both `cash-propose` and `cash-apply` round files because they share this review-loop template.
    - If the user explicitly requests another language later, follow the latest user instruction.

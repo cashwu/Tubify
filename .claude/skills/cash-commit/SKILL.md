@@ -16,6 +16,8 @@ This is a **utility skill** (not a workflow step). It reads source file tracking
 
 **Prerequisites**: This skill requires `git`. Run `git --version`. If git is not available (command not found or similar error), inform the user to install git and STOP.
 
+**Response language**: All user-facing responses in this workflow MUST be written in Traditional Chinese unless the user explicitly requests another language. Keep shell commands, file paths, code identifiers, schema field names, and quoted source text verbatim.
+
 **Steps**
 
 1. **Select the change**
