@@ -1,6 +1,6 @@
-version	1.2.0
+version	1.2.1
 sha256	87a3914dfb669570f80deafb71a476503821658f1de74238a5aba5f0f4666acb	.agents/skills/cash-analyze/SKILL.md
-sha256	250d4d8764b559e62241d2cb3801794e42dd17703af219a8b20b56ae421d1913	.agents/skills/cash-apply/SKILL.md
+sha256	095381e44e1eed5625010dc229337102b30d04c14df0e08fe0f0f8de669a3702	.agents/skills/cash-apply/SKILL.md
 sha256	810cfa5bb5d79d867db2653afd7e3943196acab6049b155c7dc95303883d25c3	.agents/skills/cash-archive/SKILL.md
 sha256	b961984804de49e88e0969a74d54874e97dc4a776c33cc661c9a4b8a21e000ae	.agents/skills/cash-ask/SKILL.md
 sha256	2e4f18c7c2c964de2e894a55b8f8f6dd485e382feec2716664ae799e5095b661	.agents/skills/cash-audit/SKILL.md
@@ -12,7 +12,7 @@ sha256	0e54cd175949906d0b3704bbab12844324bacaadba4bbd0776aeaa0aa2f8717c	.agents/
 sha256	4098c553ad4c3b4f1b8ef3b201c70691ffce3914e98a655c6f512b4c8897a366	.agents/skills/cash-propose/SKILL.md
 sha256	5c17ee59b29c99834f356ab2192a9de83977805c28f4fc7cd5a43cfc6d46b7aa	.agents/skills/cash-verify/SKILL.md
 sha256	783388a0ec8a4d01e16221cab5bffea1bd00e0c0261db0705f29a11dda7a086b	.claude/skills/cash-analyze/SKILL.md
-sha256	cb2445d3d649a9e9e459f062a86629f43282975df27c62a2074334d4cacf822a	.claude/skills/cash-apply/SKILL.md
+sha256	b1c6b18b75d06b98d9b44b7194d2dd5f4a89b5b5c564e73b0ba02f1a1903af00	.claude/skills/cash-apply/SKILL.md
 sha256	0d8205a2ca3bd9519140ae7f68b300128e843df5011ed4f6e4f96eda9cb1752f	.claude/skills/cash-archive/SKILL.md
 sha256	8bf9b64de38072074c8483df267d2611a7fe85ad898516a3ad0c810ff97bff62	.claude/skills/cash-ask/SKILL.md
 sha256	02230c570051612e68e2630e40b3a77e7fe58b64134e98d9735bdf590b18c7a7	.claude/skills/cash-audit/SKILL.md

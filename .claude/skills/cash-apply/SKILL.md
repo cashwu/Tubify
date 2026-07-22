@@ -225,8 +225,10 @@ If there is no AskUserQuestion tool available, present options as plain text and
 
    **Pause if:**
    - Task is unclear → ask for clarification
-   - Implementation reveals a design issue → suggest updating artifacts
-   - Error or blocker encountered → report and wait for guidance
+   <!-- BLOCKER-TRIAGE -->
+   - **繼續分支（機制替換，contract 不變）**：原設計指定的達成手段在目標平台或現實不可行，但要交付的觀察行為、interface／資料形狀、失敗模式與驗收標準都不變，且替代手段不需要 `a synchronization primitive, identity/generation type, or state machine not defined in design.md` → 依 Implementation Notes Protocol 記一筆 `deviation`，說明原手段與替代手段，然後繼續該 task，不暫停、不要求 `/cash-ingest`。當上述條件全部成立時，即使需要在多個都保留 contract 的替代手段之間選擇，也 SHALL 以記一筆 `deviation` 解決，不觸發暫停分支。
+   - **暫停分支（contract／範圍／行為變更）**：阻塞改變要交付的觀察行為、範圍或使用者可見的取捨，或替代手段需要 `a synchronization primitive, identity/generation type, or state machine not defined in design.md`，或存在其解答可能改變 contract 或範圍、需要使用者決定的 open question → 暫停、報告 blocker，並引導使用者前往 `/cash-ingest`。
+   - Other errors or blockers not covered by the blocker triage above → report and wait for guidance
    - User interrupts
 
 ---
