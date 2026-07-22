@@ -430,6 +430,23 @@ class DownloadManager {
             task.thumbnailURL = videoInfo.thumbnail
             task.duration = videoInfo.duration
 
+            // 檢查是否為尚未首播（首播排程中）：yt-dlp 以 --skip-download 抓取 metadata 時
+            // 會成功回傳 JSON，若不攔截會落入 .pending 被排入佇列，下載時 yt-dlp 卡在 0% 無限等待。
+            // 必須等首播播完才可下載，因此設為 .scheduled 且不加入佇列。
+            if videoInfo.liveStatus == "is_upcoming" {
+                TubifyLogger.download.info("偵測到尚未首播（首播排程中）: \(videoInfo.title)")
+                task.status = .scheduled
+
+                // 解析首播時間（release_timestamp 為 Unix 時間）
+                if let releaseTimestamp = videoInfo.releaseTimestamp {
+                    task.premiereDate = Date(timeIntervalSince1970: TimeInterval(releaseTimestamp))
+                    TubifyLogger.download.info("首播時間: \(task.premiereDate!)")
+                }
+
+                persistenceService.saveTasks(tasks)
+                return  // 不加入下載佇列
+            }
+
             // 檢查是否正在首播串流
             if videoInfo.liveStatus == "is_live" {
                 TubifyLogger.download.info("偵測到正在首播串流中: \(videoInfo.title)")
@@ -447,7 +464,7 @@ class DownloadManager {
                 return  // 不加入下載佇列
             }
 
-            var mediaOptions: (subtitles: [SubtitleTrack], audioTracks: [AudioTrack], formats: [YTDLPFormat])?
+            var mediaOptions: MediaOptions?
 
             // 檢查是否為直播剛結束、正在處理中
             if videoInfo.liveStatus == "post_live" {
@@ -469,7 +486,7 @@ class DownloadManager {
             }
 
             // 獲取字幕和音軌資訊
-            let resolvedMediaOptions: (subtitles: [SubtitleTrack], audioTracks: [AudioTrack], formats: [YTDLPFormat])
+            let resolvedMediaOptions: MediaOptions
             if let mediaOptions {
                 resolvedMediaOptions = mediaOptions
             } else {
@@ -599,7 +616,6 @@ class DownloadManager {
         tasks.removeAll { $0.id == request.placeholderTaskId }
 
         var newTasks: [DownloadTask] = []
-        var selectedTaskPairs: [(task: DownloadTask, video: VideoInfo)] = []
         for video in selectedVideos {
             // 檢查是否已存在
             if tasks.contains(where: { $0.url == video.url }) {
@@ -616,7 +632,6 @@ class DownloadManager {
             )
             tasks.append(task)
             newTasks.append(task)
-            selectedTaskPairs.append((task, video))
         }
 
         TubifyLogger.download.info("已新增播放清單中的 \(newTasks.count) 個影片（選取 \(selectedVideos.count)，共 \(request.videos.count) 個）")
@@ -626,20 +641,32 @@ class DownloadManager {
         Task {
             let cookiesArgs = getCookiesArguments()
 
-            for pair in selectedTaskPairs {
-                let task = pair.task
+            for task in newTasks {
                 do {
                     let mediaOptions = try await metadataService.fetchMediaOptions(url: task.url, cookiesArguments: cookiesArgs)
-                    if pair.video.liveStatus == "post_live" && !YTDLPFormat.hasUsableMediaFormats(mediaOptions.formats) {
+
+                    // --flat-playlist 不含 live_status，改用完整 metadata 回傳的 liveStatus 偵測首播狀態
+
+                    // 尚未首播的影片必須等首播播完才可下載，設為 .scheduled 且不進佇列
+                    if mediaOptions.liveStatus == "is_upcoming" {
+                        TubifyLogger.download.info("播放清單中偵測到尚未首播: \(task.title)")
+                        task.status = .scheduled
+                        if let releaseTimestamp = mediaOptions.releaseTimestamp {
+                            task.premiereDate = Date(timeIntervalSince1970: TimeInterval(releaseTimestamp))
+                        }
+                        continue
+                    }
+
+                    if mediaOptions.liveStatus == "post_live" && !YTDLPFormat.hasUsableMediaFormats(mediaOptions.formats) {
                         markTaskAsPostLive(task)
                         continue
                     }
                     task.availableSubtitles = mediaOptions.subtitles
                     task.availableAudioTracks = mediaOptions.audioTracks
                 } catch {
-                    if pair.video.liveStatus == "post_live" {
-                        handlePostLiveFormatLookupError(error, for: task)
-                    }
+                    // metadata 抓取失敗：分類錯誤（直播已結束 → .postLive，其餘 → .failed）
+                    // 原本依賴 --flat-playlist 永遠為 nil 的 pair.video.liveStatus，實際從不觸發
+                    handlePostLiveFormatLookupError(error, for: task)
                 }
             }
 
@@ -976,7 +1003,9 @@ class DownloadManager {
 
     /// 重試任務
     func retryTask(_ task: DownloadTask) {
-        if task.status == .postLive {
+        // 首播（.scheduled）與直播處理中（.postLive）需重新抓取 metadata 再判斷：
+        // 若首播已播完會轉為可下載，否則回到 .scheduled，避免直接排入佇列導致 yt-dlp 卡在 0%
+        if task.status == .postLive || task.status == .scheduled {
             task.status = .fetchingInfo
             task.progress = 0
             task.errorMessage = nil

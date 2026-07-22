@@ -979,6 +979,116 @@ final class DownloadManagerTests: XCTestCase {
         XCTAssertNotEqual(task.status, .postLive)
     }
 
+    // MARK: - 尚未首播（is_upcoming）測試
+
+    func testUpcomingPremiereBecomesScheduledAndDoesNotStartDownload() async {
+        // Arrange：尚未首播的影片 yt-dlp metadata 會成功回傳 live_status = is_upcoming
+        let url = "https://www.youtube.com/watch?v=LkLLx7Krovk"
+        let premiereTimestamp = 1_784_721_606
+        mockMetadataService.videoInfo = VideoInfo(
+            id: "LkLLx7Krovk",
+            title: "首播影片",
+            thumbnail: nil,
+            duration: 600,
+            uploader: "Test",
+            url: url,
+            liveStatus: "is_upcoming",
+            releaseTimestamp: premiereTimestamp
+        )
+
+        // Act
+        XCTAssertEqual(manager.addURL(url), .success)
+        let becameScheduled = await waitUntil {
+            self.manager.tasks.first?.status == .scheduled
+        }
+
+        // Assert：設為 .scheduled、帶首播時間、且絕不進下載佇列（避免 yt-dlp 卡在 0%）
+        XCTAssertTrue(becameScheduled, "尚未首播應設為 .scheduled")
+        XCTAssertEqual(
+            manager.tasks.first?.premiereDate,
+            Date(timeIntervalSince1970: TimeInterval(premiereTimestamp))
+        )
+        XCTAssertTrue(mockYTDLPService.downloadedURLs.isEmpty, "尚未首播不應開始下載")
+    }
+
+    func testConfirmPlaylistSelectionUpcomingPremiereStaysScheduled() async {
+        // Arrange
+        let placeholderTask = createTestTask(
+            url: "https://www.youtube.com/playlist?list=PLtest",
+            title: "載入播放清單中...",
+            status: .fetchingInfo
+        )
+        manager.tasks = [placeholderTask]
+        let url = "https://www.youtube.com/watch?v=upcoming1"
+        let premiereTimestamp = 1_784_721_606
+        // --flat-playlist 不含 live_status，改由 fetchMediaOptions 完整 JSON 回傳
+        mockMetadataService.liveStatusByURL = [url: "is_upcoming"]
+        mockMetadataService.releaseTimestampByURL = [url: premiereTimestamp]
+
+        let selectedVideos = [
+            VideoInfo(
+                id: "upcoming1",
+                title: "首播影片",
+                thumbnail: nil,
+                duration: 600,
+                uploader: "Test",
+                url: url,
+                liveStatus: nil,
+                releaseTimestamp: nil
+            )
+        ]
+        let request = PlaylistSelectionRequest(
+            playlistTitle: "Test Playlist",
+            videos: selectedVideos,
+            placeholderTaskId: placeholderTask.id,
+            callbackScheme: nil,
+            requestId: nil
+        )
+
+        // Act
+        manager.confirmPlaylistSelection(request: request, selectedVideos: selectedVideos)
+        let becameScheduled = await waitUntil {
+            self.manager.tasks.first?.status == .scheduled
+        }
+
+        // Assert
+        XCTAssertTrue(becameScheduled)
+        XCTAssertEqual(
+            manager.tasks.first?.premiereDate,
+            Date(timeIntervalSince1970: TimeInterval(premiereTimestamp))
+        )
+        XCTAssertTrue(mockYTDLPService.downloadedURLs.isEmpty)
+    }
+
+    func testRetryScheduledPremiereRerunsMetadataAndDownloadsWhenAired() async {
+        // Arrange：使用者對 .scheduled 任務按重試，此時首播已播完（live_status 變成非 is_upcoming）
+        let url = "https://www.youtube.com/watch?v=LkLLx7Krovk"
+        let task = createTestTask(url: url, title: "首播影片", status: .scheduled)
+        task.premiereDate = Date(timeIntervalSince1970: 1_784_721_606)
+        manager.tasks = [task]
+        mockMetadataService.videoInfo = VideoInfo(
+            id: "LkLLx7Krovk",
+            title: "首播影片",
+            thumbnail: nil,
+            duration: 600,
+            uploader: "Test",
+            url: url,
+            liveStatus: "not_live",
+            releaseTimestamp: 1_784_721_606
+        )
+        mockMetadataService.mediaOptions = (subtitles: [], audioTracks: [], formats: [])
+
+        // Act
+        manager.retryTask(task)
+        let didDownload = await waitUntil {
+            self.mockYTDLPService.downloadedURLs.contains(url)
+        }
+
+        // Assert：重試會重新抓 metadata，播完後進入正常下載，而非直接排入佇列
+        XCTAssertTrue(didDownload, "首播已播完，重試應開始下載")
+        XCTAssertNotEqual(task.status, .scheduled)
+    }
+
     // MARK: - DownloadStatus.paused 基本測試
 
     func testPausedStatusDisplayText() {
@@ -1447,6 +1557,8 @@ final class DownloadManagerTests: XCTestCase {
         )
         manager.tasks = [placeholderTask]
         mockMetadataService.mediaOptions = (subtitles: [], audioTracks: [], formats: [])
+        // 播放清單路徑改用 fetchMediaOptions 回傳的 liveStatus（--flat-playlist 不含此欄位）
+        mockMetadataService.liveStatusByURL = ["https://www.youtube.com/watch?v=TR_NgGeXWGc": "post_live"]
 
         let selectedVideos = [
             VideoInfo(
@@ -1672,6 +1784,8 @@ final class MockYouTubeMetadataService: YouTubeMetadataServiceProtocol {
     var videoInfo: VideoInfo!
     var mediaOptions: (subtitles: [SubtitleTrack], audioTracks: [AudioTrack], formats: [YTDLPFormat]) = ([], [], [])
     var mediaOptionsByURL: [String: (subtitles: [SubtitleTrack], audioTracks: [AudioTrack], formats: [YTDLPFormat])] = [:]
+    var liveStatusByURL: [String: String] = [:]
+    var releaseTimestampByURL: [String: Int] = [:]
     var videoInfoError: Error?
     var mediaOptionsError: Error?
     var playlistInfo: (title: String, videos: [VideoInfo]) = ("", [])
@@ -1691,7 +1805,7 @@ final class MockYouTubeMetadataService: YouTubeMetadataServiceProtocol {
         return videoInfo
     }
 
-    func fetchMediaOptions(url: String, cookiesArguments: [String]) async throws -> (subtitles: [SubtitleTrack], audioTracks: [AudioTrack], formats: [YTDLPFormat]) {
+    func fetchMediaOptions(url: String, cookiesArguments: [String]) async throws -> MediaOptions {
         if fetchDelayNanoseconds > 0 {
             try? await Task.sleep(nanoseconds: fetchDelayNanoseconds)
         }
@@ -1699,7 +1813,14 @@ final class MockYouTubeMetadataService: YouTubeMetadataServiceProtocol {
             throw mediaOptionsError
         }
         fetchedMediaOptionURLs.append(url)
-        return mediaOptionsByURL[url] ?? mediaOptions
+        let base = mediaOptionsByURL[url] ?? mediaOptions
+        return MediaOptions(
+            subtitles: base.subtitles,
+            audioTracks: base.audioTracks,
+            formats: base.formats,
+            liveStatus: liveStatusByURL[url],
+            releaseTimestamp: releaseTimestampByURL[url]
+        )
     }
 
     func fetchPlaylistInfo(url: String, cookiesArguments: [String]) async throws -> (title: String, videos: [VideoInfo]) {

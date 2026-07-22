@@ -126,9 +126,19 @@ struct YTDLPFormat: Codable, Equatable, CustomStringConvertible {
     }
 }
 
+/// fetchMediaOptions 的回傳：字幕、音軌、格式，以及供播放清單路徑偵測首播狀態的
+/// liveStatus/releaseTimestamp（--flat-playlist 不提供這些欄位）
+struct MediaOptions {
+    let subtitles: [SubtitleTrack]
+    let audioTracks: [AudioTrack]
+    let formats: [YTDLPFormat]
+    let liveStatus: String?
+    let releaseTimestamp: Int?
+}
+
 protocol YouTubeMetadataServiceProtocol {
     func fetchVideoInfo(url: String, cookiesArguments: [String]) async throws -> VideoInfo
-    func fetchMediaOptions(url: String, cookiesArguments: [String]) async throws -> (subtitles: [SubtitleTrack], audioTracks: [AudioTrack], formats: [YTDLPFormat])
+    func fetchMediaOptions(url: String, cookiesArguments: [String]) async throws -> MediaOptions
     func fetchPlaylistInfo(url: String, cookiesArguments: [String]) async throws -> (title: String, videos: [VideoInfo])
     func fetchTitleFromWebpage(url: String) async -> String?
 }
@@ -657,7 +667,9 @@ actor YouTubeMetadataService {
     }
 
     /// 同時獲取字幕和音軌資訊（單次 yt-dlp 呼叫，更有效率）
-    func fetchMediaOptions(url: String, cookiesArguments: [String] = []) async throws -> (subtitles: [SubtitleTrack], audioTracks: [AudioTrack], formats: [YTDLPFormat]) {
+    /// 一併回傳 liveStatus/releaseTimestamp，供播放清單路徑偵測首播狀態
+    /// （--flat-playlist 不提供這些欄位，需靠此完整 JSON 取得）
+    func fetchMediaOptions(url: String, cookiesArguments: [String] = []) async throws -> MediaOptions {
         guard let ytdlpPath = await YTDLPService.shared.findYTDLPPath() else {
             throw MetadataError.ytdlpNotFound
         }
@@ -723,15 +735,18 @@ actor YouTubeMetadataService {
         // 解析 JSON 並提取字幕和音軌資訊
         do {
             guard let json = try JSONSerialization.jsonObject(with: outputData) as? [String: Any] else {
-                return ([], [], [])
+                return MediaOptions(subtitles: [], audioTracks: [], formats: [], liveStatus: nil, releaseTimestamp: nil)
             }
-            let subtitles = parseSubtitles(from: json)
-            let audioTracks = parseAudioTracks(from: json)
-            let formats = parseFormats(from: json)
-            return (subtitles, audioTracks, formats)
+            return MediaOptions(
+                subtitles: parseSubtitles(from: json),
+                audioTracks: parseAudioTracks(from: json),
+                formats: parseFormats(from: json),
+                liveStatus: json["live_status"] as? String,
+                releaseTimestamp: json["release_timestamp"] as? Int
+            )
         } catch {
             TubifyLogger.ytdlp.error("解析媒體選項失敗: \(error.localizedDescription)")
-            return ([], [], [])
+            return MediaOptions(subtitles: [], audioTracks: [], formats: [], liveStatus: nil, releaseTimestamp: nil)
         }
     }
 
