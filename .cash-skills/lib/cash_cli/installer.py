@@ -42,6 +42,12 @@ STABLE_PATHS = (".cash-skills/bin/cash", ".cash-workspace.lock")
 GUIDANCE_PATHS = ("AGENTS.md", "CLAUDE.md")
 RECEIPT_PATH = ".cash-skills/receipt.tsv"
 JOURNAL_PATH = ".cash-skills/state/installer/journal.json"
+GITIGNORE_PATH = ".gitignore"
+GITIGNORE_RULES = (
+    b".cash-skills/receipt.tsv",
+    b".cash-skills/state/",
+    b"__pycache__/",
+)
 LEGACY_MANIFEST_PATH = "scripts/cash-skills/legacy-spectra-digests.tsv"
 
 
@@ -429,6 +435,7 @@ def installation_inputs(
     tuple[tuple[str, Snapshot], ...],
     tuple[tuple[str, Snapshot], ...],
 ]:
+    ensure_regular_gitignore(target)
     source_paths = (
         "cash-skills.version",
         ".cash.yaml",
@@ -440,6 +447,7 @@ def installation_inputs(
         RECEIPT_PATH,
         ".cash.yaml",
         ".spectra.yaml",
+        GITIGNORE_PATH,
         "openspec/config.yaml",
         *GUIDANCE_PATHS,
         *(record.path for record in records if record.kind != "stable"),
@@ -661,6 +669,100 @@ def render_guidance(source: Path, target: Path, relative: str) -> tuple[bytes, i
     return rendered, existing.mode or 0o644, rendered != content
 
 
+def ensure_regular_gitignore(target: Path) -> None:
+    """Reject a `.gitignore` shape that cannot be safely read.
+
+    `read_regular` already rejects a symlink, a hard link and a directory, but
+    opening a FIFO for reading blocks until a writer appears, so the shape is
+    decided from the lstat metadata before any open.
+    """
+    path = ensure_contained(target, GITIGNORE_PATH)
+    try:
+        metadata = os.lstat(path)
+    except FileNotFoundError:
+        return
+    if not stat.S_ISREG(metadata.st_mode):
+        raise InstallerError(f"unsafe regular file identity: {GITIGNORE_PATH}")
+
+
+def gitignore_terminator(content: bytes) -> bytes:
+    index = content.rfind(b"\n")
+    if index < 0:
+        return b"\n"
+    return b"\r\n" if content[index - 1 : index] == b"\r" else b"\n"
+
+
+def gitignore_plan(existing: Snapshot) -> tuple[bytes, int] | None:
+    """Plan the version-control exclusions a target still lacks.
+
+    Lines are compared as exact bytes so a pathname pattern that is not valid
+    UTF-8 cannot turn an installable target into `failed`, and a trailing `\\r`
+    is tolerated so rules already present in a CRLF file are recognised. The
+    comparison is line-exact on purpose: an equivalent spelling is not treated
+    as covered, which appends a harmless duplicate rather than mistaking a
+    differently scoped rule for this one. Returns None when nothing is missing.
+    """
+    content = existing.content or b""
+    present = {line.removesuffix(b"\r") for line in content.split(b"\n")}
+    missing = [rule for rule in GITIGNORE_RULES if rule not in present]
+    if not missing:
+        return None
+    terminator = gitignore_terminator(content)
+    separator = b"" if not content or content.endswith(b"\n") else terminator
+    appended = b"".join(rule + terminator for rule in missing)
+    mode = 0o644 if existing.mode is None else existing.mode
+    return content + separator + appended, mode
+
+
+def report_version_controlled_receipt(target: Path) -> None:
+    """Report a receipt that is already tracked, without touching the index.
+
+    The query must read the index rather than ask whether the path is ignored:
+    once this contract ships every target ignores the receipt, and gitignore
+    does not apply to files that are already tracked. `core.fsmonitor` is
+    cleared because reading the index otherwise runs a program named by the
+    target's own repository config, which a read-only query must not do.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "-c",
+                "core.fsmonitor=",
+                "-C",
+                str(target),
+                "ls-files",
+                "--",
+                RECEIPT_PATH,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return
+    if result.returncode != 0 or not result.stdout.strip():
+        return
+    print(
+        f"{target}: {RECEIPT_PATH} is tracked by version control; it records "
+        "target-specific device and inode identity, so any copy with a "
+        "different inode fails closed. Run "
+        f"`git rm --cached {RECEIPT_PATH}` in that project.",
+        file=sys.stderr,
+    )
+
+
+def wait_for_test_hold(hold_path: str) -> None:
+    ready = Path(f"{hold_path}.ready")
+    release = Path(f"{hold_path}.release")
+    ready.write_text("ready\n", encoding="utf-8")
+    deadline = time.monotonic() + 10
+    while not release.exists():
+        if time.monotonic() >= deadline:
+            raise InstallerError("installer test hold timed out")
+        time.sleep(0.01)
+
+
 def acquire_lock(target: Path, *, dry_run: bool) -> tuple[int | None, bool]:
     lock = target / STABLE_PATHS[1]
     existed = lock.exists()
@@ -863,6 +965,9 @@ class InstallTransaction:
                 fail_after = os.environ.get("CASH_INSTALL_FAIL_AFTER")
                 if fail_after and published == int(fail_after):
                     raise InstallerError(f"injected publication failure after {published}")
+                fail_path = os.environ.get("CASH_INSTALL_FAIL_AFTER_PATH")
+                if fail_path and operation["path"] == fail_path:
+                    raise InstallerError(f"injected publication failure after {fail_path}")
         except Exception:
             try:
                 self.rollback(published)
@@ -1050,6 +1155,7 @@ def install_target(
     *,
     dry_run: bool,
     force: bool,
+    announce_tracking: bool = True,
 ) -> str:
     if sys.version_info < (3, 11):
         raise InstallerError("Cash installer requires Python 3.11+")
@@ -1059,6 +1165,10 @@ def install_target(
     if not target.is_dir() or target == source:
         raise InstallerError("target must be an existing non-source directory")
     validate_target_prerequisites(target)
+    # Reclassification re-enters this function; the diagnostic stays one line
+    # per target rather than one line per retry.
+    if announce_tracking:
+        report_version_controlled_receipt(target)
     version, records, generation = source_inventory(source)
     legacy_records = legacy_manifest(source)
     for relative in (
@@ -1144,6 +1254,7 @@ def install_target(
                     str(target),
                     dry_run=dry_run,
                     force=force,
+                    announce_tracking=False,
                 )
             raise InstallerError(
                 "receipt-less Cash skill inventory is partial",
@@ -1170,6 +1281,7 @@ def install_target(
                 str(target),
                 dry_run=dry_run,
                 force=force,
+                announce_tracking=False,
             )
         raise InstallerError(
             "managed target drift: " + ", ".join(sorted(set(conflicts))),
@@ -1190,14 +1302,7 @@ def install_target(
     try:
         hold_path = os.environ.get("CASH_INSTALL_HOLD_FILE")
         if hold_path and not dry_run:
-            ready = Path(f"{hold_path}.ready")
-            release = Path(f"{hold_path}.release")
-            ready.write_text("ready\n", encoding="utf-8")
-            deadline = time.monotonic() + 10
-            while not release.exists():
-                if time.monotonic() >= deadline:
-                    raise InstallerError("installer test hold timed out")
-                time.sleep(0.01)
+            wait_for_test_hold(hold_path)
         validate_target_prerequisites(target)
         locked_source_inputs, locked_target_inputs = installation_inputs(
             source,
@@ -1218,6 +1323,7 @@ def install_target(
                 str(target),
                 dry_run=dry_run,
                 force=force,
+                announce_tracking=False,
             )
         post_lock_receipt = optional_snapshot(target, RECEIPT_PATH)
         if (
@@ -1234,6 +1340,7 @@ def install_target(
                 str(target),
                 dry_run=dry_run,
                 force=force,
+                announce_tracking=False,
             )
         if not dry_run:
             recover_installer(target)
@@ -1267,6 +1374,11 @@ def install_target(
         for candidate in planned_legacy_candidates:
             if candidate.get("removable"):
                 transaction.add_legacy_delete(candidate)
+        # Fixed last position before the receipt so the operation indices of
+        # every earlier publication stay stable.
+        planned_gitignore = gitignore_plan(dict(target_inputs)[GITIGNORE_PATH])
+        if planned_gitignore is not None:
+            transaction.add(GITIGNORE_PATH, *planned_gitignore)
 
         preserved = [
             str(candidate["path"])
@@ -1288,6 +1400,9 @@ def install_target(
             return "current"
         if dry_run:
             return "update"
+        publication_hold = os.environ.get("CASH_INSTALL_PUBLICATION_HOLD_FILE")
+        if publication_hold:
+            wait_for_test_hold(publication_hold)
         final_source_inputs, final_target_inputs = installation_inputs(
             source,
             target,
