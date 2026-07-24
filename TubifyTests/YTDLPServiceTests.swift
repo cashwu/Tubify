@@ -427,4 +427,89 @@ final class YTDLPServiceTests: XCTestCase {
         // 有 2 個媒體檔，應觸發合併失敗
         XCTAssertTrue(mediaFiles.count > 1, "字幕檔 + 多個媒體檔應觸發合併失敗檢測")
     }
+
+    // MARK: - stderr 行緩衝測試（LineBuffer）
+
+    /// 迴歸測試：yt-dlp 的錯誤訊息被 pipe chunk 邊界切斷時，不可遺失內容。
+    /// 實際案例中 "ERROR: [download] Got error: ... Giving up after 10 retries"
+    /// 被切成 "ERROR:" 與 "[download] Got error: ..." 兩段，前者被當成錯誤存下，
+    /// 後者因不含大寫 ERROR 被丟棄，UI 與 log 只剩無意義的 "ERROR:"。
+    func testLineBufferReassemblesLineSplitAcrossChunks() {
+        let buffer = LineBuffer()
+
+        XCTAssertEqual(buffer.feed(Data("ERROR: ".utf8)), [], "沒有換行時不應輸出任何行")
+        XCTAssertEqual(
+            buffer.feed(Data("[download] Got error: 912 bytes read, 10354660 more expected.\n".utf8)),
+            ["ERROR: [download] Got error: 912 bytes read, 10354660 more expected."],
+            "跨 chunk 的行應被組回完整一行"
+        )
+    }
+
+    func testLineBufferSplitsOnCarriageReturnForProgressUpdates() {
+        let buffer = LineBuffer()
+        let lines = buffer.feed(Data("[download]  10.0% of 1.00MiB\r[download]  20.0% of 1.00MiB\r".utf8))
+
+        XCTAssertEqual(lines, ["[download]  10.0% of 1.00MiB", "[download]  20.0% of 1.00MiB"])
+    }
+
+    func testLineBufferHoldsIncompleteTailUntilTerminated() {
+        let buffer = LineBuffer()
+
+        XCTAssertEqual(buffer.feed(Data("first\nsecond".utf8)), ["first"], "未結束的 second 應留在緩衝區")
+        XCTAssertEqual(buffer.feed(Data(" half\n".utf8)), ["second half"])
+    }
+
+    func testLineBufferFlushReturnsRemainderWithoutTrailingNewline() {
+        let buffer = LineBuffer()
+
+        _ = buffer.feed(Data("done\nERROR: no newline at end".utf8))
+        XCTAssertEqual(buffer.flush(), "ERROR: no newline at end")
+        XCTAssertNil(buffer.flush(), "flush 後緩衝區應清空")
+    }
+
+    /// 迴歸測試：中文標題的影片，多位元組字元可能被切在 chunk 邊界。
+    /// 若在 String 層緩衝，半段位元組會讓 String(data:encoding:.utf8) 回傳 nil，
+    /// 整個 chunk 連同檔案路徑一起被丟棄。改在 Data 層緩衝可避免。
+    func testLineBufferHandlesMultibyteCharacterSplitAcrossChunks() {
+        let buffer = LineBuffer()
+        let line = "[download] Destination: /Downloads/中文標題.mp4\n"
+        let bytes = Array(line.utf8)
+
+        // 切在「中」這個字（3 bytes）的正中間
+        let splitIndex = Array("[download] Destination: /Downloads/中".utf8).count - 1
+        XCTAssertEqual(buffer.feed(Data(bytes[..<splitIndex])), [], "不完整的位元組序列不應輸出")
+        XCTAssertEqual(
+            buffer.feed(Data(bytes[splitIndex...])),
+            ["[download] Destination: /Downloads/中文標題.mp4"],
+            "跨 chunk 的多位元組字元應被正確還原"
+        )
+    }
+
+    // MARK: - 錯誤行判斷測試（isErrorLine）
+
+    /// 只有前綴沒有內容的 "ERROR:" 不具診斷價值，不應蓋掉後續有意義的訊息。
+    func testIsErrorLineRejectsBareErrorPrefix() {
+        XCTAssertFalse(YTDLPService.isErrorLine("ERROR:"))
+        XCTAssertFalse(YTDLPService.isErrorLine("ERROR:   "))
+        XCTAssertFalse(YTDLPService.isErrorLine(""))
+    }
+
+    func testIsErrorLineAcceptsErrorWithContent() {
+        XCTAssertTrue(YTDLPService.isErrorLine("ERROR: [youtube] abc123: Video unavailable"))
+    }
+
+    /// 下載器自身的失敗訊息不含大寫 ERROR，卻常是唯一說明原因的一行。
+    func testIsErrorLineAcceptsDownloaderFailureWithoutErrorPrefix() {
+        XCTAssertTrue(
+            YTDLPService.isErrorLine("[download] Got error: 912 bytes read, 10354660 more expected.")
+        )
+        XCTAssertTrue(
+            YTDLPService.isErrorLine("[download] Giving up after 10 retries")
+        )
+    }
+
+    func testIsErrorLineIgnoresNormalOutput() {
+        XCTAssertFalse(YTDLPService.isErrorLine("[download]  45.2% of 100.00MiB at 5.00MiB/s"))
+        XCTAssertFalse(YTDLPService.isErrorLine("[download] Destination: /Downloads/video.mp4"))
+    }
 }

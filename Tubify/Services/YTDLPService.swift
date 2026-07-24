@@ -44,6 +44,59 @@ final class DownloadResultHolder: @unchecked Sendable {
     }
 }
 
+/// 將 pipe 讀到的資料切成完整的行。
+///
+/// `FileHandle.readabilityHandler` 每次拿到的是任意大小的 chunk，行尾可能落在 chunk 中間。
+/// 若直接對 chunk 做 `components(separatedBy:)`，一行會被拆成兩段 —— yt-dlp 的
+/// `ERROR: [download] Got error: ...` 就曾因此被切成 `ERROR:` 與 `[download] Got error: ...`，
+/// 導致真正的錯誤原因被丟棄。此類別保留未完成的尾段，直到讀到換行才輸出。
+///
+/// yt-dlp 的進度更新以 `\r` 結尾、一般訊息以 `\n` 結尾，兩者都視為行分隔。
+///
+/// 緩衝刻意在 `Data`（而非 `String`）層進行：多位元組字元同樣可能被切在 chunk 邊界，
+/// 此時對半段位元組做 `String(data:encoding:.utf8)` 會得到 nil，整個 chunk 被丟棄
+/// —— 中文標題的影片首當其衝。累積原始位元組、湊齊整行後才解碼可避免此問題。
+/// 以位元組切行是安全的：UTF-8 的續位元組一律 ≥ 0x80，不會與 `\n`/`\r` 混淆。
+final class LineBuffer {
+    private static let newline: UInt8 = 0x0A
+    private static let carriageReturn: UInt8 = 0x0D
+
+    private var pending = Data()
+    private let lock = NSLock()
+
+    /// 餵入一段資料，回傳其中所有「已完成」的行（不含空行）。
+    func feed(_ chunk: Data) -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+
+        pending.append(chunk)
+        // 尾端若不是換行，最後一段是不完整的行，留待下次。
+        guard let lastSeparator = pending.lastIndex(where: Self.isSeparator) else {
+            return []
+        }
+        let complete = pending[..<lastSeparator]
+        pending = Data(pending[pending.index(after: lastSeparator)...])
+        return complete
+            .split(whereSeparator: Self.isSeparator)
+            .compactMap { String(data: Data($0), encoding: .utf8) }
+    }
+
+    /// 取出殘留的最後一段（process 結束時呼叫，避免漏掉沒有換行結尾的輸出）。
+    func flush() -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard !pending.isEmpty else { return nil }
+        let remainder = String(data: pending, encoding: .utf8)
+        pending = Data()
+        return remainder
+    }
+
+    private static func isSeparator(_ byte: UInt8) -> Bool {
+        byte == newline || byte == carriageReturn
+    }
+}
+
 /// yt-dlp 服務錯誤類型
 enum YTDLPError: Error, LocalizedError {
     case notFound
@@ -211,6 +264,27 @@ actor YTDLPService {
         }
     }
 
+    /// 判斷 stderr 的一行是否為值得保留的錯誤訊息。
+    ///
+    /// 除了 yt-dlp 的 `ERROR:` 前綴，也認得下載器自己的失敗訊息
+    /// （如 `[download] Got error: ... Giving up after 10 retries`），這類訊息不含大寫 ERROR，
+    /// 卻往往是唯一說明失敗原因的一行。
+    ///
+    /// 只有前綴而無內容的 `ERROR:` 會被忽略，避免它蓋掉後續有意義的訊息。
+    static func isErrorLine(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return false }
+
+        if trimmed.hasPrefix("ERROR:") {
+            // "ERROR:" 後面沒有任何內容時不具診斷價值
+            return !trimmed.dropFirst("ERROR:".count).trimmingCharacters(in: .whitespaces).isEmpty
+        }
+        if trimmed.contains("ERROR") { return true }
+
+        let lowered = trimmed.lowercased()
+        return lowered.contains("got error:") || lowered.contains("giving up after")
+    }
+
     /// 判斷下載錯誤是否可能因「需要登入」而起，需帶 cookies 重試
     /// 公開影片不帶 cookies 即可成功，因此只在錯誤訊息含登入相關訊號時才重試
     static func shouldRetryWithCookies(_ error: YTDLPError) -> Bool {
@@ -367,26 +441,31 @@ actor YTDLPService {
                 }
             }
 
-            if isStderr, line.contains("ERROR") {
+            if isStderr, Self.isErrorLine(line) {
                 resultHolder.setError(line)
             }
         }
 
         // 處理輸出（stdout / stderr）
+        // 各自使用獨立的 LineBuffer，確保跨 chunk 的行不會被切斷。
+        let outputBuffer = LineBuffer()
+        let errorBuffer = LineBuffer()
+
+        // 直接把原始位元組交給 LineBuffer，由它湊齊整行後才解碼
         outputPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
-            guard !data.isEmpty, let output = String(data: data, encoding: .utf8) else { return }
+            guard !data.isEmpty else { return }
 
-            for line in output.components(separatedBy: .newlines) where !line.isEmpty {
+            for line in outputBuffer.feed(data) {
                 handleLine(line, false)
             }
         }
 
         errorPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
-            guard !data.isEmpty, let output = String(data: data, encoding: .utf8) else { return }
+            guard !data.isEmpty else { return }
 
-            for line in output.components(separatedBy: .newlines) where !line.isEmpty {
+            for line in errorBuffer.feed(data) {
                 handleLine(line, true)
             }
         }
@@ -409,6 +488,14 @@ actor YTDLPService {
         outputPipe.fileHandleForReading.readabilityHandler = nil
         errorPipe.fileHandleForReading.readabilityHandler = nil
         runningProcesses.removeValue(forKey: taskId)
+
+        // 補上沒有換行結尾的最後一行（yt-dlp 失敗時的 ERROR 常落在這裡）
+        if let remainder = outputBuffer.flush() {
+            handleLine(remainder, false)
+        }
+        if let remainder = errorBuffer.flush() {
+            handleLine(remainder, true)
+        }
 
         // 檢查結果
         if terminationStatus != 0 {
