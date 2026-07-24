@@ -96,6 +96,16 @@ class LogFileManager {
         TubifyLogger.download.info("\(message)")
     }
 
+    /// 記錄實際送出的 yt-dlp 指令
+    ///
+    /// 寫入檔案日誌而非僅 os_log：os_log 的 info 級別預設不落地，`log show` 事後撈不到，
+    /// 導致「設定看起來正確、實際行為卻不符」時無從得知 app 究竟送出了什麼參數。
+    func logDownloadCommand(taskId: UUID, command: String) {
+        let message = "執行命令 - TaskID: \(taskId.uuidString), Command: \(command)"
+        writeToFile(message)
+        TubifyLogger.ytdlp.info("\(message)")
+    }
+
     /// 記錄下載完成
     func logDownloadComplete(taskId: UUID, outputPath: String) {
         let message = "下載完成 - TaskID: \(taskId.uuidString), Output: \(outputPath)"

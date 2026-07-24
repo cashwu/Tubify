@@ -40,6 +40,7 @@
 		D21111111111111111111111 /* DownloadItemViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D11111111111111111111111 /* DownloadItemViewTests.swift */; };
 		D22222222222222222222222 /* NotificationServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D12222222222222222222222 /* NotificationServiceTests.swift */; };
 		D23333333333333333333333 /* SettingsViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D13333333333333333333333 /* SettingsViewTests.swift */; };
+		D2AAAA0000000000000001 /* AppSettingsMigratorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1AAAA0000000000000001 /* AppSettingsMigratorTests.swift */; };
 		F6AF5AD1C0457F8D5C560E40 /* EmptyStateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90FDB53F7F4996C674F7E7E2 /* EmptyStateView.swift */; };
 		FC58597FD186D9CF84D07939 /* PersistenceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92B5992FEF733EEB5117091F /* PersistenceService.swift */; };
 /* End PBXBuildFile section */
@@ -89,6 +90,7 @@
 		D11111111111111111111111 /* DownloadItemViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadItemViewTests.swift; sourceTree = "<group>"; };
 		D12222222222222222222222 /* NotificationServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationServiceTests.swift; sourceTree = "<group>"; };
 		D13333333333333333333333 /* SettingsViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsViewTests.swift; sourceTree = "<group>"; };
+		D1AAAA0000000000000001 /* AppSettingsMigratorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettingsMigratorTests.swift; sourceTree = "<group>"; };
 		E899875AB33A3557093ED50B /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
 		EF8E5EE3B06A43221DB8548C /* DownloadManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadManagerTests.swift; sourceTree = "<group>"; };
 		FCBAFABCA54AC6AD0E4431F8 /* PlaylistSelectionViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistSelectionViewTests.swift; sourceTree = "<group>"; };
@@ -209,6 +211,7 @@
 				FCBAFABCA54AC6AD0E4431F8 /* PlaylistSelectionViewTests.swift */,
 				D12222222222222222222222 /* NotificationServiceTests.swift */,
 				D13333333333333333333333 /* SettingsViewTests.swift */,
+				D1AAAA0000000000000001 /* AppSettingsMigratorTests.swift */,
 				7DAE150F1AF830DF89DE33B2 /* PremiereErrorParserTests.swift */,
 				27FA3E7C8810E2DD3D783593 /* URLValidationTests.swift */,
 				3F614B343FA3EF55C77F02A1 /* YouTubeMetadataServiceTests.swift */,
@@ -318,6 +321,7 @@
 				C05A317C4B5EF8FEA66EF522 /* PlaylistSelectionViewTests.swift in Sources */,
 				D22222222222222222222222 /* NotificationServiceTests.swift in Sources */,
 				D23333333333333333333333 /* SettingsViewTests.swift in Sources */,
+				D2AAAA0000000000000001 /* AppSettingsMigratorTests.swift in Sources */,
 				07691B56D9D1D64B3EBD9CB6 /* PremiereErrorParserTests.swift in Sources */,
 				96781B6921245C33C992D231 /* URLValidationTests.swift in Sources */,
 				8BA95BA87A60E31C7644B309 /* YTDLPServiceTests.swift in Sources */,

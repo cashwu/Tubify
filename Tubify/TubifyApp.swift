@@ -43,6 +43,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillFinishLaunching(_ notification: Notification) {
+        // 必須早於 DownloadManager／SettingsView 讀取設定
+        AppSettingsMigrator.migrate()
         initializeNotificationService()
     }
 

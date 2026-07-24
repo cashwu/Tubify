@@ -367,8 +367,10 @@ actor YTDLPService {
 
         LogFileManager.shared.logDownloadStart(url: url, taskId: taskId)
         TubifyLogger.ytdlp.info("開始下載: \(url)")
-        // 使用 info 級別確保命令被記錄，方便除錯進度問題
-        TubifyLogger.ytdlp.info("執行命令: \(ytdlpPath) \(finalArguments.joined(separator: " "))")
+        LogFileManager.shared.logDownloadCommand(
+            taskId: taskId,
+            command: "\(ytdlpPath) \(finalArguments.joined(separator: " "))"
+        )
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: ytdlpPath)
