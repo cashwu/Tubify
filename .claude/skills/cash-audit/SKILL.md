@@ -5,11 +5,22 @@ context: fork
 agent: Explore
 disallowedTools: [Edit, Write]
 license: MIT
-compatibility: Requires spectra CLI.
 metadata:
-  author: spectra
+  author: cash
   version: "1.0"
 ---
+
+## Project-local Cash CLI bootstrap
+
+執行任何 Cash artifact command 前，MUST 先從目前目錄解析並驗證 Git root，再使用該 root 下的 absolute launcher；不得依賴 PATH 或外部 runtime：
+
+```shell
+cash_root="$(git rev-parse --show-toplevel)" || exit 1
+cash_cli="$cash_root/.cash-skills/bin/cash"
+test -x "$cash_cli" || exit 1
+```
+
+同一段 workflow 後續每個 artifact command MUST 使用 `"$cash_cli"`。
 
 Audit changed code for security sharp edges in a Claude Code fork. This generated skill is report-only: it SHALL NOT edit files and SHALL NOT apply fixes directly inside the fork.
 

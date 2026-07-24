@@ -1,29 +1,40 @@
 ---
 name: cash-drift
-description: "Detect drift between a Spectra change and the current codebase state"
+description: "Detect drift between a Cash change and the current codebase state"
 context: fork
 agent: Explore
 disallowedTools: [Edit, Write]
 license: MIT
-compatibility: Requires spectra CLI.
 metadata:
-  author: spectra
+  author: cash
   version: "1.0"
 ---
+
+## Project-local Cash CLI bootstrap
+
+執行任何 Cash artifact command 前，MUST 先從目前目錄解析並驗證 Git root，再使用該 root 下的 absolute launcher；不得依賴 PATH 或外部 runtime：
+
+```shell
+cash_root="$(git rev-parse --show-toplevel)" || exit 1
+cash_cli="$cash_root/.cash-skills/bin/cash"
+test -x "$cash_cli" || exit 1
+```
+
+同一段 workflow 後續每個 artifact command MUST 使用 `"$cash_cli"`。
 
 ## Claude fork context
 
 This generated Claude Code skill runs with `context: fork`. The rules in this section take precedence over the shared `drift` body below.
 
-When no change name is provided, run `spectra list --json`. Auto-select only when there is exactly one active change. If there are zero active changes or more than one active change, return the candidate list or empty-state message and ask the main thread to rerun `/cash-drift <change-name>`. Do NOT ask an interactive selection question inside the fork.
+When no change name is provided, run `"$cash_cli" list --json`. Auto-select only when there is exactly one active change. If there are zero active changes or more than one active change, return the candidate list or empty-state message and ask the main thread to rerun `/cash-drift <change-name>`. Do NOT ask an interactive selection question inside the fork.
 
 ---
 
-Detect drift between a Spectra change and the current codebase state. Reports time dormancy, broken design anchors, task collisions with external commits, and a single recommended next command.
+Detect drift between a Cash change and the current codebase state. Reports time dormancy, broken design anchors, task collisions with external commits, and a single recommended next command.
 
 **Input**: Optionally specify a change name (e.g., `/cash-drift add-auth`). If omitted, infer from conversation context or auto-select if only one active change exists.
 
-**Prerequisites**: This skill requires the `spectra` CLI. If any `spectra` command fails with "command not found" or similar, report the error and STOP.
+**Prerequisites**: This skill requires the `Cash` CLI. If any `Cash` command fails with "command not found" or similar, report the error and STOP.
 
 **Response language**: All user-facing responses in this workflow MUST be written in Traditional Chinese unless the user explicitly requests another language. Keep shell commands, file paths, code identifiers, schema field names, and quoted source text verbatim.
 
@@ -31,12 +42,12 @@ Detect drift between a Spectra change and the current codebase state. Reports ti
 
 1. **Determine change name**
 
-   If not provided, infer from context or run `spectra list --json` to auto-select. If multiple active changes exist and no name is given, list candidates and ask the user to rerun with an explicit name.
+   If not provided, infer from context or run `"$cash_cli" list --json` to auto-select. If multiple active changes exist and no name is given, list candidates and ask the user to rerun with an explicit name.
 
 2. **Run programmatic drift analysis**
 
    ```bash
-   spectra drift <change-name> --json
+   "$cash_cli" drift <change-name> --json
    ```
 
    The JSON contains:
@@ -86,7 +97,7 @@ Detect drift between a Spectra change and the current codebase state. Reports ti
 
 4. **Apply the recommendation interactively**
 
-   Use the **AskUserQuestion tool** to offer one decision based on `severity`. Use plain-language option labels while preserving the exact command in each option description. Do NOT auto-invoke `/cash-apply`, `/cash-ingest`, or `spectra archive`; always wait for the user's choice.
+   Use the **AskUserQuestion tool** to offer one decision based on `severity`. Use plain-language option labels while preserving the exact command in each option description. Do NOT auto-invoke `/cash-apply`, `/cash-ingest`, or `"$cash_cli" archive`; always wait for the user's choice.
    - **Light** (score 0-3, drift is minor):
      - Recommended label: "Directly start work"
        - Description: run `/cash-apply <name>`
@@ -118,7 +129,6 @@ When `/cash-apply` is invoked on a change whose `.openspec.yaml created` date is
 **Guardrails**
 
 - Read-only: NEVER modify files, artifacts, or git state based on drift findings
-- The CLI caps anchor checks at 50 via `ANCHOR_CAP` in `spectra_core::drift` to bound run-time
-- If `spectra drift` returns a non-zero exit code (e.g., older binary without the drift subcommand), report the error and stop
+- If `"$cash_cli" drift` returns a non-zero exit code or an invalid response, report the execution error and stop
 - Do NOT auto-invoke any follow-up command — recommendations are user-confirmed
 - If **AskUserQuestion tool** is not available, ask the same questions as plain text and wait for the user's response

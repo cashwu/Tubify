@@ -2,11 +2,22 @@
 name: cash-debug
 description: "Systematically debug a problem using a four-phase workflow"
 license: MIT
-compatibility: Requires spectra CLI.
 metadata:
-  author: spectra
+  author: cash
   version: "1.0"
 ---
+
+## Project-local Cash CLI bootstrap
+
+執行任何 Cash artifact command 前，MUST 先從目前目錄解析並驗證 Git root，再使用該 root 下的 absolute launcher；不得依賴 PATH 或外部 runtime：
+
+```shell
+cash_root="$(git rev-parse --show-toplevel)" || exit 1
+cash_cli="$cash_root/.cash-skills/bin/cash"
+test -x "$cash_cli" || exit 1
+```
+
+同一段 workflow 後續每個 artifact command MUST 使用 `"$cash_cli"`。
 
 Systematically debug a problem using a four-phase workflow.
 
@@ -84,7 +95,7 @@ Ask these questions:
 
 Now — and only now — fix the bug.
 
-1. **Write a failing test** that reproduces the bug. If `tdd: true` is set in `.spectra.yaml`, fetch TDD instructions via `spectra instructions --skill tdd` and follow the Red-Green-Refactor cycle
+1. **Write a failing test** that reproduces the bug. If `tdd: true` is set in `.cash.yaml`, fetch TDD instructions via `"$cash_cli" instructions --skill tdd` and follow the Red-Green-Refactor cycle
 2. **Make the minimum change** to fix the root cause — not the symptoms
 3. **Run the test** — confirm it passes
 4. **Run the full test suite** — ensure no regressions

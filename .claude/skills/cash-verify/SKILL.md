@@ -5,17 +5,28 @@ context: fork
 agent: Explore
 disallowedTools: [Edit, Write]
 license: MIT
-compatibility: Requires spectra CLI.
 metadata:
-  author: spectra
+  author: cash
   version: "1.0"
 ---
+
+## Project-local Cash CLI bootstrap
+
+執行任何 Cash artifact command 前，MUST 先從目前目錄解析並驗證 Git root，再使用該 root 下的 absolute launcher；不得依賴 PATH 或外部 runtime：
+
+```shell
+cash_root="$(git rev-parse --show-toplevel)" || exit 1
+cash_cli="$cash_root/.cash-skills/bin/cash"
+test -x "$cash_cli" || exit 1
+```
+
+同一段 workflow 後續每個 artifact command MUST 使用 `"$cash_cli"`。
 
 ## Claude fork context
 
 This generated Claude Code skill runs with `context: fork`. The rules in this section take precedence over the shared `verify` body below.
 
-When no change name is provided, run `spectra list --json` and consider only active changes with implementation tasks. Auto-select only when exactly one matching active change exists. If there are zero matching active changes or more than one matching active change, return the candidate list or empty-state message and ask the main thread to rerun `/cash-verify <change-name>`. Do NOT ask an interactive selection question inside the fork.
+When no change name is provided, run `"$cash_cli" list --json` and consider only active changes with implementation tasks. Auto-select only when exactly one matching active change exists. If there are zero matching active changes or more than one matching active change, return the candidate list or empty-state message and ask the main thread to rerun `/cash-verify <change-name>`. Do NOT ask an interactive selection question inside the fork.
 
 ---
 
@@ -23,7 +34,7 @@ Verify that an implementation matches the change artifacts (specs, tasks, design
 
 **Input**: Optionally specify a change name after `/cash-verify` (e.g., `/cash-verify add-auth`). If omitted, check if it can be inferred from conversation context. If vague or ambiguous you MUST prompt for available changes.
 
-**Prerequisites**: This skill requires the `spectra` CLI. If any `spectra` command fails with "command not found" or similar, report the error and STOP.
+**Prerequisites**: The project-local launcher initialized above is required. If root resolution, launcher validation, or a Cash command fails, report the exact error and STOP.
 
 **Response language**: All user-facing responses in this workflow MUST be written in Traditional Chinese unless the user explicitly requests another language. Keep shell commands, file paths, code identifiers, schema field names, and quoted source text verbatim.
 
@@ -31,7 +42,7 @@ Verify that an implementation matches the change artifacts (specs, tasks, design
 
 1. **If no change name provided, prompt for selection**
 
-   Run `spectra list --json` to get available changes. Use the **AskUserQuestion tool** to let the user select (if this tool is not available, ask as plain text and wait for the user's response).
+   Run `"$cash_cli" list --json` to get available changes. Use the **AskUserQuestion tool** to let the user select (if this tool is not available, ask as plain text and wait for the user's response).
 
    Show changes that have implementation tasks (tasks artifact exists).
    Include the schema used for each change if available.
@@ -42,7 +53,7 @@ Verify that an implementation matches the change artifacts (specs, tasks, design
 2. **Check status to understand the schema**
 
    ```bash
-   spectra status --change "<name>" --json
+   "$cash_cli" status --change "<name>" --json
    ```
 
    Parse the JSON to understand:
@@ -52,10 +63,16 @@ Verify that an implementation matches the change artifacts (specs, tasks, design
 3. **Get the change directory and load artifacts**
 
    ```bash
-   spectra instructions apply --change "<name>" --json
+   "$cash_cli" instructions apply --change "<name>" --json
    ```
 
-   This returns the change directory and context files. Read all available artifacts from `contextFiles`.
+   This returns the complete apply consumer contract. Always read `state`, `missingArtifacts`, `preflight`, `contextFiles`, `progress`, and `tasks`.
+   - `state: "blocked"`: report the non-empty `missingArtifacts` list and stop verification.
+   - `state: "ready"`: inspect `preflight`, then verify the available implementation and report incomplete tasks normally.
+   - `state: "all_done"`: inspect `preflight`, then perform the complete verification.
+   - For either non-blocked state, a missing `preflight`, `missingFiles`, `driftedFiles`, or `staleness` field is a contract error. Report `critical` missing files and stop, show `warnings` before continuing, and silently continue for `clean`.
+   - Any other state or missing required field is a contract error; report it and stop.
+   - Read all available artifacts from `contextFiles`.
 
 4. **Initialize verification report structure**
 

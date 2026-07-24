@@ -2,17 +2,28 @@
 name: cash-archive
 description: "Archive a completed change"
 license: MIT
-compatibility: Requires spectra CLI.
 metadata:
-  author: spectra
+  author: cash
   version: "1.0"
 ---
+
+## Project-local Cash CLI bootstrap
+
+執行任何 Cash artifact command 前，MUST 先從目前目錄解析並驗證 Git root，再使用該 root 下的 absolute launcher；不得依賴 PATH 或外部 runtime：
+
+```shell
+cash_root="$(git rev-parse --show-toplevel)" || exit 1
+cash_cli="$cash_root/.cash-skills/bin/cash"
+test -x "$cash_cli" || exit 1
+```
+
+同一段 workflow 後續每個 artifact command MUST 使用 `"$cash_cli"`。
 
 Archive a completed change.
 
 **Input**: Optionally specify a change name after `/cash-archive` (e.g., `/cash-archive add-auth`). If omitted, check if it can be inferred from conversation context. If vague or ambiguous you MUST prompt for available changes.
 
-**Prerequisites**: This skill requires the `spectra` CLI. If any `spectra` command fails with "command not found" or similar, report the error and STOP.
+**Prerequisites**: The project-local launcher initialized above is required. If root resolution, launcher validation, or a Cash command fails, report the exact error and STOP.
 
 **Response language**: All user-facing responses in this workflow MUST be written in Traditional Chinese unless the user explicitly requests another language. Keep shell commands, file paths, code identifiers, schema field names, and quoted source text verbatim.
 
@@ -20,7 +31,7 @@ Archive a completed change.
 
 1. **If no change name provided, prompt for selection**
 
-   Run `spectra list --json` to get available changes. Use the **AskUserQuestion tool** to let the user select.
+   Run `"$cash_cli" list --json` to get available changes. Use the **AskUserQuestion tool** to let the user select.
 
    Show only active changes (not already archived).
    Include the schema used for each change if available.
@@ -29,7 +40,7 @@ Archive a completed change.
 
 2. **Check artifact completion status**
 
-   Run `spectra status --change "<name>" --json` to check artifact completion.
+   Run `"$cash_cli" status --change "<name>" --json` to check artifact completion.
 
    Parse the JSON to understand:
    - `schemaName`: The workflow being used
@@ -53,54 +64,40 @@ Archive a completed change.
 
    **If no tasks file exists:** Proceed without task-related warning.
 
-4. **Assess delta spec sync state**
+4. **Choose spec sync behavior**
 
-   Check for delta specs at `openspec/changes/<name>/specs/`. If none exist, proceed without sync prompt.
+   Check for delta specs at `openspec/changes/<name>/specs/`. If delta specs exist, ask whether to sync them.
 
-   **If delta specs exist:**
-   - Compare each delta spec with its corresponding main spec at `openspec/specs/<capability>/spec.md`
-   - Determine what changes would be applied (adds, modifications, removals, renames)
-   - Show a combined summary before prompting
+   - **Sync**: archive without `--skip-specs`; the Cash CLI performs or verifies sync inside its transaction.
+   - **Do not sync**: pass `--skip-specs`.
+   - **Cancel**: stop without mutation.
 
-   **Prompt options:**
-   - If changes needed: "Sync now (recommended)", "Archive without syncing"
-   - If already synced: "Archive now", "Sync anyway", "Cancel"
+   Do not invoke another skill or delete touched state directly. The Cash CLI owns touched import, sync state, legacy cleanup diagnostics, transaction flags, and cleanup.
 
-   If user chooses sync, use Task tool (subagent_type: "general-purpose", prompt: "Use Skill tool to invoke spectra-sync-specs for change '<name>'. Delta spec analysis: <include the analyzed delta spec summary>"). Proceed to archive regardless of choice.
+5. **Perform the archive**
 
-5. **Clean up tracking file**
-
-   Delete `.spectra/touched/<change-name>.json` if it exists. This file contains implementation tracking data that is not needed after archiving.
+   Use the `"$cash_cli" archive` command, adding the selected flags:
 
    ```bash
-   rm -f .spectra/touched/<change-name>.json
-   ```
-
-   If the file does not exist, silently continue.
-
-6. **Perform the archive**
-
-   Use the `spectra archive` CLI command which handles the full archive workflow
-   (spec snapshot, delta application, @trace injection, identity recording, vector indexing):
-
-   ```bash
-   spectra archive <name>
+   "$cash_cli" archive <name>
+   "$cash_cli" archive <name> --skip-specs
    ```
 
    **Optional flags:**
    - `--skip-specs` — skip delta spec application (for tooling/doc-only changes)
    - `--mark-tasks-complete` — mark all incomplete tasks as complete before archiving
-   - `--no-validate` — skip delta spec validation
+   - `--no-validate` — skip the independent change validation gate only; safety and delta identity preflight remain mandatory
 
    **If archive fails** with "already exists" error, suggest renaming existing archive.
 
-7. **Display summary**
+6. **Display summary**
 
    Show archive completion summary including:
    - Change name
    - Schema that was used
    - Archive location
    - Spec sync status (synced / sync skipped / no delta specs)
+   - Any legacy cleanup diagnostic returned by Cash; report it as a diagnostic only and do not re-read legacy state
    - Note about any warnings (incomplete artifacts/tasks)
 
 **Output On Success**
@@ -166,10 +163,10 @@ Target archive directory already exists.
 **Guardrails**
 
 - Always prompt for change selection if not provided
-- Use artifact graph (spectra status --json) for completion checking
+- Use artifact graph ("$cash_cli" status --json) for completion checking
 - Don't block archive on warnings - just inform and confirm
 - Preserve .openspec.yaml when moving to archive (it moves with the directory)
 - Show clear summary of what happened
-- If sync is requested, use the Skill tool to invoke `spectra-sync-specs` (agent-driven)
-- If delta specs exist, always run the sync assessment and show the combined summary before prompting
+- If delta specs exist, always show the sync choice; pass `--skip-specs` only when the user explicitly declines sync
+- Never delete touched or sync state directly; archive owns ensure, transaction, cleanup, and each legacy cleanup diagnostic
 - If **AskUserQuestion tool** is not available, ask the same questions as plain text and wait for the user's response

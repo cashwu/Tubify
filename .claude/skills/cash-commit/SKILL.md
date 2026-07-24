@@ -1,14 +1,25 @@
 ---
 name: cash-commit
-description: "Commit files related to a specific Spectra change"
+description: "Commit files related to a specific Cash change"
 license: MIT
-compatibility: Requires spectra CLI.
 metadata:
-  author: spectra
+  author: cash
   version: "1.0"
 ---
 
-Commit files related to a specific Spectra change.
+## Project-local Cash CLI bootstrap
+
+執行任何 Cash artifact command 前，MUST 先從目前目錄解析並驗證 Git root，再使用該 root 下的 absolute launcher；不得依賴 PATH 或外部 runtime：
+
+```shell
+cash_root="$(git rev-parse --show-toplevel)" || exit 1
+cash_cli="$cash_root/.cash-skills/bin/cash"
+test -x "$cash_cli" || exit 1
+```
+
+同一段 workflow 後續每個 artifact command MUST 使用 `"$cash_cli"`。
+
+Commit files related to a specific Cash change.
 
 This is a **utility skill** (not a workflow step). It reads source file tracking data and artifact changes to stage and commit only the files belonging to one change — useful when multiple changes are in progress simultaneously.
 
@@ -25,13 +36,19 @@ This is a **utility skill** (not a workflow step). It reads source file tracking
    If a name is provided, use it. Otherwise:
    - Infer from conversation context if the user mentioned a change
    - Auto-select if only one active change exists
-   - If ambiguous, run `spectra list --json` to get available changes. Use the **AskUserQuestion tool** to let the user select
+   - If ambiguous, run `"$cash_cli" list --json` to get available changes. Use the **AskUserQuestion tool** to let the user select
 
    Always announce: "Committing for change: <name>"
 
 2. **Read tracking file**
 
-   Check for `.spectra/touched/<change-name>.json`. If it exists, parse it to get source files grouped by task.
+   Before building any source allowlist, run:
+
+   ```bash
+   "$cash_cli" touched ensure "<change-name>"
+   ```
+
+   If ensure fails, report the error and STOP. Then parse `.cash-skills/state/touched/<change-name>.json`; Cash state is the only allowlist authority after this point. Do not re-read or merge legacy state.
 
    Expected format:
 
@@ -48,7 +65,7 @@ This is a **utility skill** (not a workflow step). It reads source file tracking
    }
    ```
 
-   If the file does not exist, proceed without source file data — only artifact files will be included.
+   The ensured file must exist and match the versioned Cash schema. An empty `files` array means there are no tracked source files.
 
 3. **Collect artifact files**
 
@@ -80,14 +97,6 @@ This is a **utility skill** (not a workflow step). It reads source file tracking
    ### Unrelated Changes (not included)
    - M  src/lib/utils/format.ts
    - ??  tmp/scratch.js
-   ```
-
-   If no tracking file was found, show a warning instead of the Source Files section:
-
-   ```
-   ### Source Files
-   ⚠ No source file tracking data found.
-   Only artifact files will be committed. Use `spectra task done` during apply to enable source file tracking.
    ```
 
    If there are no artifact files AND no tracked source files, inform the user that there is nothing to commit and STOP.
@@ -122,8 +131,8 @@ This is a **utility skill** (not a workflow step). It reads source file tracking
     - If **incomplete tasks exist**:
       - Display the list of incomplete tasks
       - Use the **AskUserQuestion tool** to ask: "These tasks are still incomplete. Mark all as complete before archiving?"
-        - **Yes**: set a flag to pass `--mark-tasks-complete` to `spectra archive`
-        - **No**: proceed without the flag (archive will continue with a warning)
+        - **Yes**: set a flag to pass `--mark-tasks-complete` to `"$cash_cli" archive`
+        - **No**: cancel the archive sub-flow; do not invoke archive with incomplete tasks
 
       If **AskUserQuestion tool** is not available, ask the same question as plain text and wait for the user's response.
 
@@ -134,8 +143,8 @@ This is a **utility skill** (not a workflow step). It reads source file tracking
     - If **no delta specs exist** (directory is empty or absent): skip to 6a-iii.
     - If **delta specs exist**:
       - Use the **AskUserQuestion tool** to ask: "Delta specs found. Sync to main specs before archiving?"
-        - **Yes**: run `spectra sync <name>` before proceeding
-        - **No**: proceed without syncing
+        - **Yes**: do not add `--skip-specs`; archive performs or verifies sync in its own transaction
+        - **No**: set a flag to pass `--skip-specs`
 
       If **AskUserQuestion tool** is not available, ask the same question as plain text and wait for the user's response.
 
@@ -144,13 +153,12 @@ This is a **utility skill** (not a workflow step). It reads source file tracking
     Execute the archive:
 
     ```bash
-    spectra archive <name>          # without --mark-tasks-complete
-    spectra archive <name> --mark-tasks-complete  # if user chose to mark tasks complete in 6a-i
+    "$cash_cli" archive <name> [--mark-tasks-complete] [--skip-specs]
     ```
 
     Before running archive, keep a copy of the already confirmed commit set:
     - Change artifacts collected before archive
-    - Tracked source files from `.spectra/touched/<change-name>.json`
+    - Tracked source files from `.cash-skills/state/touched/<change-name>.json`
     - User customizations already confirmed before archive
 
     After archive completes successfully:
@@ -197,7 +205,7 @@ This is a **utility skill** (not a workflow step). It reads source file tracking
    Generate a message in this format:
 
    ```
-   spectra(<change-name>): <summary>
+   cash(<change-name>): <summary>
 
    Change: <change-name>
    Tasks: <completed>/<total> complete
@@ -206,7 +214,7 @@ This is a **utility skill** (not a workflow step). It reads source file tracking
    If the archive sub-flow was executed (user selected "Archive first, then commit together"), add `Archived: yes` to the message body:
 
    ```
-   spectra(<change-name>): <summary>
+   cash(<change-name>): <summary>
 
    Change: <change-name>
    Tasks: <completed>/<total> complete
@@ -248,7 +256,7 @@ This is a **utility skill** (not a workflow step). It reads source file tracking
 ```
 ## Committed: <change-name>
 
-**Commit:** <short-hash> spectra(<change-name>): <summary>
+**Commit:** <short-hash> cash(<change-name>): <summary>
 **Files:** <N> files committed (<A> artifacts, <S> source files)
 **Tasks:** <completed>/<total> complete
 ```

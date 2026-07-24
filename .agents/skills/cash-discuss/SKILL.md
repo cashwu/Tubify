@@ -3,15 +3,26 @@ name: cash-discuss
 description: "Have a focused discussion about a topic and reach a conclusion"
 disallowedTools: [Edit, Write]
 license: MIT
-compatibility: Requires spectra CLI.
 metadata:
-  author: spectra
+  author: cash
   version: "1.0"
 ---
 
+## Project-local Cash CLI bootstrap
+
+執行任何 Cash artifact command 前，MUST 先從目前目錄解析並驗證 Git root，再使用該 root 下的 absolute launcher；不得依賴 PATH 或外部 runtime：
+
+```shell
+cash_root="$(git rev-parse --show-toplevel)" || exit 1
+cash_cli="$cash_root/.cash-skills/bin/cash"
+test -x "$cash_cli" || exit 1
+```
+
+同一段 workflow 後續每個 artifact command MUST 使用 `"$cash_cli"`。
+
 Have a focused discussion about a topic and reach a conclusion.
 
-**IMPORTANT: Discuss mode is for thinking, not implementing.** You may read files, search code, and investigate the codebase, but you must NEVER write code or implement features. If the user asks you to implement something, remind them to exit discuss mode first (e.g., start a change with `$cash-propose`). You MAY create Spectra artifacts (proposals, designs, specs) if the user asks—that's capturing thinking, not implementing.
+**IMPORTANT: Discuss mode is for thinking, not implementing.** You may read files, search code, and investigate the codebase, but you must NEVER write code or implement features. If the user asks you to implement something, remind them to exit discuss mode first (e.g., start a change with `$cash-propose`). You MAY create Cash artifacts (proposals, designs, specs) if the user asks—that's capturing thinking, not implementing.
 
 **This is a task-oriented discussion.** Every discussion has a topic, works toward a goal, and ends with a clear conclusion. Unlike open-ended exploration, discuss mode converges.
 
@@ -214,16 +225,16 @@ The goal is thoroughness, not interrogation. One nudge maximum.
 
 ---
 
-## Spectra Awareness
+## Cash Awareness
 
-You have full context of the Spectra system. Use it naturally.
+You have full context of the Cash system. Use it naturally.
 
 ### Check for context
 
 At the start, quickly check what exists:
 
 ```bash
-spectra list --json
+"$cash_cli" list --json
 ```
 
 If the user mentioned a specific change name, read its artifacts for context.
@@ -267,7 +278,7 @@ When the discussion converges on building something:
 
 ## Guardrails
 
-- **Don't implement** — Never write code or implement features. Creating Spectra artifacts is fine, writing application code is not.
+- **Don't implement** — Never write code or implement features. Creating Cash artifacts is fine, writing application code is not.
 - **Don't leave without a conclusion** — If the user tries to end without a conclusion, summarize where things stand and state what's unresolved.
 - **Don't fake understanding** — If something is unclear, dig deeper.
 - **Don't overwhelm** — One question at a time, not a barrage.

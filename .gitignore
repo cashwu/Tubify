@@ -45,3 +45,6 @@ firebase-debug.log
 default.profraw
 .spectra/
 openspec/.vector-search.db*
+.cash-skills/receipt.tsv
+.cash-skills/state/
+__pycache__/

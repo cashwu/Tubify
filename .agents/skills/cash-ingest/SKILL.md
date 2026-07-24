@@ -1,18 +1,29 @@
 ---
 name: cash-ingest
-description: "Update an existing Spectra change from external context"
+description: "Update an existing Cash change from external context"
 license: MIT
-compatibility: Requires spectra CLI.
 metadata:
-  author: spectra
+  author: cash
   version: "1.0"
 ---
 
-Update an existing Spectra change — from a plan file or conversation context.
+## Project-local Cash CLI bootstrap
+
+執行任何 Cash artifact command 前，MUST 先從目前目錄解析並驗證 Git root，再使用該 root 下的 absolute launcher；不得依賴 PATH 或外部 runtime：
+
+```shell
+cash_root="$(git rev-parse --show-toplevel)" || exit 1
+cash_cli="$cash_root/.cash-skills/bin/cash"
+test -x "$cash_cli" || exit 1
+```
+
+同一段 workflow 後續每個 artifact command MUST 使用 `"$cash_cli"`。
+
+Update an existing Cash change — from a plan file or conversation context.
 
 This tool uses conversation context to update artifacts (no plan file directory). Otherwise, use conversation context to update artifacts.
 
-**Prerequisites**: This skill requires the `spectra` CLI. If any `spectra` command fails with "command not found" or similar, report the error and STOP.
+**Prerequisites**: The project-local launcher initialized above is required. If root resolution, launcher validation, or a Cash command fails, report the exact error and STOP.
 
 **Input**: Optionally specify a plan file path or name.
 
@@ -68,13 +79,13 @@ This tool uses conversation context to update artifacts (no plan file directory)
 3. **Check for active changes** (REQUIRED — ingest only updates existing changes)
 
    ```bash
-   spectra list --json
+   "$cash_cli" list --json
    ```
 
    Also check for parked changes:
 
    ```bash
-   spectra list --parked --json
+   "$cash_cli" list --parked --json
    ```
 
    Parse both JSON outputs to get the full list of changes (active + parked). Parked changes should be annotated with "(parked)" in any selection list.
@@ -87,18 +98,18 @@ This tool uses conversation context to update artifacts (no plan file directory)
    After selecting the change, check if it is parked:
 
    ```bash
-   spectra list --parked --json
+   "$cash_cli" list --parked --json
    ```
 
    If the selected change appears in the `parked` array:
    - Inform the user that this change is currently parked（暫存）
    - Use **AskUserQuestion tool** to ask: continue (unpark) or cancel
-   - If continue: run `spectra unpark "<name>"` then proceed
+   - If continue: run `"$cash_cli" unpark "<name>"` then proceed
    - If cancel: stop the workflow
 
    If there is no AskUserQuestion tool available (non-Claude-Code environment):
    Inform the user that this change is currently parked（暫存）and ask via plain text whether to unpark and continue, or cancel.
-   Wait for the user's response. If the user confirms, run `spectra unpark "<name>"` then proceed.
+   Wait for the user's response. If the user confirms, run `"$cash_cli" unpark "<name>"` then proceed.
 
    Read existing artifacts for context before updating.
 
@@ -107,12 +118,12 @@ This tool uses conversation context to update artifacts (no plan file directory)
    For each artifact, get instructions first:
 
    ```bash
-   spectra instructions <artifact-id> --change "<name>" --json
+   "$cash_cli" instructions <artifact-id> --change "<name>" --json
    ```
 
    Use the `template` from instructions as the output structure. Apply `context` and `rules` as constraints but do NOT copy them into the file.
 
-   The instructions JSON includes `locale` — the language to write artifacts in. If present, you MUST write the artifact content in that language. For spec files (specs/\*/\*.md), the spec-file language policy takes precedence over `locale`: Traditional Chinese prose with English structural keywords (`### Requirement:`, `#### Scenario:`, GIVEN/WHEN/THEN/AND) and English normative verbs (SHALL / MUST and their NOT forms); every MODIFIED/REMOVED requirement title and every RENAMED FROM title MUST be copied byte-for-byte from the current master spec, because `spectra archive` matches titles verbatim and silently drops non-matching blocks.
+   The instructions JSON includes `locale` — the language to write artifacts in. If present, you MUST write the artifact content in that language. For spec files (specs/\*/\*.md), the spec-file language policy takes precedence over `locale`: Traditional Chinese prose with English structural keywords (`### Requirement:`, `#### Scenario:`, GIVEN/WHEN/THEN/AND) and English normative verbs (SHALL / MUST and their NOT forms); every MODIFIED/REMOVED requirement title and every RENAMED FROM title MUST be copied byte-for-byte from the current master spec, because `"$cash_cli" archive` matches titles verbatim and fails closed with `requirement_identity_mismatch` when a title does not match.
 
    **Plan-to-Artifact Mapping** (when using a plan file):
 
@@ -140,12 +151,12 @@ This tool uses conversation context to update artifacts (no plan file directory)
    - **Preserve existing `[P]` markers** on tasks that still qualify
    - Do NOT remove existing content
 
-   **Parallel task markers (`[P]`)**: When creating or updating the **tasks** artifact, first read `.spectra.yaml`. If `parallel_tasks: true` is set, add `[P]` markers to new tasks that can be executed in parallel. Format: `- [ ] [P] Task description`. A task qualifies for `[P]` if it targets different files from other pending tasks AND has no dependency on incomplete tasks in the same group. When `parallel_tasks` is not enabled, do NOT add `[P]` markers — but still preserve any existing `[P]` markers already in the file.
+   **Parallel task markers (`[P]`)**: When creating or updating the **tasks** artifact, first read `.cash.yaml`. If `parallel_tasks: true` is set, add `[P]` markers to new tasks that can be executed in parallel. Format: `- [ ] [P] Task description`. A task qualifies for `[P]` if it targets different files from other pending tasks AND has no dependency on incomplete tasks in the same group. When `parallel_tasks` is not enabled, do NOT add `[P]` markers — but still preserve any existing `[P]` markers already in the file.
 
    After creating each artifact, re-check status:
 
    ```bash
-   spectra status --change "<name>" --json
+   "$cash_cli" status --change "<name>" --json
    ```
 
    Continue until all `applyRequires` artifacts are complete. Show progress: "✓ Created <artifact-id>"
@@ -213,7 +224,7 @@ This tool uses conversation context to update artifacts (no plan file directory)
 7. **Analyze-Fix Loop** (max 2 iterations)
 
    ```bash
-   spectra analyze <name> --json
+   "$cash_cli" analyze <name> --json
    ```
 
    1. Filter findings to **Critical and Warning only** (ignore Suggestion)
@@ -221,7 +232,7 @@ This tool uses conversation context to update artifacts (no plan file directory)
    3. If Critical/Warning findings exist:
       a. Show: "Found N issue(s), fixing... (attempt M/2)"
       b. Fix each finding in the affected artifact
-      c. Re-run `spectra analyze <name> --json`
+      c. Re-run `"$cash_cli" analyze <name> --json`
       d. Repeat up to 2 total iterations
    4. After 2 attempts, if findings remain:
       - Show remaining findings as a summary
@@ -230,7 +241,7 @@ This tool uses conversation context to update artifacts (no plan file directory)
 8. **Validation**
 
    ```bash
-   spectra validate "<name>"
+   "$cash_cli" validate "<name>"
    ```
 
    If validation fails, fix errors and re-validate.
@@ -254,11 +265,11 @@ This tool uses conversation context to update artifacts (no plan file directory)
 **Guardrails**
 
 - **NEVER** modify the original plan file in ``
-- **NEVER** write application code — this skill only creates/updates Spectra artifacts
+- **NEVER** write application code — this skill only creates/updates Cash artifacts
 - **NEVER** create new changes — ingest only updates existing changes. If no active change exists, direct user to `$cash-propose`
 - When updating existing changes, **preserve all completed tasks** (`[x]`) — never revert progress
 - If the source content is too brief to fill all artifact sections, use the **AskUserQuestion tool** to get more details rather than inventing content
-- If `spectra` CLI is not available, report the error and stop
+- If `Cash` CLI is not available, report the error and stop
 - Verify each artifact file exists after writing before proceeding to next
 - **NEVER** skip the artifact workflow to write code directly
 - If **AskUserQuestion tool** is not available, ask the same questions as plain text and wait for the user's response

@@ -1,14 +1,25 @@
 ---
 name: cash-propose
-description: Create a Spectra change proposal with sub-agent quality gates
+description: Create a Cash change proposal with sub-agent quality gates
 license: MIT
 metadata:
-  author: spectra
+  author: cash
   version: "1.0"
-  compatibility: Requires spectra CLI.
 ---
 
-Create a complete Spectra change proposal — from requirement to validated artifacts — in a single workflow.
+## Project-local Cash CLI bootstrap
+
+執行任何 Cash artifact command 前，MUST 先從目前目錄解析並驗證 Git root，再使用該 root 下的 absolute launcher；不得依賴 PATH 或外部 runtime：
+
+```shell
+cash_root="$(git rev-parse --show-toplevel)" || exit 1
+cash_cli="$cash_root/.cash-skills/bin/cash"
+test -x "$cash_cli" || exit 1
+```
+
+同一段 workflow 後續每個 artifact command MUST 使用 `"$cash_cli"`。
+
+Create a complete Cash change proposal — from requirement to validated artifacts — in a single workflow.
 
 **Input**: The argument after `$cash-propose` is the requirement description. Examples:
 
@@ -18,7 +29,7 @@ Create a complete Spectra change proposal — from requirement to validated arti
 
 If no argument is provided, the workflow will extract requirements from conversation context or ask.
 
-**Prerequisites**: This skill requires the `spectra` CLI. If any `spectra` command fails with "command not found" or similar, report the error and STOP.
+**Prerequisites**: The project-local launcher initialized above is required. If root resolution, launcher validation, or a Cash command fails, report the exact error and STOP.
 
 **Response language**: All user-facing responses in this workflow MUST be written in Traditional Chinese unless the user explicitly requests another language. Keep shell commands, file paths, code identifiers, schema field names, and quoted source text verbatim.
 
@@ -46,7 +57,7 @@ If no argument is provided, the workflow will extract requirements from conversa
    - If context is insufficient, use the **AskUserQuestion tool** to ask what they want to build
 
    From the resolved description, derive a kebab-case change name (e.g., "add dark mode" → `add-dark-mode`).
-   Do not keep archive-style date prefixes in active change names. If the source name starts with `YYYY-MM-DD-`, strip that date prefix before running `spectra new change`; archived change names and directories are historical references, not active names to reuse.
+   Do not keep archive-style date prefixes in active change names. If the source name starts with `YYYY-MM-DD-`, strip that date prefix before running `"$cash_cli" new change`; archived change names and directories are historical references, not active names to reuse.
 
    **IMPORTANT**: Do NOT proceed without understanding what the user wants to build.
 
@@ -90,7 +101,7 @@ If no argument is provided, the workflow will extract requirements from conversa
 4. **Create the change directory**
 
    ```bash
-   spectra new change "<name>" --agent codex
+   "$cash_cli" new change "<name>" --agent codex
    ```
 
    If a change with that name already exists, suggest continuing the existing change instead of creating a new one.
@@ -106,13 +117,13 @@ If no argument is provided, the workflow will extract requirements from conversa
    Get instructions:
 
    ```bash
-   spectra instructions proposal --change "<name>" --json
+   "$cash_cli" instructions proposal --change "<name>" --json
    ```
 
    Generate the proposal content based on change type (see formats below), then write it via CLI:
 
    ```bash
-   spectra new artifact proposal --change "<name>" --stdin <<'ARTIFACT_EOF'
+   "$cash_cli" new artifact proposal --change "<name>" --stdin <<'ARTIFACT_EOF'
    <proposal content>
    ARTIFACT_EOF
    ```
@@ -231,7 +242,7 @@ If no argument is provided, the workflow will extract requirements from conversa
 6. **Get the artifact build order**
 
    ```bash
-   spectra status --change "<name>" --json
+   "$cash_cli" status --change "<name>" --json
    ```
 
    Parse the JSON to get:
@@ -246,7 +257,7 @@ If no argument is provided, the workflow will extract requirements from conversa
    - **Check if the artifact is optional**: If the artifact is NOT in the dependency chain of any `applyRequires` artifact (i.e., removing it would not block reaching apply), it is optional. Get its instructions and read the `instruction` field. If the instruction contains conditional criteria (e.g., "create only if any apply"), evaluate whether any criteria apply to this change based on the proposal content. If none apply, skip the artifact and show: "⊘ Skipped <artifact-id> (not needed for this change)". Then continue to the next artifact.
    - Get instructions:
      ```bash
-     spectra instructions <artifact-id> --change "<name>" --json
+     "$cash_cli" instructions <artifact-id> --change "<name>" --json
      ```
    - The instructions JSON includes:
      - `context`: Project background (constraints for you - do NOT include in output)
@@ -264,7 +275,7 @@ If no argument is provided, the workflow will extract requirements from conversa
      For **design** or **tasks**:
 
      ```bash
-     spectra new artifact <artifact-id> --change "<name>" --stdin <<'ARTIFACT_EOF'
+     "$cash_cli" new artifact <artifact-id> --change "<name>" --stdin <<'ARTIFACT_EOF'
      <content>
      ARTIFACT_EOF
      ```
@@ -272,7 +283,7 @@ If no argument is provided, the workflow will extract requirements from conversa
      For **specs** (one command per capability):
 
      ```bash
-     spectra new artifact spec <capability-name> --change "<name>" --stdin <<'ARTIFACT_EOF'
+     "$cash_cli" new artifact spec <capability-name> --change "<name>" --stdin <<'ARTIFACT_EOF'
      <delta spec content>
      ARTIFACT_EOF
      ```
@@ -282,7 +293,7 @@ If no argument is provided, the workflow will extract requirements from conversa
    - Show brief progress: "✓ Created <artifact-id>"
 
    b. **Continue until all `applyRequires` artifacts are complete**
-   - After creating each artifact, re-run `spectra status --change "<name>" --json`
+   - After creating each artifact, re-run `"$cash_cli" status --change "<name>" --json`
    - Check if every artifact ID in `applyRequires` has `status: "done"`
    - Stop when all `applyRequires` artifacts are done
 
@@ -302,7 +313,7 @@ If no argument is provided, the workflow will extract requirements from conversa
    - `openspec/changes/<change>/specs/<capability>/spec.md` (delta spec)
    - `openspec/specs/<capability>/spec.md` (master spec)
 
-   Spec files are written in Traditional Chinese prose with English structural keywords. Keep the following verbatim in English: `## ADDED Requirements`, `## MODIFIED Requirements`, `## REMOVED Requirements`, `## RENAMED Requirements`, `### Requirement:`, `#### Scenario:`, `##### Example:`, and the **GIVEN** / **WHEN** / **THEN** / **AND** step markers. Normative verbs (SHALL / MUST / SHOULD / MAY and their NOT forms) stay in English embedded inside Chinese sentences. Code identifiers, file paths, CLI commands, schema field names, and quoted source text stay verbatim. Requirement titles are written in Chinese; every title under `## MODIFIED Requirements` or `## REMOVED Requirements`, and the FROM title of every `## RENAMED Requirements` entry, MUST be copied byte-for-byte from the current master spec — never retyped, reworded, or translated — because `spectra archive` matches requirement titles verbatim and silently drops non-matching MODIFIED/REMOVED blocks. Historical spec files under `openspec/changes/archive/` are historical records and are not retroactively translated.
+   Spec files are written in Traditional Chinese prose with English structural keywords. Keep the following verbatim in English: `## ADDED Requirements`, `## MODIFIED Requirements`, `## REMOVED Requirements`, `## RENAMED Requirements`, `### Requirement:`, `#### Scenario:`, `##### Example:`, and the **GIVEN** / **WHEN** / **THEN** / **AND** step markers. Normative verbs (SHALL / MUST / SHOULD / MAY and their NOT forms) stay in English embedded inside Chinese sentences. Code identifiers, file paths, CLI commands, schema field names, and quoted source text stay verbatim. Requirement titles are written in Chinese; every title under `## MODIFIED Requirements` or `## REMOVED Requirements`, and the FROM title of every `## RENAMED Requirements` entry, MUST be copied byte-for-byte from the current master spec — never retyped, reworded, or translated — because `"$cash_cli" archive` matches requirement titles verbatim and fails closed with `requirement_identity_mismatch` when a title does not match. Historical spec files under `openspec/changes/archive/` are historical records and are not retroactively translated.
 
    **Keep the following verbatim (do not translate) even inside Chinese prose:**
 
@@ -320,7 +331,7 @@ If no argument is provided, the workflow will extract requirements from conversa
 8. **Validation**
 
     ```bash
-    spectra validate "<name>"
+    "$cash_cli" validate "<name>"
     ```
 
     If validation fails, fix errors and re-validate.
@@ -331,7 +342,7 @@ If no argument is provided, the workflow will extract requirements from conversa
    Run this review/rating/fix loop once per change, after the normal workflow has completed its required artifact or task work.
 
    **Entry conditions**
-   - For `cash-propose`, start this loop only after proposal, design, specs, and tasks artifacts required for apply are complete AND `spectra validate "<name>"` has passed. If validation fixes are required, complete them before entering this loop.
+   - For `cash-propose`, start this loop only after proposal, design, specs, and tasks artifacts required for apply are complete AND `"$cash_cli" validate "<name>"` has passed. If validation fixes are required, complete them before entering this loop.
    - For `cash-apply`, start this loop only after all implementation tasks are complete and `tasks.md 全 [x]`.
    - Do not run this loop per artifact or per task; the granularity is per-change.
 
@@ -343,7 +354,7 @@ If no argument is provided, the workflow will extract requirements from conversa
      - **Comment/annotation lint**: in every spec delta file, `<!--` and `-->` counts MUST match; no unclosed annotation block (e.g. a dangling `<!-- @trace` line) and no stray `---` separator may remain inside a requirement or scenario section.
      - **Count-consistency scan**: every numeric claim one artifact makes about another (e.g. proposal or design stating a scenario, requirement, or task count) MUST match the actual count in the referenced artifact. Recount at the source and update stale numbers.
      - **Identifier cross-grep**: for each function name, entry point, file path, flag, or artifact ID that `design.md` defines, grep ALL artifacts (and for cash-apply, the changed files) and verify every occurrence is consistent in spelling and meaning.
-     - **Spec delta title-identity check**: for every `### Requirement:` title under a `## MODIFIED Requirements` or `## REMOVED Requirements` section in a delta spec, and for the FROM title of every entry under `## RENAMED Requirements`, verify the same title exists byte-for-byte as a `### Requirement:` heading in the corresponding master spec `openspec/specs/<capability>/spec.md`. Skip capabilities whose master spec does not exist. A missing title is a self-check failure: copy the title verbatim from the master spec and fix the delta before spawning reviewers, because `spectra archive` silently drops non-matching MODIFIED/REMOVED blocks.
+     - **Spec delta title-identity check**: for every `### Requirement:` title under a `## MODIFIED Requirements` or `## REMOVED Requirements` section in a delta spec, and for the FROM title of every entry under `## RENAMED Requirements`, verify the same title exists byte-for-byte as a `### Requirement:` heading in the corresponding master spec `openspec/specs/<capability>/spec.md`. Skip capabilities whose master spec does not exist. A missing title is a self-check failure: copy the title verbatim from the master spec and fix the delta before spawning reviewers, because `"$cash_cli" archive` fails closed with `requirement_identity_mismatch` for non-matching titles.
      - **Signal-derived checks**:
        1. For EVERY `open` signal whose frontmatter contains a `check` field, execute the `check` value from the project root by passing it as the single command-string argument to `sh -c`, without applying relevance filtering. Executing a `check` command MUST NOT modify any file. Exit `0` means the check passed. Exit `1` means the anti-pattern is present: inspect any project-root-relative paths printed by the `check` command and compare them with this change's artifacts and, for cash-apply, changed files. If at least one printed path is in that artifact/source file set, treat the failure as in scope. If the `check` command prints no usable project-root-relative path, or the output cannot be reliably mapped to a project-root-relative path, fail closed and treat the detected instance as in scope unless the already-read repository state proves the instance is pre-existing or the required fix location is outside the structured scope declarations. If the detected instance is in scope and the fix location is not a protected grader path that is not covered by the structured-scope exception, fix it before spawning reviewers. If the detected instance is pre-existing, or its fix lies outside this change's structured scope declarations, or its fix lies inside a protected grader path that is not covered by the structured-scope exception, do not fix it, record one `範圍外 check 失敗` note in that round file's `## Fix Actions`, include the failing check result in the reviewers' context, and proceed to spawn reviewers. Any other exit code is an execution error: fall back to the existing best-effort judgment for that signal and record one fallback note in `## Fix Actions`. These note lines coexist with `None; pass condition met.` and do not count toward ledger `fixed_files`.
        2. For `open` signals without a `check` field, or signals whose `check` execution fell back because of an execution error, keep the existing best-effort behavior: if any relevant signal (see "Signals in reviewer context" below) describes a machine-checkable anti-pattern, run a corresponding check for it.
@@ -473,7 +484,7 @@ If no argument is provided, the workflow will extract requirements from conversa
    - After completing all fix actions, re-run the pre-round mechanical self-check and fix any failures before spawning the next round's reviewers.
    - Record modified files and the reason for each fix in `## Fix Actions`.
    - Re-run relevant CLI checks or tests before the next round when fixes affect generated artifacts or implementation code.
-   - For `cash-propose`, if any fix action modifies proposal, design, tasks, or spec artifacts, run `spectra validate "<name>"` again and fix validation errors before starting the next round.
+   - For `cash-propose`, if any fix action modifies proposal, design, tasks, or spec artifacts, run `"$cash_cli" validate "<name>"` again and fix validation errors before starting the next round.
    - If no fixes are needed because the round passed, write `None; pass condition met.`
    - **Fix-loop design circuit breaker**: cash-apply only. If resolving a surviving finding requires a synchronization primitive, identity/generation type, or state machine not defined in `design.md`, do not implement it. Record a `needs-design` note naming the finding, required mechanism, and reason; set `decision: aborted`; run Abort triage; and direct the user to `$cash-ingest`. In cash-propose, defining the mechanism in its own `design.md` is a normal fix and does not trigger this rule.
    - **Review round action obligation**: before a `next_round`, every surviving finding and every cumulative-set member counted in the decision MUST have an action in the current `## Fix Actions`.
@@ -500,8 +511,9 @@ If no argument is provided, the workflow will extract requirements from conversa
      - `.claude/skills/cash-apply/SKILL.md`
      - `.agents/skills/cash-propose/SKILL.md`
      - `.agents/skills/cash-apply/SKILL.md`
-     - `.spectra.yaml`
+     - `.cash.yaml`
      - `scripts/cash-skills/tests/skill-checks.fish`
+     - `scripts/cash-cli/tests/cli-checks.fish`
      - `openspec/specs/`
    - **Structured scope declarations**: A file counts as explicitly named only when its project-root-relative path appears in a structured scope declaration: an affected-code entry in proposal `## Impact`, or a `tasks.md` path that is explicitly identified as a delivery target. A path that appears only in a verification command, a rule description, an example, a review finding, reviewer context, or other incidental prose MUST NOT count as a structured scope declaration. Naming a directory path in a structured scope declaration names every file under it.
    - A loop already in progress continues under the instruction version it started with; regenerated instructions take effect only from the next loop run.
@@ -575,7 +587,7 @@ If no argument is provided, the workflow will extract requirements from conversa
 
     Do NOT call **AskUserQuestion** to ask whether to apply.
 
-    Do NOT invoke `spectra park` or run any command that parks the change.
+    Do NOT invoke `"$cash_cli" park` or run any command that parks the change.
 
     This behavior is identical across Auto Mode, interactive mode, and any other agent mode.
 
@@ -583,13 +595,13 @@ If no argument is provided, the workflow will extract requirements from conversa
 
 **Artifact Creation Guidelines**
 
-- Follow the `instruction` field from `spectra instructions` for each artifact type
+- Follow the `instruction` field from `"$cash_cli" instructions` for each artifact type
 - Read dependency artifacts for context before creating new ones
 - Use `template` as the structure for your output file - fill in its sections
 - **IMPORTANT**: `context` and `rules` are constraints for YOU, not content for the file
   - Do NOT copy `<context>`, `<rules>`, `<project_context>` blocks into the artifact
   - These guide what you write, but should never appear in the output
-- **Parallel task markers (`[P]`)**: When creating the **tasks** artifact, first read `.spectra.yaml`. If `parallel_tasks: true` is set, add `[P]` markers to tasks that can be executed in parallel. Format: `- [ ] [P] Task description`. A task qualifies for `[P]` if it targets different files from other pending tasks AND has no dependency on incomplete tasks in the same group. When `parallel_tasks` is not enabled, do NOT add `[P]` markers.
+- **Parallel task markers (`[P]`)**: When creating the **tasks** artifact, first read `.cash.yaml`. If `parallel_tasks: true` is set, add `[P]` markers to tasks that can be executed in parallel. Format: `- [ ] [P] Task description`. A task qualifies for `[P]` if it targets different files from other pending tasks AND has no dependency on incomplete tasks in the same group. When `parallel_tasks` is not enabled, do NOT add `[P]` markers.
 
 **Guardrails**
 

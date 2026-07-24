@@ -5,17 +5,28 @@ context: fork
 agent: Explore
 disallowedTools: [Edit, Write]
 license: MIT
-compatibility: Requires spectra CLI.
 metadata:
-  author: spectra
+  author: cash
   version: "1.0"
 ---
+
+## Project-local Cash CLI bootstrap
+
+執行任何 Cash artifact command 前，MUST 先從目前目錄解析並驗證 Git root，再使用該 root 下的 absolute launcher；不得依賴 PATH 或外部 runtime：
+
+```shell
+cash_root="$(git rev-parse --show-toplevel)" || exit 1
+cash_cli="$cash_root/.cash-skills/bin/cash"
+test -x "$cash_cli" || exit 1
+```
+
+同一段 workflow 後續每個 artifact command MUST 使用 `"$cash_cli"`。
 
 ## Codex fork context
 
 This generated Codex skill runs with `context: fork`. The rules in this section take precedence over the shared `analyze` body below.
 
-When no change name is provided, run `spectra list --json`. Auto-select only when there is exactly one active change. If there are zero active changes or more than one active change, return the candidate list or empty-state message and ask the main thread to rerun `$cash-analyze <change-name>`. Do NOT ask an interactive selection question inside the fork.
+When no change name is provided, run `"$cash_cli" list --json`. Auto-select only when there is exactly one active change. If there are zero active changes or more than one active change, return the candidate list or empty-state message and ask the main thread to rerun `$cash-analyze <change-name>`. Do NOT ask an interactive selection question inside the fork.
 
 ---
 
@@ -23,7 +34,7 @@ Analyze artifact consistency for a change. Can be invoked directly or triggered 
 
 **Input**: Optionally specify a change name (e.g., `$cash-analyze add-auth`). If omitted, infer from conversation context or auto-select if only one active change exists.
 
-**Prerequisites**: This skill requires the `spectra` CLI. If any `spectra` command fails with "command not found" or similar, report the error and STOP.
+**Prerequisites**: This skill requires the `Cash` CLI. If any `Cash` command fails with "command not found" or similar, report the error and STOP.
 
 **Response language**: All user-facing responses in this workflow MUST be written in Traditional Chinese unless the user explicitly requests another language. Keep shell commands, file paths, code identifiers, schema field names, and quoted source text verbatim.
 
@@ -31,12 +42,12 @@ Analyze artifact consistency for a change. Can be invoked directly or triggered 
 
 1. **Determine change name**
 
-   If not provided, infer from context or run `spectra list --json` to auto-select.
+   If not provided, infer from context or run `"$cash_cli" list --json` to auto-select.
 
 2. **Run programmatic analysis**
 
    ```bash
-   spectra analyze <change-name> --json
+   "$cash_cli" analyze <change-name> --json
    ```
 
    This returns structured JSON with:
@@ -78,7 +89,7 @@ Analyze artifact consistency for a change. Can be invoked directly or triggered 
 
 **Passive Trigger**
 
-When `spectra status --change "<name>" --json` shows `isComplete: true`, run this analysis automatically before recommending `$cash-apply`.
+When `"$cash_cli" status --change "<name>" --json` shows `isComplete: true`, run this analysis automatically before recommending `$cash-apply`.
 
 **Guardrails**
 

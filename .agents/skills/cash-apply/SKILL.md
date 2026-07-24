@@ -1,20 +1,31 @@
 ---
 name: cash-apply
-description: Implement Spectra tasks with a sub-agent quality gate after completion
+description: Implement Cash tasks with a sub-agent quality gate after completion
 license: MIT
 metadata:
-  author: spectra
+  author: cash
   version: "1.0"
-  compatibility: Requires spectra CLI.
 ---
 
-Implement tasks from a Spectra change.
+## Project-local Cash CLI bootstrap
+
+執行任何 Cash artifact command 前，MUST 先從目前目錄解析並驗證 Git root，再使用該 root 下的 absolute launcher；不得依賴 PATH 或外部 runtime：
+
+```shell
+cash_root="$(git rev-parse --show-toplevel)" || exit 1
+cash_cli="$cash_root/.cash-skills/bin/cash"
+test -x "$cash_cli" || exit 1
+```
+
+同一段 workflow 後續每個 artifact command MUST 使用 `"$cash_cli"`。
+
+Implement tasks from a Cash change.
 
 **Input**: Optionally specify a change name (e.g., `$cash-apply add-auth`). If omitted, check if it can be inferred from conversation context. If vague or ambiguous you MUST prompt for available changes.
 
 **Task tracking is file-based only.** The tasks file's markdown checkboxes (`- [ ]` / `- [x]`) are the single source of truth for progress. Do NOT use any external task management system, built-in task tracker, or todo tool. When a task is done, edit the checkbox in the tasks file — that is the only way to record progress.
 
-**Prerequisites**: This skill requires the `spectra` CLI. If any `spectra` command fails with "command not found" or similar, report the error and STOP.
+**Prerequisites**: The project-local launcher initialized above is required. If root resolution, launcher validation, or a Cash command fails, report the exact error and STOP.
 
 **Steps**
 
@@ -23,14 +34,14 @@ Implement tasks from a Spectra change.
    If a name is provided, use it. Otherwise:
    - Infer from conversation context if the user mentioned a change
    - Auto-select if only one active change exists
-   - If ambiguous, run `spectra list --json` AND `spectra list --parked --json` to get all available changes (including parked ones). Parked changes should be annotated with "(parked)" in the selection list. Use the **AskUserQuestion tool** to let the user select
+   - If ambiguous, run `"$cash_cli" list --json` AND `"$cash_cli" list --parked --json` to get all available changes (including parked ones). Parked changes should be annotated with "(parked)" in the selection list. Use the **AskUserQuestion tool** to let the user select
 
    Always announce: "Using change: <name>" and how to override (e.g., `$cash-apply <other>`).
 
 2. **Check status to understand the schema**
 
    ```bash
-   spectra status --change "<name>" --json
+   "$cash_cli" status --change "<name>" --json
    ```
 
    **If the command fails**: show the error and STOP.
@@ -38,7 +49,7 @@ Implement tasks from a Spectra change.
    **If the command succeeds**, check whether the change is parked (status can succeed even for parked changes):
 
    ```bash
-   spectra list --parked --json
+   "$cash_cli" list --parked --json
    ```
 
    Look for the change name in the `parked` array of the JSON output.
@@ -52,27 +63,27 @@ Implement tasks from a Spectra change.
      If the user chooses to continue:
 
      ```bash
-     spectra unpark "<name>"
+     "$cash_cli" unpark "<name>"
      ```
 
      Then mark it as in-progress:
 
      ```bash
-     spectra in-progress add "<name>"
+     "$cash_cli" in-progress add "<name>"
      ```
 
      This is a silent operation — do not show the output to the user.
 
-     Then re-run `spectra status --change "<name>" --json` and continue normally.
+     Then re-run `"$cash_cli" status --change "<name>" --json` and continue normally.
 
      If there is no AskUserQuestion tool available (non-Claude-Code environment):
      Inform the user that this change is currently parked（暫存）and ask via plain text whether to unpark and continue, or cancel.
-     Wait for the user's response. If the user confirms, run `spectra unpark "<name>"`, then set `spectra in-progress add "<name>"`, and continue normally.
+     Wait for the user's response. If the user confirms, run `"$cash_cli" unpark "<name>"`, then set `"$cash_cli" in-progress add "<name>"`, and continue normally.
 
    - **If the change is NOT in the parked list**: mark it as in-progress and proceed normally.
 
      ```bash
-     spectra in-progress add "<name>"
+     "$cash_cli" in-progress add "<name>"
      ```
 
      This is a silent operation — do not show the output to the user.
@@ -84,7 +95,7 @@ Implement tasks from a Spectra change.
 3. **Get apply instructions**
 
    ```bash
-   spectra instructions apply --change "<name>" --json
+   "$cash_cli" instructions apply --change "<name>" --json
    ```
 
    This returns:
@@ -94,13 +105,15 @@ Implement tasks from a Spectra change.
    - Dynamic instruction based on current state
 
    **Handle states:**
-   - If `state: "blocked"` (missing artifacts): show message, suggest using `$cash-propose` to create the change artifacts first
+   - Always read `missingArtifacts`; it is present in every state.
+   - If `state: "blocked"`: show the non-empty `missingArtifacts` list and suggest using `$cash-propose` to create those artifacts first
    - If `state: "all_done"`: continue to the cash quality gate before any archive guidance
-   - Otherwise: proceed to implementation
+   - If `state: "ready"`: proceed to implementation
+   - Any other state or missing required field is a contract error; report it and STOP.
 
 3b. **Preflight check**
 
-If the apply instructions JSON includes a `preflight` field, act on its `status`:
+The apply instructions JSON always includes `preflight`. Treat a missing `preflight`, `missingFiles`, `driftedFiles`, or `staleness` field as a contract error. Act on `preflight.status`:
 
 - **`"clean"`**: silently continue — no output needed.
 - **`"warnings"`**: display a brief summary, then continue automatically:
@@ -127,11 +140,9 @@ If the apply instructions JSON includes a `preflight` field, act on its `status`
   Display the same information as plain text and ask whether to continue or stop.
   Wait for the user's response.
 
-If the `preflight` field is absent (blocked or all_done states), skip this step.
-
 3c. **Artifact quality check**
 
-Run `spectra analyze <change-name> --json` to check cross-artifact consistency (Coverage, Consistency, Ambiguity, Gaps).
+Run `"$cash_cli" analyze <change-name> --json` to check cross-artifact consistency (Coverage, Consistency, Ambiguity, Gaps).
 
 - **Zero findings**: silently continue.
 - **Warning/Suggestion only**: display a one-line summary (e.g., "⚠ Artifact analysis: 2 warnings found") and continue automatically.
@@ -148,7 +159,7 @@ When the change has been dormant for more than 5 days AND the change directory h
 
 Detect dormancy from `.openspec.yaml` `created` and `git log -1 --format=%at -- openspec/changes/<name>/`:
 
-- **Both conditions met**: run `spectra drift <change-name>`, display the report, then use the **AskUserQuestion tool**:
+- **Both conditions met**: run `"$cash_cli" drift <change-name>`, display the report, then use the **AskUserQuestion tool**:
   - **Continue with apply** — proceed to tasks (recommended for Light drift)
   - **Refresh first** — pause apply, run `$cash-ingest <change-name>` to update artifacts, then resume
   - **Stop** — end the workflow
@@ -169,17 +180,17 @@ If there is no AskUserQuestion tool available, present options as plain text and
 
 5. **Check project preferences**
 
-   Read `.spectra.yaml` in the project root.
+   Read `.cash.yaml` in the project root.
    If `tdd: true` is set, apply TDD discipline throughout implementation:
    - For each task, write a failing test FIRST, then implement to make it pass
-   - Fetch TDD instructions by running `spectra instructions --skill tdd`, then follow the Red-Green-Refactor cycle
+   - Fetch TDD instructions by running `"$cash_cli" instructions --skill tdd`, then follow the Red-Green-Refactor cycle
    - For bug fixes, reproduce the bug with a failing test before fixing
 
    If `audit: true` is set, apply sharp-edges discipline throughout implementation:
    - When designing APIs or interfaces, evaluate through 3 adversary lenses (Scoundrel, Lazy Developer, Confused Developer)
    - When adding configuration options, verify defaults are secure and zero/empty values are safe
    - When accepting parameters, check for type confusion and silent failures
-   - Fetch audit instructions by running `spectra instructions --skill audit`, follow the discipline checklist (not the standalone 3-agent workflow)
+   - Fetch audit instructions by running `"$cash_cli" instructions --skill audit`, follow the discipline checklist (not the standalone 3-agent workflow)
 
    If `parallel_tasks: true` is set, check whether consecutive pending tasks have `[P]` markers (format: `- [ ] [P] Task description`). You SHALL dispatch consecutive `[P]` tasks as parallel agents. Only fall back to sequential when tasks have a data dependency (one task's output is another's input) or when tasks modify overlapping regions of the same file. Targeting the same file alone is NOT a reason to skip parallel dispatch — if the modified regions are disjoint, dispatch in parallel. If the environment does not support parallel execution, ignore `[P]` markers and execute tasks sequentially.
 
@@ -217,7 +228,7 @@ If there is no AskUserQuestion tool available, present options as plain text and
    - Make the code changes required
    - Keep changes minimal and focused
    - **Verify before marking done** — re-read the task description from the tasks file AND the relevant Implementation Contract content from design.md. For each requirement stated in the task description and each contract item that covers this task's scope, confirm it is addressed by your changes. Confirm the verification target named by the task (test name, CLI invocation, analyzer check, or manual assertion) actually passes. If any contract item, task requirement, or verification target is missing or failing, implement/fix it now. Do not mark the task complete until every part of the description is covered and the contract for this task is satisfied.
-   - Mark task complete by running: `spectra task done --change "<name>" <task-id>`
+   - Mark task complete by running: `"$cash_cli" task done --change "<name>" <task-id>`
      This command marks the checkbox in tasks.md AND records which files were modified for this task.
    - Continue to next task
 
@@ -284,7 +295,7 @@ Simplicity First 與 Surgical Changes 的目的是「不寫不必要的東西」
 
 判準：實作完成後重讀 diff，若 future-self 或 reviewer 需要花超過幾秒才能理解某行的意圖，那不是 simpler，是 cleverer。Cleverer 違反紀律。Clarity 永遠優先於 brevity。
 
-若違反上述任一條（無論刻意或非刻意），視同 task 未完成 — 在執行 `spectra task done` 之前先修正。若是刻意 deviate（例如 contract 與既有程式衝突，需要動到鄰近區塊），依 Implementation Notes Protocol 寫一筆 `deviation` 條目，說明原因。
+若違反上述任一條（無論刻意或非刻意），視同 task 未完成 — 在執行 `"$cash_cli" task done` 之前先修正。若是刻意 deviate（例如 contract 與既有程式衝突，需要動到鄰近區塊），依 Implementation Notes Protocol 寫一筆 `deviation` 條目，說明原因。
 
 **Keep verbatim (do not translate):** shell commands, file paths, code identifiers, schema field names (`applyRequires`, `outputPath` 等), artifact IDs, capability slugs, and quoted source text. If the user explicitly requests another language later, follow the latest user instruction.
 
@@ -351,7 +362,7 @@ Simplicity First 與 Surgical Changes 的目的是「不寫不必要的東西」
    After completing all tasks, re-run:
 
    ```bash
-   spectra instructions apply --change "<name>" --json
+   "$cash_cli" instructions apply --change "<name>" --json
    ```
 
    Confirm `state: "all_done"`. If not, review remaining tasks and complete them.
@@ -397,7 +408,7 @@ Simplicity First 與 Surgical Changes 的目的是「不寫不必要的東西」
    When the cash-apply workflow modifies an artifact — during review-loop fix actions, or after `$cash-ingest` updates `tasks.md` / `design.md` / `proposal.md` — the updated artifact content MUST follow the same Chinese language rule as cash-propose:
 
    - `tasks.md`, `design.md`, `proposal.md`, and other non-spec artifacts under `openspec/changes/<change>/`: Traditional Chinese.
-   - Spec files (`openspec/changes/<change>/specs/**/spec.md` and `openspec/specs/**/spec.md`): follow the Spec-file language policy — Traditional Chinese prose with English structural keywords (`### Requirement:`, `#### Scenario:`, GIVEN/WHEN/THEN/AND) and English normative verbs (SHALL / MUST and their NOT forms) embedded in Chinese sentences. Every MODIFIED/REMOVED requirement title and every RENAMED FROM title MUST be copied byte-for-byte from the current master spec, because `spectra archive` matches titles verbatim and silently drops non-matching blocks.
+   - Spec files (`openspec/changes/<change>/specs/**/spec.md` and `openspec/specs/**/spec.md`): follow the Spec-file language policy — Traditional Chinese prose with English structural keywords (`### Requirement:`, `#### Scenario:`, GIVEN/WHEN/THEN/AND) and English normative verbs (SHALL / MUST and their NOT forms) embedded in Chinese sentences. Every MODIFIED/REMOVED requirement title and every RENAMED FROM title MUST be copied byte-for-byte from the current master spec, because `"$cash_cli" archive` matches titles verbatim and fails closed with `requirement_identity_mismatch` when a title does not match.
 
    Keep CLI commands, file paths, code identifiers, schema field names, artifact IDs, capability slugs, and existing quoted source text verbatim. If the user explicitly requests another language later, follow the latest user instruction.
 
@@ -413,7 +424,7 @@ Simplicity First 與 Surgical Changes 的目的是「不寫不必要的東西」
    Run this review/rating/fix loop once per change, after the normal workflow has completed its required artifact or task work.
 
    **Entry conditions**
-   - For `cash-propose`, start this loop only after proposal, design, specs, and tasks artifacts required for apply are complete AND `spectra validate "<name>"` has passed. If validation fixes are required, complete them before entering this loop.
+   - For `cash-propose`, start this loop only after proposal, design, specs, and tasks artifacts required for apply are complete AND `"$cash_cli" validate "<name>"` has passed. If validation fixes are required, complete them before entering this loop.
    - For `cash-apply`, start this loop only after all implementation tasks are complete and `tasks.md 全 [x]`.
    - Do not run this loop per artifact or per task; the granularity is per-change.
 
@@ -425,7 +436,7 @@ Simplicity First 與 Surgical Changes 的目的是「不寫不必要的東西」
      - **Comment/annotation lint**: in every spec delta file, `<!--` and `-->` counts MUST match; no unclosed annotation block (e.g. a dangling `<!-- @trace` line) and no stray `---` separator may remain inside a requirement or scenario section.
      - **Count-consistency scan**: every numeric claim one artifact makes about another (e.g. proposal or design stating a scenario, requirement, or task count) MUST match the actual count in the referenced artifact. Recount at the source and update stale numbers.
      - **Identifier cross-grep**: for each function name, entry point, file path, flag, or artifact ID that `design.md` defines, grep ALL artifacts (and for cash-apply, the changed files) and verify every occurrence is consistent in spelling and meaning.
-     - **Spec delta title-identity check**: for every `### Requirement:` title under a `## MODIFIED Requirements` or `## REMOVED Requirements` section in a delta spec, and for the FROM title of every entry under `## RENAMED Requirements`, verify the same title exists byte-for-byte as a `### Requirement:` heading in the corresponding master spec `openspec/specs/<capability>/spec.md`. Skip capabilities whose master spec does not exist. A missing title is a self-check failure: copy the title verbatim from the master spec and fix the delta before spawning reviewers, because `spectra archive` silently drops non-matching MODIFIED/REMOVED blocks.
+     - **Spec delta title-identity check**: for every `### Requirement:` title under a `## MODIFIED Requirements` or `## REMOVED Requirements` section in a delta spec, and for the FROM title of every entry under `## RENAMED Requirements`, verify the same title exists byte-for-byte as a `### Requirement:` heading in the corresponding master spec `openspec/specs/<capability>/spec.md`. Skip capabilities whose master spec does not exist. A missing title is a self-check failure: copy the title verbatim from the master spec and fix the delta before spawning reviewers, because `"$cash_cli" archive` fails closed with `requirement_identity_mismatch` for non-matching titles.
      - **Signal-derived checks**:
        1. For EVERY `open` signal whose frontmatter contains a `check` field, execute the `check` value from the project root by passing it as the single command-string argument to `sh -c`, without applying relevance filtering. Executing a `check` command MUST NOT modify any file. Exit `0` means the check passed. Exit `1` means the anti-pattern is present: inspect any project-root-relative paths printed by the `check` command and compare them with this change's artifacts and, for cash-apply, changed files. If at least one printed path is in that artifact/source file set, treat the failure as in scope. If the `check` command prints no usable project-root-relative path, or the output cannot be reliably mapped to a project-root-relative path, fail closed and treat the detected instance as in scope unless the already-read repository state proves the instance is pre-existing or the required fix location is outside the structured scope declarations. If the detected instance is in scope and the fix location is not a protected grader path that is not covered by the structured-scope exception, fix it before spawning reviewers. If the detected instance is pre-existing, or its fix lies outside this change's structured scope declarations, or its fix lies inside a protected grader path that is not covered by the structured-scope exception, do not fix it, record one `範圍外 check 失敗` note in that round file's `## Fix Actions`, include the failing check result in the reviewers' context, and proceed to spawn reviewers. Any other exit code is an execution error: fall back to the existing best-effort judgment for that signal and record one fallback note in `## Fix Actions`. These note lines coexist with `None; pass condition met.` and do not count toward ledger `fixed_files`.
        2. For `open` signals without a `check` field, or signals whose `check` execution fell back because of an execution error, keep the existing best-effort behavior: if any relevant signal (see "Signals in reviewer context" below) describes a machine-checkable anti-pattern, run a corresponding check for it.
@@ -555,7 +566,7 @@ Simplicity First 與 Surgical Changes 的目的是「不寫不必要的東西」
    - After completing all fix actions, re-run the pre-round mechanical self-check and fix any failures before spawning the next round's reviewers.
    - Record modified files and the reason for each fix in `## Fix Actions`.
    - Re-run relevant CLI checks or tests before the next round when fixes affect generated artifacts or implementation code.
-   - For `cash-propose`, if any fix action modifies proposal, design, tasks, or spec artifacts, run `spectra validate "<name>"` again and fix validation errors before starting the next round.
+   - For `cash-propose`, if any fix action modifies proposal, design, tasks, or spec artifacts, run `"$cash_cli" validate "<name>"` again and fix validation errors before starting the next round.
    - If no fixes are needed because the round passed, write `None; pass condition met.`
    - **Fix-loop design circuit breaker**: cash-apply only. If resolving a surviving finding requires a synchronization primitive, identity/generation type, or state machine not defined in `design.md`, do not implement it. Record a `needs-design` note naming the finding, required mechanism, and reason; set `decision: aborted`; run Abort triage; and direct the user to `$cash-ingest`. In cash-propose, defining the mechanism in its own `design.md` is a normal fix and does not trigger this rule.
    - **Review round action obligation**: before a `next_round`, every surviving finding and every cumulative-set member counted in the decision MUST have an action in the current `## Fix Actions`.
@@ -582,8 +593,9 @@ Simplicity First 與 Surgical Changes 的目的是「不寫不必要的東西」
      - `.claude/skills/cash-apply/SKILL.md`
      - `.agents/skills/cash-propose/SKILL.md`
      - `.agents/skills/cash-apply/SKILL.md`
-     - `.spectra.yaml`
+     - `.cash.yaml`
      - `scripts/cash-skills/tests/skill-checks.fish`
+     - `scripts/cash-cli/tests/cli-checks.fish`
      - `openspec/specs/`
    - **Structured scope declarations**: A file counts as explicitly named only when its project-root-relative path appears in a structured scope declaration: an affected-code entry in proposal `## Impact`, or a `tasks.md` path that is explicitly identified as a delivery target. A path that appears only in a verification command, a rule description, an example, a review finding, reviewer context, or other incidental prose MUST NOT count as a structured scope declaration. Naming a directory path in a structured scope declaration names every file under it.
    - A loop already in progress continues under the instruction version it started with; regenerated instructions take effect only from the next loop run.
