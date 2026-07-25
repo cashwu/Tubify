@@ -1,9 +1,6 @@
 ---
 name: cash-analyze
 description: "Analyze artifact consistency for a change"
-context: fork
-agent: Explore
-disallowedTools: [Edit, Write]
 license: MIT
 metadata:
   author: cash
@@ -21,14 +18,6 @@ test -x "$cash_cli" || exit 1
 ```
 
 同一段 workflow 後續每個 artifact command MUST 使用 `"$cash_cli"`。
-
-## Codex fork context
-
-This generated Codex skill runs with `context: fork`. The rules in this section take precedence over the shared `analyze` body below.
-
-When no change name is provided, run `"$cash_cli" list --json`. Auto-select only when there is exactly one active change. If there are zero active changes or more than one active change, return the candidate list or empty-state message and ask the main thread to rerun `$cash-analyze <change-name>`. Do NOT ask an interactive selection question inside the fork.
-
----
 
 Analyze artifact consistency for a change. Can be invoked directly or triggered automatically when all artifacts are complete.
 

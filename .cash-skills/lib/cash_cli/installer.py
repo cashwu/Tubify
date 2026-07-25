@@ -88,6 +88,18 @@ class LegacyReceipt:
     records: tuple[tuple[str, str], ...]
 
 
+@dataclass(frozen=True)
+class TestHooks:
+    hold: str | None = None
+    publication_hold: str | None = None
+    fail_after: int | None = None
+    fail_after_path: str | None = None
+    crash_after_quarantine: int | None = None
+
+
+CONSUMED_TEST_HOLDS: set[str] = set()
+
+
 def sha256(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
@@ -619,29 +631,46 @@ def config_plan(source: Path, target: Path) -> tuple[bytes | None, bool]:
     return source_content, True
 
 
-def marker_span(data: bytes, name: bytes) -> tuple[int, int] | None:
-    start = b"<!-- " + name + b":START -->"
-    end = b"<!-- " + name + b":END -->"
-    if data.count(start) != data.count(start + b"\n") or data.count(end) != data.count(end + b"\n"):
-        raise InstallerError(f"malformed {name.decode()} guidance marker")
-    if data.count(start) > 1 or data.count(end) > 1 or data.count(start) != data.count(end):
-        raise InstallerError(f"duplicate or unbalanced {name.decode()} guidance marker")
-    if not data.count(start):
+def marker_matches(data: bytes, name: bytes, kind: bytes) -> list[re.Match[bytes]]:
+    prefix = re.escape(b"<!-- " + name + b":" + kind)
+    return list(re.finditer(prefix + rb"(?: [^<>\r\n]+)? -->", data))
+
+
+def marker_span(data: bytes, name: bytes, label: str) -> tuple[int, int] | None:
+    starts = marker_matches(data, name, b"START")
+    ends = marker_matches(data, name, b"END")
+    if (
+        sum(match.end() < len(data) and data[match.end()] == 10 for match in starts)
+        != len(starts)
+        or sum(match.end() < len(data) and data[match.end()] == 10 for match in ends)
+        != len(ends)
+    ):
+        raise InstallerError(f"malformed {name.decode()} guidance marker: {label}")
+    if len(starts) > 1 or len(ends) > 1 or len(starts) != len(ends):
+        raise InstallerError(
+            f"duplicate or unbalanced {name.decode()} guidance marker: {label}"
+        )
+    if not starts:
         return None
-    begin = data.index(start)
-    finish = data.index(end)
+    begin = starts[0].start()
+    finish = ends[0].start()
     if finish < begin:
-        raise InstallerError(f"reversed {name.decode()} guidance marker")
+        raise InstallerError(f"reversed {name.decode()} guidance marker: {label}")
     line_end = data.find(b"\n", finish)
     return begin, len(data) if line_end < 0 else line_end + 1
 
 
 def canonical_guidance(source: Path, relative: str) -> bytes:
     content, _ = read_regular(source, relative, expected_mode=0o644)
-    span = marker_span(content, b"CASH")
+    label = f"source {relative}"
+    span = marker_span(content, b"CASH", label)
     if span is None:
         raise InstallerError(f"source guidance has no Cash block: {relative}")
-    if marker_span(content, b"SPECTRA") is not None:
+    for kind in (b"START", b"END"):
+        expected = b"<!-- CASH:" + kind + b" -->"
+        if marker_matches(content, b"CASH", kind)[0].group() != expected:
+            raise InstallerError(f"Cash guidance marker has suffix: {label}")
+    if marker_span(content, b"SPECTRA", label) is not None:
         raise InstallerError(f"source guidance contains a legacy Spectra block: {relative}")
     return content[span[0] : span[1]]
 
@@ -650,8 +679,8 @@ def render_guidance(source: Path, target: Path, relative: str) -> tuple[bytes, i
     canonical = canonical_guidance(source, relative)
     existing = optional_snapshot(target, relative)
     content = existing.content or b""
-    cash = marker_span(content, b"CASH")
-    legacy = marker_span(content, b"SPECTRA")
+    cash = marker_span(content, b"CASH", relative)
+    legacy = marker_span(content, b"SPECTRA", relative)
     if cash and legacy and not (cash[1] <= legacy[0] or legacy[1] <= cash[0]):
         raise InstallerError(f"nested guidance markers: {relative}")
     spans: list[tuple[int, int, bytes]] = []
@@ -752,22 +781,135 @@ def report_version_controlled_receipt(target: Path) -> None:
     )
 
 
-def wait_for_test_hold(hold_path: str) -> None:
+def _validate_hold_path(hook: str, hold_path: str) -> None:
+    path = Path(hold_path)
+    if not path.is_absolute():
+        raise InstallerError(f"invalid installer test hook {hook}: path must be absolute")
+    try:
+        parent = os.lstat(path.parent)
+    except OSError as error:
+        raise InstallerError(
+            f"invalid installer test hook {hook}: parent is unavailable"
+        ) from error
+    if stat.S_ISLNK(parent.st_mode) or not stat.S_ISDIR(parent.st_mode):
+        raise InstallerError(
+            f"invalid installer test hook {hook}: parent must be a real directory"
+        )
+
+
+def _require_absent_hook_file(
+    hook: str,
+    path: Path,
+    *,
+    detail: str = "already exists",
+) -> None:
+    """Reject a hold file that is present when it must not be.
+
+    `detail` distinguishes the stage that made the observation. Preflight and
+    the hold entry both reject the same shapes, so without a stage-specific
+    message a timing-sensitive test cannot tell which one it exercised and a
+    late file created too early would silently downgrade the hold-entry case
+    into a duplicate of the preflight case.
+    """
+    try:
+        os.lstat(path)
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        raise InstallerError(f"invalid installer test hook {hook}: {error}") from error
+    raise InstallerError(f"invalid installer test hook {hook}: {path.name} {detail}")
+
+
+def test_hooks() -> TestHooks:
+    if os.environ.get("CASH_INSTALL_TEST_HOOKS") != "1":
+        return TestHooks()
+    hold_values = {
+        "CASH_INSTALL_HOLD_FILE": os.environ.get("CASH_INSTALL_HOLD_FILE"),
+        "CASH_INSTALL_PUBLICATION_HOLD_FILE": os.environ.get(
+            "CASH_INSTALL_PUBLICATION_HOLD_FILE"
+        ),
+    }
+    enabled_holds = {
+        hook: value for hook, value in hold_values.items() if value is not None
+    }
+    normalized_holds = {Path(value).resolve() for value in enabled_holds.values()}
+    if len(normalized_holds) != len(enabled_holds):
+        raise InstallerError("invalid installer test hook: hold paths must be distinct")
+    for hook, hold_path in enabled_holds.items():
+        _validate_hold_path(hook, hold_path)
+        if hook not in CONSUMED_TEST_HOLDS:
+            _require_absent_hook_file(hook, Path(f"{hold_path}.ready"))
+            _require_absent_hook_file(hook, Path(f"{hold_path}.release"))
+
+    parsed: dict[str, int | None] = {}
+    for name in ("CASH_INSTALL_FAIL_AFTER", "CASH_INSTALL_CRASH_AFTER_QUARANTINE"):
+        value = os.environ.get(name)
+        try:
+            parsed[name] = int(value) if value is not None else None
+        except ValueError as error:
+            raise InstallerError(
+                f"invalid installer test hook {name}: expected an integer"
+            ) from error
+    return TestHooks(
+        hold=hold_values["CASH_INSTALL_HOLD_FILE"],
+        publication_hold=hold_values["CASH_INSTALL_PUBLICATION_HOLD_FILE"],
+        fail_after=parsed["CASH_INSTALL_FAIL_AFTER"],
+        fail_after_path=os.environ.get("CASH_INSTALL_FAIL_AFTER_PATH"),
+        crash_after_quarantine=parsed["CASH_INSTALL_CRASH_AFTER_QUARANTINE"],
+    )
+
+
+def wait_for_test_hold(hook: str, hold_path: str) -> None:
+    _validate_hold_path(hook, hold_path)
+    if hook in CONSUMED_TEST_HOLDS:
+        return
     ready = Path(f"{hold_path}.ready")
     release = Path(f"{hold_path}.release")
-    ready.write_text("ready\n", encoding="utf-8")
+    _require_absent_hook_file(hook, ready, detail="appeared after preflight")
+    _require_absent_hook_file(hook, release, detail="appeared after preflight")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(ready, flags, 0o644)
+    except OSError as error:
+        raise InstallerError(f"invalid installer test hook {hook}: {error}") from error
+    try:
+        os.write(descriptor, b"ready\n")
+    finally:
+        os.close(descriptor)
+    CONSUMED_TEST_HOLDS.add(hook)
     deadline = time.monotonic() + 10
-    while not release.exists():
+    while True:
+        try:
+            metadata = os.lstat(release)
+        except FileNotFoundError:
+            metadata = None
+        except OSError as error:
+            raise InstallerError(f"invalid installer test hook {hook}: {error}") from error
+        if metadata is not None:
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                raise InstallerError(
+                    f"invalid installer test hook {hook}: release must be a regular file"
+                )
+            return
         if time.monotonic() >= deadline:
             raise InstallerError("installer test hold timed out")
         time.sleep(0.01)
 
 
-def acquire_lock(target: Path, *, dry_run: bool) -> tuple[int | None, bool]:
+def acquire_lock(
+    target: Path,
+    *,
+    dry_run: bool,
+    create: bool = True,
+) -> tuple[int | None, bool]:
     lock = target / STABLE_PATHS[1]
     existed = lock.exists()
     if dry_run and not existed:
         return None, False
+    if not existed and not create:
+        raise InstallerError(
+            "unfinished installer journal requires an existing stable workspace lock"
+        )
     flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
     if not existed:
         flags |= os.O_CREAT | os.O_EXCL
@@ -866,8 +1008,9 @@ def validate_installed_receipt(
 
 
 class InstallTransaction:
-    def __init__(self, target: Path):
+    def __init__(self, target: Path, hooks: TestHooks | None = None):
         self.target = target
+        self.hooks = hooks or TestHooks()
         self.operations: list[dict[str, object]] = []
 
     def add(self, relative: str, content: bytes, mode: int) -> None:
@@ -962,10 +1105,9 @@ class InstallTransaction:
                 else:
                     self._publish_legacy_delete(operation)
                 published = next_published
-                fail_after = os.environ.get("CASH_INSTALL_FAIL_AFTER")
-                if fail_after and published == int(fail_after):
+                if self.hooks.fail_after == published:
                     raise InstallerError(f"injected publication failure after {published}")
-                fail_path = os.environ.get("CASH_INSTALL_FAIL_AFTER_PATH")
+                fail_path = self.hooks.fail_after_path
                 if fail_path and operation["path"] == fail_path:
                     raise InstallerError(f"injected publication failure after {fail_path}")
         except Exception:
@@ -983,8 +1125,6 @@ class InstallTransaction:
             self._journal(published, "committed"),
             0o600,
         )
-        if os.environ.get("CASH_INSTALL_CRASH_AFTER_COMMIT") == "1":
-            os._exit(97)
         try:
             self._remove_quarantines(committed=True)
         except Exception as error:
@@ -1083,7 +1223,7 @@ class InstallTransaction:
             (quarantine / "SKILL.md").unlink()
             quarantine.rmdir()
             removed += 1
-            if os.environ.get("CASH_INSTALL_CRASH_AFTER_QUARANTINE") == str(removed):
+            if self.hooks.crash_after_quarantine == removed:
                 os._exit(98)
 
     def cleanup_journal(self) -> None:
@@ -1100,16 +1240,34 @@ class InstallTransaction:
                 pass
 
 
-def recover_installer(target: Path) -> None:
-    journal = target / JOURNAL_PATH
-    if not journal.exists():
-        return
+def installer_journal_present(target: Path) -> bool:
+    try:
+        journal = ensure_contained(target, JOURNAL_PATH)
+    except InstallerError as error:
+        raise InstallerError(f"unsafe installer journal: {error}") from error
+    try:
+        metadata = os.lstat(journal)
+    except FileNotFoundError:
+        return False
+    except OSError as error:
+        raise InstallerError(f"cannot inspect installer journal: {error}") from error
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+        raise InstallerError("unsafe installer journal")
+    return True
+
+
+def recover_installer(target: Path) -> bool:
+    if not installer_journal_present(target):
+        return False
     content, _ = read_regular(target, JOURNAL_PATH, expected_mode=0o600)
     try:
         document = json.loads(content)
+        if document.get("version") != 2:
+            raise InstallerError(
+                "cannot recover installer journal; use a matching or newer installer"
+            )
         if (
             set(document) != {"version", "phase", "published", "operations"}
-            or document["version"] != 2
             or document["phase"] not in {"publishing", "committed"}
         ):
             raise ValueError("invalid journal schema")
@@ -1145,6 +1303,9 @@ def recover_installer(target: Path) -> None:
         else:
             transaction.rollback(published)
         transaction.cleanup_journal()
+        return True
+    except InstallerError:
+        raise
     except Exception as error:
         raise InstallerError(f"cannot recover installer journal: {error}") from error
 
@@ -1178,6 +1339,7 @@ def install_target(
         *GUIDANCE_PATHS,
     ):
         ensure_contained(target, relative)
+    hooks = test_hooks()
 
     receipt_snapshot = optional_snapshot(target, RECEIPT_PATH)
     receipt: Receipt | None = None
@@ -1196,8 +1358,42 @@ def install_target(
     target_version = receipt.version if receipt else (
         legacy_receipt.version if legacy_receipt else None
     )
+    journal_present = installer_journal_present(target)
+    if journal_present:
+        print(
+            f"{target}: unfinished installer journal detected",
+            file=sys.stderr,
+        )
     if target_version is not None and compare_versions(version, target_version) < 0:
+        if journal_present:
+            print(
+                f"{target}: use the matching newer installer to recover this journal",
+                file=sys.stderr,
+            )
         return "newer"
+    if journal_present and not dry_run:
+        lock_existed_before = (target / STABLE_PATHS[1]).exists()
+        launcher_existed_before = (target / STABLE_PATHS[0]).exists()
+        if launcher_existed_before and not lock_existed_before:
+            raise InstallerError("launcher exists without stable workspace lock")
+        recovery_lock, _ = acquire_lock(
+            target,
+            dry_run=False,
+            create=False,
+        )
+        try:
+            recovered = recover_installer(target)
+        finally:
+            if recovery_lock is not None:
+                os.close(recovery_lock)
+        if recovered:
+            return install_target(
+                source,
+                str(target),
+                dry_run=dry_run,
+                force=force,
+                announce_tracking=False,
+            )
 
     source_config, _ = read_regular(source, ".cash.yaml", expected_mode=0o644)
     try:
@@ -1300,9 +1496,8 @@ def install_target(
         raise InstallerError("launcher exists without stable workspace lock")
     lock_descriptor, _ = acquire_lock(target, dry_run=dry_run)
     try:
-        hold_path = os.environ.get("CASH_INSTALL_HOLD_FILE")
-        if hold_path and not dry_run:
-            wait_for_test_hold(hold_path)
+        if hooks.hold and not dry_run:
+            wait_for_test_hold("CASH_INSTALL_HOLD_FILE", hooks.hold)
         validate_target_prerequisites(target)
         locked_source_inputs, locked_target_inputs = installation_inputs(
             source,
@@ -1342,11 +1537,9 @@ def install_target(
                 force=force,
                 announce_tracking=False,
             )
-        if not dry_run:
-            recover_installer(target)
         launcher_changed = publish_launcher(source, target, dry_run=dry_run)
 
-        transaction = InstallTransaction(target)
+        transaction = InstallTransaction(target, hooks)
         for record in records:
             if record.kind == "stable":
                 continue
@@ -1400,9 +1593,11 @@ def install_target(
             return "current"
         if dry_run:
             return "update"
-        publication_hold = os.environ.get("CASH_INSTALL_PUBLICATION_HOLD_FILE")
-        if publication_hold:
-            wait_for_test_hold(publication_hold)
+        if hooks.publication_hold:
+            wait_for_test_hold(
+                "CASH_INSTALL_PUBLICATION_HOLD_FILE",
+                hooks.publication_hold,
+            )
         final_source_inputs, final_target_inputs = installation_inputs(
             source,
             target,
@@ -1579,18 +1774,26 @@ def parser() -> argparse.ArgumentParser:
 def run(arguments: list[str] | None = None) -> int:
     options = parser().parse_args(arguments)
     source = Path(__file__).resolve().parents[3]
-    if options.dry_run and not (options.target or options.all or options.self):
+    for name in ("target", "register", "unregister"):
+        if getattr(options, name) == "":
+            raise InstallerError(
+                f"--{name} requires a non-empty value",
+                exit_code=2,
+            )
+    if options.dry_run and not (
+        options.target is not None or options.all or options.self
+    ):
         raise InstallerError(
             "--dry-run requires --target, --all, or --self",
             exit_code=2,
         )
-    if options.force and not (options.target or options.all):
+    if options.force and not (options.target is not None or options.all):
         raise InstallerError("--force requires --target or --all", exit_code=2)
     if options.self:
         result = bootstrap_source(source, dry_run=options.dry_run)
         print(f"Result: {result}")
         return 0
-    if options.target:
+    if options.target is not None:
         result = install_target(
             source,
             options.target,
@@ -1600,7 +1803,7 @@ def run(arguments: list[str] | None = None) -> int:
         print(f"Result: {result}")
         return 0
     records = read_registry()
-    if options.register:
+    if options.register is not None:
         project = canonical_target(options.register)
         if Path(project) == source:
             raise InstallerError("project must be an existing non-source directory")
@@ -1610,7 +1813,7 @@ def run(arguments: list[str] | None = None) -> int:
             write_registry(records)
         print(f"registered: {project}")
         return 0
-    if options.unregister:
+    if options.unregister is not None:
         project = canonical_target(options.unregister, allow_missing=True)
         updated = [record for record in records if record != project]
         if updated != records:

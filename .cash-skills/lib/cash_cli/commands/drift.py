@@ -152,13 +152,13 @@ def drift_payload(workspace: Workspace, name: str) -> dict[str, object]:
     )
     if total < 30:
         severity = "light"
-        recommendation = f"$cash-apply {name}"
+        recommendation = f"cash-apply {name}"
     elif total < 60:
         severity = "medium"
-        recommendation = f"$cash-ingest {name}"
+        recommendation = f"cash-ingest {name}"
     else:
         severity = "heavy"
-        recommendation = f"$cash-ingest {name}"
+        recommendation = f"cash-ingest {name}"
     return {
         "change_id": name,
         "created": created.isoformat(),

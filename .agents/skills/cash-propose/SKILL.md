@@ -71,7 +71,7 @@ If no argument is provided, the workflow will extract requirements from conversa
    | Bug Fix  | Fixing existing behavior, resolving errors                          |
    | Refactor | Architecture improvements, performance optimization, UI adjustments |
 
-   This determines the proposal template format in step 5.
+   This determines the narrative emphasis in `## Motivation` and `## Proposed Solution`.
 
 3. **Scan existing specs for relevance**
 
@@ -120,7 +120,7 @@ If no argument is provided, the workflow will extract requirements from conversa
    "$cash_cli" instructions proposal --change "<name>" --json
    ```
 
-   Generate the proposal content based on change type (see formats below), then write it via CLI:
+   Use the `template` returned by the CLI as the proposal structure. Fill in every section, using the change type to guide the narrative emphasis, then write the content via CLI:
 
    ```bash
    "$cash_cli" new artifact proposal --change "<name>" --stdin <<'ARTIFACT_EOF'
@@ -129,107 +129,6 @@ If no argument is provided, the workflow will extract requirements from conversa
    ```
 
    If the command fails with a validation error, fix the content and retry.
-
-   Use the following format based on change type:
-
-   ### Feature
-
-   ```markdown
-   ## Why
-
-   <!-- Why this functionality is needed -->
-
-   ## What Changes
-
-   <!-- What will be different -->
-
-   ## Non-Goals (optional)
-
-   <!-- Scope exclusions and rejected approaches. Required when design.md is skipped. -->
-
-   ## Capabilities
-
-   ### New Capabilities
-
-   - `<capability-name>`: <brief description>
-
-   ### Modified Capabilities
-
-   (none)
-
-   ## Impact
-
-   - Affected specs: <new or modified capabilities>
-   - Affected code:
-     - New: <paths to be created, relative to project root>
-     - Modified: <paths that already exist>
-     - Removed: <paths to be deleted>
-   ```
-
-   ### Bug Fix
-
-   ```markdown
-   ## Problem
-
-   <!-- Current broken behavior -->
-
-   ## Root Cause
-
-   <!-- Why it happens -->
-
-   ## Proposed Solution
-
-   <!-- How to fix -->
-
-   ## Non-Goals (optional)
-
-   <!-- Scope exclusions and rejected approaches. Required when design.md is skipped. -->
-
-   ## Success Criteria
-
-   <!-- Expected behavior after fix, verifiable conditions -->
-
-   ## Impact
-
-   - Affected code:
-     - Modified: <paths that already exist>
-     - New: <paths to be created, relative to project root>
-     - Removed: <paths to be deleted>
-   ```
-
-   ### Refactor / Enhancement
-
-   ```markdown
-   ## Summary
-
-   <!-- One sentence description -->
-
-   ## Motivation
-
-   <!-- Why this is needed -->
-
-   ## Proposed Solution
-
-   <!-- How to do it -->
-
-   ## Non-Goals (optional)
-
-   <!-- Scope exclusions and rejected approaches. Required when design.md is skipped. -->
-
-   ## Alternatives Considered (optional)
-
-   <!-- Other approaches considered and why not -->
-
-   ## Impact
-
-   - Affected specs: <affected capabilities>
-   - Affected code:
-     - Modified: <paths that already exist>
-     - New: <paths to be created, relative to project root>
-     - Removed: <paths to be deleted>
-   ```
-
-
 
    **cash-propose impact granularity advisory**
    - After writing the proposal and before creating `design.md`, count the affected-code path entries under proposal `## Impact` across Modified, New, and Removed.
@@ -445,7 +344,7 @@ If no argument is provided, the workflow will extract requirements from conversa
    - Pedantic style nitpicks that a senior engineer would not call out in review.
    - "Missing test coverage" complaints unless `tasks.md` or `design.md` explicitly required the test, or a spec `##### Example:` block is not exercised.
    - Issues already documented as intentional in `design.md`, `implementation-notes.md`, the proposal's Non-Goals section, or `## Alternatives Considered`.
-   - Intentional behavior changes that align with the proposal's `## What Changes` or `## Proposed Solution`.
+   - Intentional behavior changes that align with the proposal's `## Proposed Solution`.
    - Suggestions to add abstractions, configurability, or defensive error handling that the spec/contract did not require — these conflict with Simplicity First.
    - Suggestions to refactor unrelated code touched only incidentally — these conflict with Surgical Changes.
 
@@ -485,6 +384,7 @@ If no argument is provided, the workflow will extract requirements from conversa
    - Record modified files and the reason for each fix in `## Fix Actions`.
    - Re-run relevant CLI checks or tests before the next round when fixes affect generated artifacts or implementation code.
    - For `cash-propose`, if any fix action modifies proposal, design, tasks, or spec artifacts, run `"$cash_cli" validate "<name>"` again and fix validation errors before starting the next round.
+   - 在每輪 fix actions 完成後，record the files that round's Fix Actions modified outside the change directory。若修改了 `.cash-skills/` 下的 runtime 檔，先在 project root 執行 `./install-cash-skills.fish --self`；rebuild the receipt before the next cash command。將候選路徑轉為 project-root-relative，濾除所有 `openspec/changes/` 下的路徑；若濾除後為空，不呼叫 Cash CLI 且不產生警告。否則先執行 `"$cash_cli" touched ensure "<change-name>"`，再以所有候選路徑執行 `"$cash_cli" touched record "<change-name>" --path <path>`；整批失敗時逐路徑重試，以記錄最大合法子集。`touched ensure` 或 `touched record` 失敗時印出警告並繼續，不使 workflow 失敗，也不改變任何 round file 的 `decision`；警告須列出未能記錄的路徑與 `error.code`，並 carry this warning into the final completion output。
    - If no fixes are needed because the round passed, write `None; pass condition met.`
    - **Fix-loop design circuit breaker**: cash-apply only. If resolving a surviving finding requires a synchronization primitive, identity/generation type, or state machine not defined in `design.md`, do not implement it. Record a `needs-design` note naming the finding, required mechanism, and reason; set `decision: aborted`; run Abort triage; and direct the user to `$cash-ingest`. In cash-propose, defining the mechanism in its own `design.md` is a normal fix and does not trigger this rule.
    - **Review round action obligation**: before a `next_round`, every surviving finding and every cumulative-set member counted in the decision MUST have an action in the current `## Fix Actions`.
@@ -558,6 +458,7 @@ If no argument is provided, the workflow will extract requirements from conversa
    - **On match to an existing `open` signal**: Reuse that signal's slug and update it in place — increment `occurrences`, update `last_seen` to today (`YYYY-MM-DD`), append one `## Occurrences` entry (date, change name, source skill + round, and a one-line context), and append the source round file path to `links`. Do NOT change its `status`. Do NOT add, modify, or remove its `check` field; preserve any existing human-authored `check` byte-for-byte.
    - **On no `open` match** (including when only an `addressed` or `dismissed` signal matches): Create a NEW signal. Before coining the `<slug>`, list the existing `openspec/signals/*.md` files and choose a `<slug>` that does NOT already exist. The slug is a short semantic ASCII kebab-case issue-class identifier matching `^[a-z0-9]+(-[a-z0-9]+)*$` (e.g. `spec-requirement-no-backing-task`); it is NOT a mechanical transform of `location + summary`. If the natural slug is already taken, disambiguate with a suffix. Creating a signal MUST NOT overwrite any existing signal file and MUST NOT change any existing signal's human-maintained `status`. The new signal has `status: open`, `occurrences: 1`, and `first_seen` = `last_seen` = today.
    - **Signal file schema**: Each signal file has frontmatter with `id` (= slug), `type` (default `recurring-finding` for review-loop-written signals), `status`, `occurrences`, `first_seen`, `last_seen`, `links`, and optional human-authored `check`; followed by a title, a description paragraph, and a `## Occurrences` section. New signals created by this step MUST NOT contain an automatically authored `check`.
+   - 寫入 signals 後，record every signal file this step created or updated。將路徑轉為 project-root-relative，濾除所有 `openspec/changes/` 下的路徑；若濾除後為空，不呼叫 Cash CLI 且不產生警告。否則先執行 `"$cash_cli" touched ensure "<change-name>"`，再以所有候選路徑執行 `"$cash_cli" touched record "<change-name>" --path <path>`；整批失敗時逐路徑重試，以記錄最大合法子集。`touched ensure` 或 `touched record` 失敗時印出警告並繼續，不使 workflow 失敗，也不改變任何 round file 的 `decision`；警告須列出未能記錄的路徑與 `error.code`，並 carry this warning into the final completion output。
    - **Failure handling**: If writing under `openspec/signals/` fails, print a warning but do NOT fail the cash workflow — signals are an auxiliary layer. If there are no qualifying findings, write nothing.
 
 10. **Finish the cash proposal workflow**

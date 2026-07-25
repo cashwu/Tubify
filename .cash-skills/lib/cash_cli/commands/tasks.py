@@ -408,9 +408,69 @@ def execute(command: str, arguments: Sequence[str]) -> int:
         start_in_progress(workspace, arguments[1])
         return 0
     if command == "touched":
-        if len(arguments) != 2 or arguments[0] != "ensure":
-            raise CashError("invalid_arguments", "Expected touched ensure <name>.")
-        ensure_touched(workspace, arguments[1])
+        if len(arguments) == 2 and arguments[0] == "ensure":
+            ensure_touched(workspace, arguments[1])
+            return 0
+        if (
+            len(arguments) < 4
+            or arguments[0] != "record"
+            or len(arguments[2:]) % 2 != 0
+            or any(arguments[index] != "--path" for index in range(2, len(arguments), 2))
+        ):
+            raise CashError(
+                "invalid_arguments",
+                "Expected touched record <name> --path <path> [--path <path> ...].",
+            )
+        name = arguments[1]
+        if not workspace.is_dir(workspace.relative(workspace.change_path(name))):
+            raise CashError("change_not_found", f"Active change not found: {name}")
+        relative = _state_relative("touched", name)
+        if not workspace.exists(relative):
+            raise CashError(
+                "touched_invalid",
+                "Run touched ensure before recording paths.",
+            )
+        touched = _validate_touched(_read_json(workspace, relative), name)
+        paths: list[str] = []
+        for index in range(3, len(arguments), 2):
+            canonical_path = _safe_source_path(Path(arguments[index]).as_posix())
+            if canonical_path.startswith(("openspec/changes/", ".cash-skills/receipt.tsv")):
+                raise CashError("touched_invalid", "Touched path is ignored.")
+            if workspace.path_kind(canonical_path) != "file":
+                raise CashError("touched_invalid", "Touched path must be a file.")
+            paths.append(canonical_path)
+
+        items = list(touched["touched"])
+        review_index = next(
+            (index for index, item in enumerate(items) if item["task_id"] == "review-loop"),
+            None,
+        )
+        review_files = set(paths)
+        if review_index is not None:
+            review_files.update(items[review_index]["files"])
+        review_entry = {
+            "task_id": "review-loop",
+            "task_desc": "Review loop outputs",
+            "files": sorted(review_files, key=lambda path: path.encode("utf-8")),
+        }
+        if review_index is None:
+            items.append(review_entry)
+        else:
+            items[review_index] = review_entry
+        updated = {
+            "version": 1,
+            "change": name,
+            "legacy_import": touched["legacy_import"],
+            "touched": items,
+            "files": sorted(
+                {path for item in items for path in item["files"]},
+                key=lambda path: path.encode("utf-8"),
+            ),
+        }
+        if updated != touched:
+            transaction = workspace.transaction()
+            transaction.write(relative, _json_bytes(updated))
+            transaction.commit()
         return 0
     if len(arguments) < 3 or arguments[0] != "done":
         raise CashError("invalid_arguments", "Expected task done --change <name> <task-id>.")

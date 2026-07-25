@@ -48,7 +48,7 @@ This is a **utility skill** (not a workflow step). It reads source file tracking
    "$cash_cli" touched ensure "<change-name>"
    ```
 
-   If ensure fails, report the error and STOP. Then parse `.cash-skills/state/touched/<change-name>.json`; Cash state is the only allowlist authority after this point. Do not re-read or merge legacy state.
+   If ensure fails, report the error and STOP. Then parse `.cash-skills/state/touched/<change-name>.json`; Cash state is the only allowlist authority after this point, except when step 2a establishes a post-archive recovery source. Do not re-read or merge legacy state.
 
    Expected format:
 
@@ -65,15 +65,55 @@ This is a **utility skill** (not a workflow step). It reads source file tracking
    }
    ```
 
-   The ensured file must exist and match the versioned Cash schema. An empty `files` array means there are no tracked source files.
+   Split the `touched` array into per-task entries and the reserved entry whose `task_id` is `review-loop`. Keep the reserved entry's files in a separate review-loop output set; they remain part of the commit set and MUST NOT be mixed into per-task attribution.
+
+   The ensured file must exist and match the versioned Cash schema. An empty `files` array means there are no tracked source files, unless step 2a establishes a post-archive recovery source.
+
+   **Resolve shared review-loop signals.** For every `openspec/signals/` path in the review-loop output set, read its frontmatter `links`. Mark the file shared only when a link points to `openspec/changes/<other>/reviews/`, `<other>` differs from `<change-name>`, and `openspec/changes/<other>/` or `openspec/changes/.parked/<other>/` exists now — only when that other change directory still exists. Historical links to archived changes do not make a file shared. For each shared file, use the **AskUserQuestion tool** to require an explicit whole-file include or whole-file exclude decision, and explain that a shared signal file cannot be split by change. Never silently include or silently exclude it. If excluded, move it to `### Unrelated Changes (not included)` with a `user-decision: excluded shared signal` note and remember to report that it remains dirty. If the tool is unavailable, ask the same question in plain text and wait.
+
+2a. **Detect a post-archive empty allowlist**
+
+    An empty tracking file has two very different causes: the change genuinely tracked no source files, or archive already ran and deleted the Cash state that recorded them. Step 2 cannot tell them apart, because `touched ensure` recreates an empty shell when the file is missing. Evaluate all three of these conditions:
+
+    1. The parsed files array is empty.
+    2. Neither `openspec/changes/<change-name>/` nor `openspec/changes/.parked/<change-name>/` exists.
+    3. At least one directory matching `openspec/changes/archive/<date>-<change-name>/` exists.
+
+    If any condition is false, keep the existing behavior and continue to step 3 — an empty `files` array then genuinely means there are no tracked source files.
+
+    If all three hold, the change was archived before this commit and the tracking file is a post-archive empty shell. Do NOT treat it as "no tracked source files".
+
+    **Resolve the archive directory.** Different dates make several same-name archives legitimate, so disambiguate before asking. Keep only the candidates whose `archive-manifest.json` records a `change` equal to `<change-name>` and a `destination` equal to that directory's repo-relative path, then take the one with the newest date prefix. Only when no candidate passes validation, more than one survives it, or the manifest is absent or unparseable, report the ambiguity and use the **AskUserQuestion tool** to confirm which archive directory to use.
+
+    **Resolve the source allowlist** from the resolved directory's `archive-manifest.json`:
+
+    - If `touched_files` is present and non-empty, use it as the source allowlist for the rest of this workflow. Label the Source Files section with its archive-manifest origin and state that it is a point-in-time snapshot taken at archive time: files changed after archiving — during review-loop fix actions, for instance — were never recorded in it, so any dirty source file outside the list still appears under Unrelated Changes for the user to judge.
+    - If `touched_files` is absent (an archive created before that field existed) or present but empty, print a warning naming the resolved archive directory and use the **AskUserQuestion tool** to choose the allowlist source. The options are: derive it from the affected-code paths in the archived `proposal.md` `## Impact` section, select the files manually, or stop without committing. Stopping without committing is a legitimate outcome. NEVER fall through to classifying every dirty source file as Unrelated without an explicit user choice.
+
+    **Rebuild the change's file sets** for the remaining steps:
+
+    - Artifact set: deletions under `openspec/changes/<change-name>/` plus additions or modifications under the resolved archive directory.
+    - Spec sync set: only when the manifest records `specs_synced` as true, the `openspec/specs/` paths listed in its `master_digests` that are both dirty and whose current digest equals the value the manifest recorded for that path. The current digest is the sha256 hexdigest of the file's contents (`shasum -a 256 <path>`). A path whose digest differs belongs to someone else's edit: leave it in Unrelated Changes and say so. When `specs_synced` is false the manifest recorded pre-sync digests, so every `openspec/specs/` path stays in Unrelated Changes.
+
+    All three sets — the artifact set, the resolved source allowlist, and the spec sync set — are part of the commit set, not display-only. Every dirty path in them is staged in step 8 unless the user removes it in step 6. The allowlist is a filter over dirty files, not a list of paths to stage blindly: `touched_files` is a snapshot, so it can name paths that are already clean or no longer exist.
+
+    Apply the same shared review-loop signal rule from step 2 to every `openspec/signals/` path in the resolved source allowlist, including the same active-or-parked existence check and explicit whole-file include/exclude decision. Step 2a has no task-entry granularity, but that MUST NOT bypass the shared-file decision.
+
+    If **AskUserQuestion tool** is not available, ask the same questions as plain text and wait for the user's response.
 
 3. **Collect artifact files**
 
    Run `git status --porcelain` and filter the output to files under `openspec/changes/<name>/`. These are the change's artifact files (proposal, design, tasks, specs, etc.).
 
+   When step 2a applies, use the artifact set it rebuilt instead of this filter.
+
 4. **Identify unrelated dirty files**
 
    From the full `git status --porcelain` output, any dirty files NOT in the artifact set and NOT in the tracking file are "unrelated changes."
+
+   As an explicit exception, a shared signal file excluded by the user's decision belongs in Unrelated Changes even though it remains in the tracking file. Preserve the `user-decision: excluded shared signal` note.
+
+   When step 2a applies, "the tracking file" means the source allowlist step 2a resolved, and the exclusion also covers step 2a's artifact set and its spec sync set.
 
 5. **Display commit plan**
 
@@ -94,22 +134,31 @@ This is a **utility skill** (not a workflow step). It reads source file tracking
    **Task 3: <task description>**
    - M  src/routes/+page.svelte
 
+   ### Review Loop Outputs
+   - M  openspec/signals/example.md
+
    ### Unrelated Changes (not included)
    - M  src/lib/utils/format.ts
    - ??  tmp/scratch.js
    ```
 
-   If there are no artifact files AND no tracked source files, inform the user that there is nothing to commit and STOP.
+   `### Review Loop Outputs` lists the dirty files from the reserved `review-loop` entry and is part of the commit set. Do not repeat those files under per-task Source Files. Excluded shared signals appear only under Unrelated Changes with their decision note.
+
+   If there are no artifact files, no per-task tracked source files, AND no included review-loop outputs, inform the user that there is nothing to commit and STOP. When step 2a applies, STOP only when all three of its sets are empty of dirty paths — its artifact set, the dirty subset of its resolved source allowlist, and its spec sync set. A re-run against an already-committed archived change leaves all three empty and must reach this STOP rather than an empty commit; a still-dirty spec sync path must keep the flow going rather than be dropped here.
+
+   When step 2a applies, add a `### Spec Sync Changes` section listing its spec sync set, and render Source Files as a single ungrouped list — none of step 2a's allowlist sources carry task granularity. When the allowlist came from the archive manifest, label that list with its origin and its snapshot nature.
 
 6. **User confirmation**
 
    Use the **AskUserQuestion tool** to ask the user how to proceed.
 
    Options:
-   - **Commit as shown**: Proceed with the displayed artifact + source files
-   - **Include all dirty files**: Add all unrelated files to the commit as well
-   - **Customize**: Let the user add or remove specific files from the commit set
+   - **Commit as shown**: Proceed with the displayed artifact + source files + `### Review Loop Outputs` (when step 2a applies, "as shown" also includes the Spec Sync Changes section)
+   - **Include all dirty files**: Add all unrelated files to the commit as well. If this adds a shared signal previously excluded by user decision, first explain that it overturns that decision and obtain confirmation.
+   - **Customize**: Let the user add or remove specific files from the commit set. Before adding a shared signal previously excluded by user decision, explain that it overturns that decision and obtain confirmation. When removing a shared signal previously included by user decision, move it to Unrelated Changes with the same `user-decision: excluded shared signal` note instead of making it disappear from the plan.
    - **Archive first, then commit together**: Run archive before committing — archive file moves will be included in this commit
+
+   When step 2a applies, do NOT offer "Archive first, then commit together": the change is already archived, and running archive again fails with `change_not_found`.
 
    If the user selects "Customize":
    - Show a numbered list of all dirty files (included and excluded)
@@ -159,6 +208,7 @@ This is a **utility skill** (not a workflow step). It reads source file tracking
     Before running archive, keep a copy of the already confirmed commit set:
     - Change artifacts collected before archive
     - Tracked source files from `.cash-skills/state/touched/<change-name>.json`
+    - The confirmed `### Review Loop Outputs` set and every shared-signal decision
     - User customizations already confirmed before archive
 
     After archive completes successfully:
@@ -187,6 +237,9 @@ This is a **utility skill** (not a workflow step). It reads source file tracking
     ### Source Files
     (same as before)
 
+    ### Review Loop Outputs
+    (same confirmed set as before)
+
     ### Spec Sync Changes (if sync was performed)
     - M  openspec/specs/<spec-name>/spec.md
     - ...
@@ -200,7 +253,7 @@ This is a **utility skill** (not a workflow step). It reads source file tracking
 
 7. **Generate commit message**
 
-   Read the proposal file at `openspec/changes/<name>/proposal.md`. Extract the first sentence from the Why section (or Problem/Summary section if Why is absent).
+   Read the proposal file at `openspec/changes/<name>/proposal.md`. Extract the first sentence from the Why section (or Problem/Summary section if Why is absent). When step 2a applies, read the proposal and the tasks file from the resolved archive directory instead — the active change directory no longer exists.
 
    Generate a message in this format:
 
@@ -250,6 +303,7 @@ This is a **utility skill** (not a workflow step). It reads source file tracking
     ```
 
     Display the commit hash and message to confirm.
+    If any shared signal was excluded by user decision, also list it and remind the user that the file remains dirty.
 
 **Output On Success**
 

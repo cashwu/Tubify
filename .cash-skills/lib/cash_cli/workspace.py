@@ -12,7 +12,7 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator
 
 from .config import ConfigError, parse_cash_config, parse_openspec_config
 from .errors import CashError
@@ -236,6 +236,8 @@ class Workspace:
     def walk_text_files(
         self,
         relative: str | os.PathLike[str],
+        *,
+        exclude_directory: Callable[[tuple[str, ...]], bool] | None = None,
     ) -> list[tuple[str, str]]:
         base = self._relative_value(relative)
         result: list[tuple[str, str]] = []
@@ -252,6 +254,10 @@ class Workspace:
                         path=candidate,
                     )
                 if stat.S_ISDIR(metadata.st_mode):
+                    if exclude_directory is not None and exclude_directory(
+                        Path(candidate).parts
+                    ):
+                        continue
                     child = os.open(name, flags, dir_fd=descriptor)
                     try:
                         opened = os.fstat(child)

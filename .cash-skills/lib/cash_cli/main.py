@@ -113,18 +113,34 @@ COMMANDS: dict[str, Handler] = {
 }
 
 
+def emit_help(*, json_mode: bool) -> None:
+    commands = sorted(COMMANDS)
+    if json_mode:
+        emit_json({"commands": commands})
+        return
+    print("Cash commands:")
+    for command in commands:
+        print(f"  {command}")
+
+
 def dispatch(
     arguments: Sequence[str],
     *,
     execute: bool = True,
 ) -> Handler | int:
     if not arguments:
-        raise CashError("missing_command", "A command is required.")
+        raise CashError(
+            "missing_command",
+            "A command is required. Run --help for available commands.",
+        )
 
     command = arguments[0]
     handler = COMMANDS.get(command)
     if handler is None:
-        raise CashError("unknown_command", f"Unknown command: {command}")
+        raise CashError(
+            "unknown_command",
+            f"Unknown command: {command}. Run --help for available commands.",
+        )
     if not execute:
         return handler
     return handler(arguments[1:])
@@ -134,6 +150,9 @@ def main(arguments: Sequence[str] | None = None) -> int:
     actual_arguments = list(sys.argv[1:] if arguments is None else arguments)
     json_mode = "--json" in actual_arguments
     try:
+        if actual_arguments and actual_arguments[0] in {"--help", "-h"}:
+            emit_help(json_mode=json_mode)
+            return 0
         return int(dispatch(actual_arguments))
     except CashError as error:
         if json_mode:

@@ -1,9 +1,6 @@
 ---
 name: cash-verify
 description: "Verify implementation matches artifacts"
-context: fork
-agent: Explore
-disallowedTools: [Edit, Write]
 license: MIT
 metadata:
   author: cash
@@ -21,14 +18,6 @@ test -x "$cash_cli" || exit 1
 ```
 
 同一段 workflow 後續每個 artifact command MUST 使用 `"$cash_cli"`。
-
-## Codex fork context
-
-This generated Codex skill runs with `context: fork`. The rules in this section take precedence over the shared `verify` body below.
-
-When no change name is provided, run `"$cash_cli" list --json` and consider only active changes with implementation tasks. Auto-select only when exactly one matching active change exists. If there are zero matching active changes or more than one matching active change, return the candidate list or empty-state message and ask the main thread to rerun `$cash-verify <change-name>`. Do NOT ask an interactive selection question inside the fork.
-
----
 
 Verify that an implementation matches the change artifacts (specs, tasks, design).
 

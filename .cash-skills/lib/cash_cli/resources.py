@@ -25,8 +25,17 @@ ARTIFACT_GRAPH = (
             "## Summary\n\n"
             "## Motivation\n\n"
             "## Proposed Solution\n\n"
+            "## Non-Goals\n\n"
+            "## Alternatives Considered\n\n"
             "## Capabilities\n\n"
-            "## Impact\n"
+            "### New Capabilities\n\n"
+            "### Modified Capabilities\n\n"
+            "## Impact\n\n"
+            "- Affected specs:\n"
+            "- Affected code:\n"
+            "  - New:\n"
+            "  - Modified:\n"
+            "  - Removed:\n"
         ),
     ),
     ArtifactResource(

@@ -144,6 +144,7 @@ def archive_change(
         "touched_digest": hashlib.sha256(
             json.dumps(touched, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         ).hexdigest(),
+        "touched_files": list(touched["files"]),
         "legacy_cleanup": legacy_cleanup,
     }
     transaction.write(

@@ -21,7 +21,7 @@ test -x "$cash_cli" || exit 1
 
 Update an existing Cash change — from a plan file or conversation context.
 
-This tool uses conversation context to update artifacts (no plan file directory). Otherwise, use conversation context to update artifacts.
+This tool resolves plan file references as ordinary paths relative to the current working directory or repository root, and uses conversation context when no plan file is available.
 
 **Prerequisites**: The project-local launcher initialized above is required. If root resolution, launcher validation, or a Cash command fails, report the exact error and STOP.
 
@@ -37,12 +37,12 @@ This tool uses conversation context to update artifacts (no plan file directory)
 
 1. **Locate the requirement source**
 
-   a. **Argument provided** → treat as plan file reference (prepend `` and append `.md` if needed)
+   a. **Argument provided** → treat as a plan file reference, resolve it relative to the current working directory or repository root, and append `.md` if needed
    - If the file exists → use it as the plan file source, proceed to Step 2
    - If the file does NOT exist → report the error and **stop**
 
    b. **No argument, plan file detectable**:
-   - Check conversation context for plan file path (plan mode system messages include the path like `<name>.md`)
+   - Check conversation context for a plan file path (plan mode system messages include paths like `<name>.md`); resolve it relative to the current working directory or repository root
    - If found and the file exists → use the **AskUserQuestion tool** to ask:
      - Option 1: Use the plan file
      - Option 2: Use conversation context
@@ -50,7 +50,7 @@ This tool uses conversation context to update artifacts (no plan file directory)
    - If the user picks conversation context → skip Step 2, go to Step 3
 
    c. **No argument, no plan file detectable**:
-   - Check `` for recent files
+   - Check the current working directory and repository root for recent plan files
    - If recent files exist → list 5 most recent with the **AskUserQuestion tool**, include "Use conversation context" as an additional option
    - If the user picks a file → proceed to Step 2
    - If the user picks conversation context → skip Step 2, go to Step 3
@@ -264,7 +264,7 @@ This tool uses conversation context to update artifacts (no plan file directory)
 
 **Guardrails**
 
-- **NEVER** modify the original plan file in ``
+- **NEVER** modify the original plan file, regardless of its resolved location
 - **NEVER** write application code — this skill only creates/updates Cash artifacts
 - **NEVER** create new changes — ingest only updates existing changes. If no active change exists, direct user to `$cash-propose`
 - When updating existing changes, **preserve all completed tasks** (`[x]`) — never revert progress

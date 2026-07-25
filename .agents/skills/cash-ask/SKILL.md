@@ -1,7 +1,6 @@
 ---
 name: cash-ask
 description: "Query openspec/documents and answer questions"
-disallowedTools: [Edit, Write]
 license: MIT
 metadata:
   author: cash

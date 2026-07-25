@@ -1,7 +1,6 @@
 ---
 name: cash-discuss
 description: "Have a focused discussion about a topic and reach a conclusion"
-disallowedTools: [Edit, Write]
 license: MIT
 metadata:
   author: cash

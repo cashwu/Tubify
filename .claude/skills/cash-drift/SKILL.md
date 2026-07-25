@@ -57,7 +57,7 @@ Detect drift between a Cash change and the current codebase state. Reports time 
    - `broken_anchors`: design.md references (file paths / symbols / functions / CLI flags) that no longer resolve
    - `tasks_blocked_external`: pending tasks whose referenced files were modified by commits outside the change dir
    - `tasks_maybe_resolved`: pending tasks whose verb+target keywords match commit subjects since `created`
-   - `primary_recommendation`: a single copy-pasteable command line
+   - `primary_recommendation`: the recommended Cash skill name and change name
 
 3. **Present the report**
 
@@ -90,7 +90,7 @@ Detect drift between a Cash change and the current codebase state. Reports time 
 
    ### Recommendation
 
-   Run `<primary_recommendation>`.
+   Recommended next skill: `<primary_recommendation>`
    ```
 
    Keep technical details below the plain-language conclusion. List broken anchors, blocked tasks, and maybe-resolved tasks only when non-empty. Omit empty technical detail sections entirely. Keep the report short enough to skim; the goal is to help the user decide, not to explain the scoring model.
@@ -112,7 +112,7 @@ Detect drift between a Cash change and the current codebase state. Reports time 
        - Description: do nothing until the user reviews manually
    - **Heavy** (score >8 or anchor decay >30%, design diverges from code):
      - Recommended label: "Archive and restart"
-       - Description: run `<primary_recommendation>`
+       - Description: recommended next skill: `<primary_recommendation>`
      - Alternate label: "Refresh the plan"
        - Description: try `/cash-ingest <name>` before restarting
      - Alternate label: "Pause for now"
