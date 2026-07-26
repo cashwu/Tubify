@@ -162,11 +162,6 @@ Target archive directory already exists.
 
 **Guardrails**
 
-- Always prompt for change selection if not provided
-- Use artifact graph ("$cash_cli" status --json) for completion checking
-- Don't block archive on warnings - just inform and confirm
 - Preserve .openspec.yaml when moving to archive (it moves with the directory)
-- Show clear summary of what happened
-- If delta specs exist, always show the sync choice; pass `--skip-specs` only when the user explicitly declines sync
 - Never delete touched or sync state directly; archive owns ensure, transaction, cleanup, and each legacy cleanup diagnostic
 - If **AskUserQuestion tool** is not available, ask the same questions as plain text and wait for the user's response

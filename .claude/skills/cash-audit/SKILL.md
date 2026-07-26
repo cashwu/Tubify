@@ -61,6 +61,7 @@ BCrypt::Password.create(password)  # can't pick wrong
 #### 2. Dangerous Defaults
 
 Defaults that are insecure, or zero/empty values that disable security.
+Insecure defaults cannot be grandfathered for backwards compatibility; deprecate them loudly and require migration.
 
 ```ruby
 # What does timeout=0 mean? Never expire? Expire immediately?
@@ -132,14 +133,3 @@ permissions = Set[Permission::READ, Permission::WRITE]
 | High     | Easy misconfiguration breaks security     | Algorithm param accepts `"none"`                    |
 | Medium   | Uncommon but possible misconfiguration    | Negative timeout has unexpected behavior            |
 | Low      | Requires deliberate misuse                | Obscure parameter combination                       |
-
-### Rationalization Table
-
-| Excuse                                | Why It's Wrong                             | What To Do                                             |
-| ------------------------------------- | ------------------------------------------ | ------------------------------------------------------ |
-| "Docs explain it"                     | Devs skip docs under deadlines             | Make the safe option the default or only option        |
-| "Advanced users need flexibility"     | Flexibility = foot-gun opportunity         | Provide safe high-level API, hide low-level primitives |
-| "It's the developer's responsibility" | You designed the trap                      | Remove the trap or make it impossible to misuse        |
-| "Nobody would do that"                | Devs under pressure do everything          | Assume maximum developer chaos                         |
-| "It's just a config option"           | Config is code; wrong config ships to prod | Validate config, reject dangerous combinations         |
-| "Backwards compatibility"             | Insecure defaults can't be grandfathered   | Deprecate loudly, force migration                      |

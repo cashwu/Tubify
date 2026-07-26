@@ -113,8 +113,6 @@ If search results exist but cannot fully answer the question:
 **Guardrails**
 
 - Read-only: NEVER modify any files
-- Read at most 10 files to avoid context overload
-- **Document-grounded only** — every claim in your answer must trace back to a file you read. No general knowledge, no training data, no guessing
 - Keep answers concise, cite original file paths and content directly
 - **Hide your process** — do NOT narrate internal steps like "先讀 main spec" or "搜尋結果有..." to the user. Just do the work silently and present only the final answer
 

@@ -107,8 +107,6 @@ Detect drift between a Cash change and the current codebase state. Reports time 
      - Alternate label: "Pause for now"
        - Description: do nothing until the user reviews manually
 
-   If the **AskUserQuestion tool** is not available, present the same plain-language choices as text and wait for the user's response.
-
 **Passive Trigger**
 
 When `$cash-apply` is invoked on a change whose `.openspec.yaml created` date is more than 5 days ago AND no commits have touched the change directory in the past 3 days, the apply skill SHOULD run drift analysis first and surface findings before tasks begin. The trigger is guidance only and MUST NOT block apply from proceeding.
@@ -119,5 +117,4 @@ When `$cash-apply` is invoked on a change whose `.openspec.yaml created` date is
 
 - Read-only: NEVER modify files, artifacts, or git state based on drift findings
 - If `"$cash_cli" drift` returns a non-zero exit code or an invalid response, report the execution error and stop
-- Do NOT auto-invoke any follow-up command — recommendations are user-confirmed
 - If **AskUserQuestion tool** is not available, ask the same questions as plain text and wait for the user's response

@@ -76,6 +76,8 @@ Update an existing Cash change — from a plan file or conversation context.
    - `plan_files`: all file paths mentioned
    - `plan_verification`: verification steps
 
+   If the plan content is too brief to fill the required artifact sections, use the **AskUserQuestion tool** to get the missing details rather than inventing content.
+
 3. **Check for active changes** (REQUIRED — ingest only updates existing changes)
 
    ```bash
@@ -106,10 +108,6 @@ Update an existing Cash change — from a plan file or conversation context.
    - Use **AskUserQuestion tool** to ask: continue (unpark) or cancel
    - If continue: run `"$cash_cli" unpark "<name>"` then proceed
    - If cancel: stop the workflow
-
-   If there is no AskUserQuestion tool available (non-Claude-Code environment):
-   Inform the user that this change is currently parked（暫存）and ask via plain text whether to unpark and continue, or cancel.
-   Wait for the user's response. If the user confirms, run `"$cash_cli" unpark "<name>"` then proceed.
 
    Read existing artifacts for context before updating.
 
@@ -180,6 +178,7 @@ Update an existing Cash change — from a plan file or conversation context.
    - Does the design reference only capabilities from the proposal?
    - Do tasks cover all design decisions, and nothing outside proposal scope?
    - Are file paths consistent across proposal Impact, design, and tasks?
+   - If a requirement changed, were its scenarios updated to match?
 
    **Check 3: Scope Check**
    - More than 15 pending tasks → consider decomposing into multiple changes
@@ -193,6 +192,7 @@ Update an existing Cash change — from a plan file or conversation context.
 
    **Check 5: Preservation Check** (ingest-specific)
    - Are all completed tasks `[x]` still present and unchanged?
+   - Are completed tasks still relevant to the updated scope? If new context conflicts with one, report the conflict without rewriting the completed task.
    - Were existing `[P]` markers preserved on tasks that still qualify?
    - Was existing content merged (not replaced)?
 
@@ -205,21 +205,6 @@ Update an existing Cash change — from a plan file or conversation context.
    - **Missing scope boundaries on non-trivial work**: design lacking explicit "in scope" / "out of scope" lines for any change that touches more than one subsystem or introduces new behavior. Trivial artifact-only edits MAY skip this; runtime, build, or tooling effects MUST NOT.
 
    Fix every failure inline using the existing context and the new plan/conversation source before running the CLI analyzer. Update incomplete design and task content so behavior contracts, verification criteria, and scope boundaries stay current with the new context. Preserve completed tasks unchanged.
-
----
-
-## Rationalization Table
-
-| What You're Thinking                                             | What You Should Do                                                            |
-| ---------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| "The existing artifacts are close enough, just adjust the tasks" | Read the new context carefully. "Close enough" means you're missing something |
-| "The proposal doesn't need updating, the change is the same"     | If new context exists, the proposal likely needs updates. At minimum, check   |
-| "I can merge these tasks, they're basically the same"            | Keep tasks granular. Merged tasks are harder to track                         |
-| "The completed tasks still apply, no need to review"             | Verify they're still relevant to updated scope. Don't blindly keep stale work |
-| "This spec change is minor, skip the scenario update"            | If the requirement changed, the scenario must change                          |
-| "The conversation didn't discuss this artifact, so skip it"      | Absence of discussion doesn't mean absence of impact. Check                   |
-
----
 
 7. **Analyze-Fix Loop** (max 2 iterations)
 
@@ -267,9 +252,5 @@ Update an existing Cash change — from a plan file or conversation context.
 - **NEVER** modify the original plan file in `~/.claude/plans/`
 - **NEVER** write application code — this skill only creates/updates Cash artifacts
 - **NEVER** create new changes — ingest only updates existing changes. If no active change exists, direct user to `/cash-propose`
-- When updating existing changes, **preserve all completed tasks** (`[x]`) — never revert progress
-- If the source content is too brief to fill all artifact sections, use the **AskUserQuestion tool** to get more details rather than inventing content
-- If `Cash` CLI is not available, report the error and stop
-- Verify each artifact file exists after writing before proceeding to next
 - **NEVER** skip the artifact workflow to write code directly
 - If **AskUserQuestion tool** is not available, ask the same questions as plain text and wait for the user's response

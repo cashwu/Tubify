@@ -345,8 +345,8 @@ If no argument is provided, the workflow will extract requirements from conversa
    - "Missing test coverage" complaints unless `tasks.md` or `design.md` explicitly required the test, or a spec `##### Example:` block is not exercised.
    - Issues already documented as intentional in `design.md`, `implementation-notes.md`, the proposal's Non-Goals section, or `## Alternatives Considered`.
    - Intentional behavior changes that align with the proposal's `## Proposed Solution`.
-   - Suggestions to add abstractions, configurability, or defensive error handling that the spec/contract did not require — these conflict with Simplicity First.
-   - Suggestions to refactor unrelated code touched only incidentally — these conflict with Surgical Changes.
+   - Suggestions to add abstractions, configurability, or defensive error handling that the spec/contract did not require — these conflict with Focused Implementation Discipline.
+   - Suggestions to refactor unrelated code touched only incidentally — these conflict with Focused Implementation Discipline.
 
    **Failure handling**
    - If a reviewer returns no response or malformed output, retry once with a fresh sub-agent invocation for the reviewer role.
@@ -506,11 +506,6 @@ If no argument is provided, the workflow will extract requirements from conversa
 
 **Guardrails**
 
-- Create all artifacts needed for implementation. Optional artifacts (those not in the `applyRequires` dependency chain) may be skipped if their inclusion criteria don't apply.
-- Always read dependency artifacts before creating a new one
-- If context is critically unclear, ask the user - but prefer making reasonable decisions to keep momentum
-- If a change with that name already exists, suggest continuing that change instead
-- Verify each artifact file exists after writing before proceeding to next
 - **NEVER** write application code or implement features during this workflow
 - **NEVER** skip the artifact workflow to write code directly
 - **NEVER** reinterpret requirements by ignoring the proposal file

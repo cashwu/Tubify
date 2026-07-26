@@ -83,6 +83,5 @@ When `"$cash_cli" status --change "<name>" --json` shows `isComplete: true`, run
 **Guardrails**
 
 - Read-only: NEVER modify files
-- Do NOT prompt for change selection if it can be inferred
 - Keep output concise - this runs inline, not as a separate workflow
 - If **AskUserQuestion tool** is not available, ask the same questions as plain text and wait for the user's response

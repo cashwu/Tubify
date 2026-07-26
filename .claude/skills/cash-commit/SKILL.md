@@ -69,7 +69,7 @@ This is a **utility skill** (not a workflow step). It reads source file tracking
 
    The ensured file must exist and match the versioned Cash schema. An empty `files` array means there are no tracked source files, unless step 2a establishes a post-archive recovery source.
 
-   **Resolve shared review-loop signals.** For every `openspec/signals/` path in the review-loop output set, read its frontmatter `links`. Mark the file shared only when a link points to `openspec/changes/<other>/reviews/`, `<other>` differs from `<change-name>`, and `openspec/changes/<other>/` or `openspec/changes/.parked/<other>/` exists now — only when that other change directory still exists. Historical links to archived changes do not make a file shared. For each shared file, use the **AskUserQuestion tool** to require an explicit whole-file include or whole-file exclude decision, and explain that a shared signal file cannot be split by change. Never silently include or silently exclude it. If excluded, move it to `### Unrelated Changes (not included)` with a `user-decision: excluded shared signal` note and remember to report that it remains dirty. If the tool is unavailable, ask the same question in plain text and wait.
+   **Resolve shared review-loop signals.** For every `openspec/signals/` path in the review-loop output set, read its frontmatter `links`. Mark the file shared only when a link points to `openspec/changes/<other>/reviews/`, `<other>` differs from `<change-name>`, and `openspec/changes/<other>/` or `openspec/changes/.parked/<other>/` exists now — only when that other change directory still exists. Historical links to archived changes do not make a file shared. For each shared file, use the **AskUserQuestion tool** to require an explicit whole-file include or whole-file exclude decision, and explain that a shared signal file cannot be split by change. Never silently include or silently exclude it. If excluded, move it to `### Unrelated Changes (not included)` with a `user-decision: excluded shared signal` note and remember to report that it remains dirty.
 
 2a. **Detect a post-archive empty allowlist**
 
@@ -98,8 +98,6 @@ This is a **utility skill** (not a workflow step). It reads source file tracking
     All three sets — the artifact set, the resolved source allowlist, and the spec sync set — are part of the commit set, not display-only. Every dirty path in them is staged in step 8 unless the user removes it in step 6. The allowlist is a filter over dirty files, not a list of paths to stage blindly: `touched_files` is a snapshot, so it can name paths that are already clean or no longer exist.
 
     Apply the same shared review-loop signal rule from step 2 to every `openspec/signals/` path in the resolved source allowlist, including the same active-or-parked existence check and explicit whole-file include/exclude decision. Step 2a has no task-entry granularity, but that MUST NOT bypass the shared-file decision.
-
-    If **AskUserQuestion tool** is not available, ask the same questions as plain text and wait for the user's response.
 
 3. **Collect artifact files**
 
@@ -183,8 +181,6 @@ This is a **utility skill** (not a workflow step). It reads source file tracking
         - **Yes**: set a flag to pass `--mark-tasks-complete` to `"$cash_cli" archive`
         - **No**: cancel the archive sub-flow; do not invoke archive with incomplete tasks
 
-      If **AskUserQuestion tool** is not available, ask the same question as plain text and wait for the user's response.
-
     **6a-ii. Delta spec sync check**
 
     Check whether delta specs exist at `openspec/changes/<name>/specs/`.
@@ -194,8 +190,6 @@ This is a **utility skill** (not a workflow step). It reads source file tracking
       - Use the **AskUserQuestion tool** to ask: "Delta specs found. Sync to main specs before archiving?"
         - **Yes**: do not add `--skip-specs`; archive performs or verifies sync in its own transaction
         - **No**: set a flag to pass `--skip-specs`
-
-      If **AskUserQuestion tool** is not available, ask the same question as plain text and wait for the user's response.
 
     **6a-iii. Archive execution and file collection**
 
@@ -329,7 +323,5 @@ No dirty files found for this change (no modified artifacts, no tracked source f
 
 - **NEVER use `git add .` or `git add -A`** — every file must be staged individually with `git add <file>`
 - **NEVER commit files the user hasn't confirmed** — always show the file list and get explicit confirmation first
-- **Always show the full file list before committing** — no silent staging
 - If the tracking file is missing, warn but don't block — artifact-only commits are valid
-- The "Unrelated Changes" section is informational only — these files are excluded by default
 - If **AskUserQuestion tool** is not available, ask the same questions as plain text and wait for the user's response

@@ -103,20 +103,6 @@ Now — and only now — fix the bug.
 
 ---
 
-## Rationalization Table
-
-| What You're Thinking                      | What You Should Do                               |
-| ----------------------------------------- | ------------------------------------------------ |
-| "I bet it's this, let me just change it"  | Reproduce first. Verify your hypothesis          |
-| "Let me add some prints everywhere"       | Add targeted logging at specific boundaries      |
-| "It works on my machine"                  | Find what's different in the failing environment |
-| "Let me try reverting this change"        | Use git bisect to find the actual cause          |
-| "The fix is obvious, I don't need a test" | The fix is wrong. Write the test                 |
-| "Let me just restart the service"         | That hides the bug. Find the root cause          |
-| "Maybe if I just clear the cache..."      | Understand why the cache was wrong               |
-
----
-
 ## Guardrails
 
 - **Don't guess** — Every change must be based on evidence

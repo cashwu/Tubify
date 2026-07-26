@@ -38,6 +38,8 @@ Implement tasks from a Cash change.
 
    Always announce: "Using change: <name>" and how to override (e.g., `$cash-apply <other>`).
 
+   If the AskUserQuestion tool is unavailable, ask the same question or options in plain text and wait for the user's response.
+
 2. **Check status to understand the schema**
 
    ```bash
@@ -75,10 +77,6 @@ Implement tasks from a Cash change.
      This is a silent operation — do not show the output to the user.
 
      Then re-run `"$cash_cli" status --change "<name>" --json` and continue normally.
-
-     If there is no AskUserQuestion tool available (non-Claude-Code environment):
-     Inform the user that this change is currently parked（暫存）and ask via plain text whether to unpark and continue, or cancel.
-     Wait for the user's response. If the user confirms, run `"$cash_cli" unpark "<name>"`, then set `"$cash_cli" in-progress add "<name>"`, and continue normally.
 
    - **If the change is NOT in the parked list**: mark it as in-progress and proceed normally.
 
@@ -136,10 +134,6 @@ The apply instructions JSON always includes `preflight`. Treat a missing `prefli
   Options: "Continue anyway" / "Stop"
   If the user chooses "Stop", end the workflow.
 
-  If there is no AskUserQuestion tool available:
-  Display the same information as plain text and ask whether to continue or stop.
-  Wait for the user's response.
-
 3c. **Artifact quality check**
 
 Run `"$cash_cli" analyze <change-name> --json` to check cross-artifact consistency (Coverage, Consistency, Ambiguity, Gaps).
@@ -150,8 +144,6 @@ Run `"$cash_cli" analyze <change-name> --json` to check cross-artifact consisten
   - **Fix and continue** — fix the artifact issues inline, then proceed
   - **Continue anyway** — skip fixes and start implementation
   - **Stop** — end the workflow
-
-  If there is no AskUserQuestion tool available, present options as plain text and wait for the user's response.
 
 3d. **Drift dormancy check** (passive trigger for stale changes)
 
@@ -168,8 +160,6 @@ Detect dormancy from `.openspec.yaml` `created` and `git log -1 --format=%at -- 
 The trigger is guidance only — it MUST NOT block apply from proceeding when the user chooses to continue. Hard-blocking on dormancy would punish legitimate "I came back after a long weekend" cases.
 
 (Threshold reasoning: AI-assisted commits are daily-cadence. ≥5 days dormant + ≥3 days no commit ≈ genuine stagnation, not normal pacing.)
-
-If there is no AskUserQuestion tool available, present options as plain text and wait for the user's response.
 
 4. **Read context files**
 
@@ -227,6 +217,7 @@ If there is no AskUserQuestion tool available, present options as plain text and
           Do NOT invent additional test values beyond what the spec examples provide without reason. The examples ARE the agreed specification.
    - Make the code changes required
    - Keep changes minimal and focused
+   - Write or update the relevant test before marking the task done, even when TDD is disabled or the task is a small refactor
    - **Verify before marking done** — re-read the task description from the tasks file AND the relevant Implementation Contract content from design.md. For each requirement stated in the task description and each contract item that covers this task's scope, confirm it is addressed by your changes. Confirm the verification target named by the task (test name, CLI invocation, analyzer check, or manual assertion) actually passes. If any contract item, task requirement, or verification target is missing or failing, implement/fix it now. Do not mark the task complete until every part of the description is covered and the contract for this task is satisfied.
    - Mark task complete by running: `"$cash_cli" task done --change "<name>" <task-id>`
      This command marks the checkbox in tasks.md AND records which files were modified for this task.
@@ -242,62 +233,14 @@ If there is no AskUserQuestion tool available, present options as plain text and
    - Other errors or blockers not covered by the blocker triage above → report and wait for guidance
    - User interrupts
 
----
+**Focused Implementation Discipline**
 
-## Rationalization Table
-
-| What You're Thinking                                               | What You Should Do                                                                                                                            |
-| ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| "This task looks done, I'll mark it complete"                      | Re-read the task description first. Check whether your diff covers every part of it. Incomplete tasks marked done are the #1 source of rework |
-| "This task is trivial, I don't need to re-read the design"         | Re-read. Context compression loses details. 30s of reading saves 30min of rework                                                              |
-| "I already know how this works, skip the code search"              | Search anyway. Someone may have added a utility since you last looked                                                                         |
-| "The test is obvious, I'll add it after implementation"            | If TDD is enabled, test first. If not, still write it before marking done                                                                     |
-| "This is just a small refactor, no test needed"                    | Small refactors are how regressions sneak in. Write the test                                                                                  |
-| "The artifact says X but Y makes more sense"                       | Pause and suggest updating the artifact. Don't silently deviate                                                                               |
-| "I'll fix this other thing I noticed while I'm here"               | Finish current task first. Address the other thing separately                                                                                 |
-| "The example values are just illustrations, I'll pick better ones" | Use the spec example values exactly. They were chosen deliberately                                                                            |
-
----
-
-
-
-**Surgical & Simplicity Discipline**
-
-在 step 7 的 task loop 期間，編輯任何來源碼之前必須套用以下兩項紀律。它們補充（而不取代）既有的 Reuse / Quality / Efficiency / No Placeholders / Examples as verification 檢查。
-
-**Simplicity First — 寫最少能解決任務的程式碼**
-
-- 不要實作 `tasks.md` 任務描述與 `design.md` Implementation Contract 以外的功能。
-- 不要為單一使用情境引入抽象層、設定選項或「彈性」；YAGNI 優先於可擴充性。
-- 不要為 contract 已排除或型別已保證的情境撰寫錯誤處理；只在系統邊界（外部輸入、外部 API）驗證。
-- 完成後若發現實作行數遠超必要（例如 200 行能壓到 50 行），先檢查是否過度設計，必要時重寫成更小的版本。
-- 自問：「資深工程師會不會說這太複雜？」如果會，就簡化。
-
-**Surgical Changes — 只動該動的，且只清自己造成的殘骸**
-
-- 不要「順手」改鄰近區塊的程式碼、註解或格式。
-- 不要重構沒壞的東西；不要為了個人風格偏好改既有寫法。
-- 即使既有風格與你習慣不同，跟著現況走（match existing style）。
-- 若注意到不相關的死碼、bug 或可改進處，**不要直接刪或改** — 依照 Implementation Notes Protocol 在 `implementation-notes.md` 以 `open-question` 條目記錄，交給使用者決定。
-- 只移除「因為本次改動而變成 orphan」的 import、變數、函式；既有的 pre-existing 死碼不要動。
+- 只實作 `tasks.md` 任務描述與 `design.md` Implementation Contract 要求的功能；不要為單一使用情境引入抽象層、設定選項或額外彈性，也不要為 contract 已排除或型別已保證的情境撰寫防禦性錯誤處理——只在系統邊界（外部輸入、外部 API）驗證。
+- 只修改任務直接需要的區塊，不順手改鄰近內容，也不重構沒有問題的既有程式碼；即使既有風格與你習慣不同也跟著現況走（match existing style），且只清除因本次改動而變成 orphan 的 import、變數與函式。
+- 若注意到不相關的死碼、bug 或可改進處，不要直接刪或改；依 Implementation Notes Protocol 在 `implementation-notes.md` 以 `open-question` 條目記錄，交給使用者決定。
 - 驗收標準：本次 diff 的每一行，都能直接追溯到 `tasks.md` 中的某條任務或 `design.md` 中的 Implementation Contract 項目。
-
-**Maintain Balance — Simplicity 不等於程式碼高爾夫**
-
-Simplicity First 與 Surgical Changes 的目的是「不寫不必要的東西」，不是「越短越好」。下列反例同樣違反紀律，被 review loop 視為 Critical：
-
-- 巢狀三元運算子（nested ternary）— 用 `if/else` 或 `switch` 替代。
-- 為了減少行數犧牲可讀性的 dense one-liner、過度連鎖的 method chain。
-- 為了「合併」把多個關注點塞進同一個 function、component 或檔案。
-- 移除有意義的中介變數，讓 expression 變成難以閱讀或除錯的長句。
-- 移除真正在傳遞意圖的命名常數，改用 magic number 或 inline literal。
-- 拿掉合理的抽象（helper、type alias）只為了減少一層間接。
-
-判準：實作完成後重讀 diff，若 future-self 或 reviewer 需要花超過幾秒才能理解某行的意圖，那不是 simpler，是 cleverer。Cleverer 違反紀律。Clarity 永遠優先於 brevity。
-
-若違反上述任一條（無論刻意或非刻意），視同 task 未完成 — 在執行 `"$cash_cli" task done` 之前先修正。若是刻意 deviate（例如 contract 與既有程式衝突，需要動到鄰近區塊），依 Implementation Notes Protocol 寫一筆 `deviation` 條目，說明原因。
-
-**Keep verbatim (do not translate):** shell commands, file paths, code identifiers, schema field names (`applyRequires`, `outputPath` 等), artifact IDs, capability slugs, and quoted source text. If the user explicitly requests another language later, follow the latest user instruction.
+- 以 future-self 或 reviewer 能在幾秒內理解每行意圖為清晰度判準；clarity 永遠優先於 brevity。
+- 違反上述任一條視同 task 未完成，在執行 `"$cash_cli" task done` 之前先修正。若刻意 deviate，依 Implementation Notes Protocol 寫一筆 `deviation` 條目並說明原因。
 
 8. **Implementation Notes Protocol**
 
@@ -379,29 +322,7 @@ Simplicity First 與 Surgical Changes 的目的是「不寫不必要的東西」
 
 **Cash-apply response language**
 
-   For `cash-apply`, ai 的回覆要用中文.
-
-   All user-facing AI responses during this workflow MUST be written in Traditional Chinese unless the user explicitly requests another language.
-
-   This includes:
-   - Status updates while tasks are being implemented.
-   - Pause messages when a blocker is encountered.
-   - Review loop summaries.
-   - Final implementation summaries.
-
-   This does not require translating:
-   - Shell commands.
-   - File paths.
-   - Code identifiers.
-   - Existing quoted source text.
-
-   If the user explicitly requests another language later, follow the latest user instruction.
-
-   Keep technical names exact even when the surrounding explanation is Chinese.
-
-   Do not mix languages for ordinary prose unless a command, path, symbol, or quoted artifact requires it.
-
-   The goal is predictable Chinese-facing interaction for cash-apply while preserving exact technical references.
+   All user-facing AI responses during this workflow MUST be written in Traditional Chinese unless the user explicitly requests another language. Keep shell commands, file paths, code identifiers, schema field names (`applyRequires`, `outputPath` 等), artifact IDs, capability slugs, technical names, and quoted source text verbatim.
 
    **Artifact modifications during cash-apply**
 
@@ -528,8 +449,8 @@ Simplicity First 與 Surgical Changes 的目的是「不寫不必要的東西」
    - "Missing test coverage" complaints unless `tasks.md` or `design.md` explicitly required the test, or a spec `##### Example:` block is not exercised.
    - Issues already documented as intentional in `design.md`, `implementation-notes.md`, the proposal's Non-Goals section, or `## Alternatives Considered`.
    - Intentional behavior changes that align with the proposal's `## What Changes` or `## Proposed Solution`.
-   - Suggestions to add abstractions, configurability, or defensive error handling that the spec/contract did not require — these conflict with Simplicity First.
-   - Suggestions to refactor unrelated code touched only incidentally — these conflict with Surgical Changes.
+   - Suggestions to add abstractions, configurability, or defensive error handling that the spec/contract did not require — these conflict with Focused Implementation Discipline.
+   - Suggestions to refactor unrelated code touched only incidentally — these conflict with Focused Implementation Discipline.
 
    **Failure handling**
    - If a reviewer returns no response or malformed output, retry once with a fresh sub-agent invocation for the reviewer role.
@@ -694,19 +615,6 @@ All tasks complete. The cash quality gate runs next; archive guidance is shown o
 
 What would you like to do?
 ```
-
-**Guardrails**
-
-- Keep going through tasks until done or blocked
-- Always read context files before starting (from the apply instructions output)
-- If task is ambiguous, pause and ask before implementing
-- If implementation reveals issues, pause and suggest artifact updates
-- Keep code changes minimal and scoped to each task
-- Update task checkbox immediately after completing each task
-- Pause on errors, blockers, or unclear requirements - don't guess
-- Use contextFiles from CLI output, don't assume specific file names
-- **No external task tracking** — do not use any built-in task management, todo list, or progress tracking tool; the tasks file is the only system
-- If **AskUserQuestion tool** is not available, ask the same questions as plain text and wait for the user's response
 
 **Fluid Workflow Integration**
 

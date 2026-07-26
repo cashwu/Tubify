@@ -43,6 +43,13 @@ GUIDANCE_PATHS = ("AGENTS.md", "CLAUDE.md")
 RECEIPT_PATH = ".cash-skills/receipt.tsv"
 JOURNAL_PATH = ".cash-skills/state/installer/journal.json"
 GITIGNORE_PATH = ".gitignore"
+OPENSPEC_CONFIG_PATH = "openspec/config.yaml"
+OPENSPEC_CONFIG_BASELINE: bytes = (
+    b"schema: spec-driven\n"
+    b"\n"
+    b"# Add project context with a context block when needed.\n"
+    b"# Add artifact-specific instructions under rules when needed.\n"
+)
 GITIGNORE_RULES = (
     b".cash-skills/receipt.tsv",
     b".cash-skills/state/",
@@ -460,7 +467,7 @@ def installation_inputs(
         ".cash.yaml",
         ".spectra.yaml",
         GITIGNORE_PATH,
-        "openspec/config.yaml",
+        OPENSPEC_CONFIG_PATH,
         *GUIDANCE_PATHS,
         *(record.path for record in records if record.kind != "stable"),
     )
@@ -563,7 +570,11 @@ def parse_legacy_receipt(
     return LegacyReceipt(rows[0][1], tuple(parsed))
 
 
-def validate_target_prerequisites(target: Path) -> None:
+def validate_target_prerequisites(
+    target: Path,
+    *,
+    allow_missing_config: bool = False,
+) -> None:
     try:
         result = subprocess.run(
             ["git", "-C", str(target), "rev-parse", "--show-toplevel"],
@@ -575,9 +586,15 @@ def validate_target_prerequisites(target: Path) -> None:
         raise InstallerError("target must be a Git worktree top-level") from error
     if Path(result.stdout.strip()).resolve() != target:
         raise InstallerError("target must be the Git worktree top-level")
-    content, _ = read_regular(target, "openspec/config.yaml")
+    ensure_regular_shape(target, OPENSPEC_CONFIG_PATH)
     try:
-        parse_openspec_config(content.decode("utf-8"), path="openspec/config.yaml")
+        os.lstat(ensure_contained(target, OPENSPEC_CONFIG_PATH))
+    except FileNotFoundError:
+        if allow_missing_config:
+            return
+    content, _ = read_regular(target, OPENSPEC_CONFIG_PATH)
+    try:
+        parse_openspec_config(content.decode("utf-8"), path=OPENSPEC_CONFIG_PATH)
     except (UnicodeDecodeError, ConfigError) as error:
         raise InstallerError(f"invalid target openspec/config.yaml: {error}") from error
 
@@ -629,6 +646,21 @@ def config_plan(source: Path, target: Path) -> tuple[bytes | None, bool]:
     if legacy.exists:
         return parse_legacy_config(legacy.content or b""), True
     return source_content, True
+
+
+def openspec_config_plan(snapshot: Snapshot) -> bytes | None:
+    if snapshot.exists:
+        return None
+    try:
+        parse_openspec_config(
+            OPENSPEC_CONFIG_BASELINE.decode("utf-8"),
+            path=OPENSPEC_CONFIG_PATH,
+        )
+    except (UnicodeDecodeError, ConfigError) as error:
+        raise InstallerError(
+            f"invalid installer {OPENSPEC_CONFIG_PATH} baseline: {error}"
+        ) from error
+    return OPENSPEC_CONFIG_BASELINE
 
 
 def marker_matches(data: bytes, name: bytes, kind: bytes) -> list[re.Match[bytes]]:
@@ -698,20 +730,24 @@ def render_guidance(source: Path, target: Path, relative: str) -> tuple[bytes, i
     return rendered, existing.mode or 0o644, rendered != content
 
 
-def ensure_regular_gitignore(target: Path) -> None:
-    """Reject a `.gitignore` shape that cannot be safely read.
+def ensure_regular_shape(root: Path, relative: str) -> None:
+    """Reject a file shape that cannot be safely read.
 
     `read_regular` already rejects a symlink, a hard link and a directory, but
     opening a FIFO for reading blocks until a writer appears, so the shape is
     decided from the lstat metadata before any open.
     """
-    path = ensure_contained(target, GITIGNORE_PATH)
+    path = ensure_contained(root, relative)
     try:
         metadata = os.lstat(path)
     except FileNotFoundError:
         return
     if not stat.S_ISREG(metadata.st_mode):
-        raise InstallerError(f"unsafe regular file identity: {GITIGNORE_PATH}")
+        raise InstallerError(f"unsafe regular file identity: {relative}")
+
+
+def ensure_regular_gitignore(target: Path) -> None:
+    ensure_regular_shape(target, GITIGNORE_PATH)
 
 
 def gitignore_terminator(content: bytes) -> bytes:
@@ -1325,7 +1361,7 @@ def install_target(
     target = Path(target_input).resolve()
     if not target.is_dir() or target == source:
         raise InstallerError("target must be an existing non-source directory")
-    validate_target_prerequisites(target)
+    validate_target_prerequisites(target, allow_missing_config=True)
     # Reclassification re-enters this function; the diagnostic stays one line
     # per target rather than one line per retry.
     if announce_tracking:
@@ -1498,7 +1534,7 @@ def install_target(
     try:
         if hooks.hold and not dry_run:
             wait_for_test_hold("CASH_INSTALL_HOLD_FILE", hooks.hold)
-        validate_target_prerequisites(target)
+        validate_target_prerequisites(target, allow_missing_config=True)
         locked_source_inputs, locked_target_inputs = installation_inputs(
             source,
             target,
@@ -1561,6 +1597,15 @@ def install_target(
                 transaction.add(record.path, source_content, record.mode)
         if config_changed and planned_config is not None:
             transaction.add(".cash.yaml", planned_config, 0o644)
+        planned_openspec_config = openspec_config_plan(
+            dict(target_inputs)[OPENSPEC_CONFIG_PATH]
+        )
+        if planned_openspec_config is not None:
+            transaction.add(
+                OPENSPEC_CONFIG_PATH,
+                planned_openspec_config,
+                0o644,
+            )
         for relative, rendered, mode, changed in guidance:
             if changed:
                 transaction.add(relative, rendered, mode)
@@ -1807,7 +1852,10 @@ def run(arguments: list[str] | None = None) -> int:
         project = canonical_target(options.register)
         if Path(project) == source:
             raise InstallerError("project must be an existing non-source directory")
-        validate_target_prerequisites(Path(project))
+        validate_target_prerequisites(
+            Path(project),
+            allow_missing_config=True,
+        )
         if project not in records:
             records.append(project)
             write_registry(records)
