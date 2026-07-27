@@ -172,9 +172,9 @@ The trigger is guidance only — it MUST NOT block apply from proceeding when th
 
    Read `.cash.yaml` in the project root.
    If `tdd: true` is set, apply TDD discipline throughout implementation:
-   - For each task, write a failing test FIRST, then implement to make it pass
-   - Fetch TDD instructions by running `"$cash_cli" instructions --skill tdd`, then follow the Red-Green-Refactor cycle
-   - For bug fixes, reproduce the bug with a failing test before fixing
+   - Fetch TDD instructions by running `"$cash_cli" instructions --skill tdd`, then follow the returned `instruction`
+
+   If `tdd: false` is set, do not apply TDD ordering.
 
    If `audit: true` is set, apply sharp-edges discipline throughout implementation:
    - When designing APIs or interfaces, evaluate through 3 adversary lenses (Scoundrel, Lazy Developer, Confused Developer)
@@ -210,15 +210,13 @@ The trigger is guidance only — it MUST NOT block apply from proceeding when th
      2. **Quality** — derive values from existing state instead of duplicating; use existing types and constants over new literals
      3. **Efficiency** — parallelize independent async operations; avoid unnecessary awaits; match operation scope to actual need
      4. **No Placeholders in artifacts** — if the design or spec for this task contains placeholder language (TBD, TODO, "add appropriate handling"), pause and fix the artifact first or flag to the user. Do not implement against vague requirements.
-     5. **Examples as verification** — if the spec for this task's scope includes `##### Example:` blocks, use them as concrete test cases:
-        - When TDD is enabled: derive the first failing test directly from the example's GIVEN/WHEN/THEN values
-        - When TDD is not enabled: after implementing, verify the code handles the example's input→output correctly
-        - Example tables map to parameterized tests — one test per row
-          Do NOT invent additional test values beyond what the spec examples provide without reason. The examples ARE the agreed specification.
+     5. **Examples as verification** — if the spec for this task's scope includes `##### Example:` blocks, treat them as high-fidelity acceptance references:
+        - Cover every in-scope example's GIVEN/WHEN/THEN input and expected output, including every row of an example table, in the task's verification evidence.
+        - Add cases beyond the examples when there is a concrete risk or boundary reason.
+        - The examples are not a closed input set.
    - Make the code changes required
    - Keep changes minimal and focused
-   - Write or update the relevant test before marking the task done, even when TDD is disabled or the task is a small refactor
-   - **Verify before marking done** — re-read the task description from the tasks file AND the relevant Implementation Contract content from design.md. For each requirement stated in the task description and each contract item that covers this task's scope, confirm it is addressed by your changes. Confirm the verification target named by the task (test name, CLI invocation, analyzer check, or manual assertion) actually passes. If any contract item, task requirement, or verification target is missing or failing, implement/fix it now. Do not mark the task complete until every part of the description is covered and the contract for this task is satisfied.
+   - **Verify before marking done** — re-read the task description from the tasks file AND the relevant Implementation Contract content from design.md. For each requirement stated in the task description and each contract item that covers this task's scope, confirm it is addressed by your changes. Before calling `task done`, require verification evidence appropriate to the task: its named test, CLI, analyzer, or manual assertion must pass. If any contract item, task requirement, or verification target is missing or failing, implement/fix it now. Do not mark the task complete until every part of the description is covered and the contract for this task is satisfied.
    - Mark task complete by running: `"$cash_cli" task done --change "<name>" <task-id>`
      This command marks the checkbox in tasks.md AND records which files were modified for this task.
    - Continue to next task
@@ -342,6 +340,7 @@ The trigger is guidance only — it MUST NOT block apply from proceeding when th
 
 11. **Sub-Agent Review/Rating/Fix Loop**
 
+<!-- REVIEW-GATE:BEGIN -->
    Run this review/rating/fix loop once per change, after the normal workflow has completed its required artifact or task work.
 
    **Entry conditions**
@@ -448,7 +447,7 @@ The trigger is guidance only — it MUST NOT block apply from proceeding when th
    - Pedantic style nitpicks that a senior engineer would not call out in review.
    - "Missing test coverage" complaints unless `tasks.md` or `design.md` explicitly required the test, or a spec `##### Example:` block is not exercised.
    - Issues already documented as intentional in `design.md`, `implementation-notes.md`, the proposal's Non-Goals section, or `## Alternatives Considered`.
-   - Intentional behavior changes that align with the proposal's `## What Changes` or `## Proposed Solution`.
+   - Intentional behavior changes that align with the proposal's `## Proposed Solution`.
    - Suggestions to add abstractions, configurability, or defensive error handling that the spec/contract did not require — these conflict with Focused Implementation Discipline.
    - Suggestions to refactor unrelated code touched only incidentally — these conflict with Focused Implementation Discipline.
 
@@ -516,6 +515,9 @@ The trigger is guidance only — it MUST NOT block apply from proceeding when th
      - `.agents/skills/cash-propose/SKILL.md`
      - `.agents/skills/cash-apply/SKILL.md`
      - `.cash.yaml`
+     - `scripts/cash-skills/blocks/review-gate.md`
+     - `scripts/cash-skills/generate.fish`
+     - `scripts/cash-skills/variant-rules.yaml`
      - `scripts/cash-skills/tests/skill-checks.fish`
      - `scripts/cash-cli/tests/cli-checks.fish`
      - `openspec/specs/`
@@ -564,6 +566,7 @@ The trigger is guidance only — it MUST NOT block apply from proceeding when th
    - **Signal file schema**: Each signal file has frontmatter with `id` (= slug), `type` (default `recurring-finding` for review-loop-written signals), `status`, `occurrences`, `first_seen`, `last_seen`, `links`, and optional human-authored `check`; followed by a title, a description paragraph, and a `## Occurrences` section. New signals created by this step MUST NOT contain an automatically authored `check`.
    - 寫入 signals 後，record every signal file this step created or updated。將路徑轉為 project-root-relative，濾除所有 `openspec/changes/` 下的路徑；若濾除後為空，不呼叫 Cash CLI 且不產生警告。否則先執行 `"$cash_cli" touched ensure "<change-name>"`，再以所有候選路徑執行 `"$cash_cli" touched record "<change-name>" --path <path>`；整批失敗時逐路徑重試，以記錄最大合法子集。`touched ensure` 或 `touched record` 失敗時印出警告並繼續，不使 workflow 失敗，也不改變任何 round file 的 `decision`；警告須列出未能記錄的路徑與 `error.code`，並 carry this warning into the final completion output。
    - **Failure handling**: If writing under `openspec/signals/` fails, print a warning but do NOT fail the cash workflow — signals are an auxiliary layer. If there are no qualifying findings, write nothing.
+<!-- REVIEW-GATE:END -->
 
 **Output During Implementation**
 
