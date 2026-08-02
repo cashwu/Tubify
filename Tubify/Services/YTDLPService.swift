@@ -1,10 +1,11 @@
 import Foundation
+import Darwin
 
 /// 線程安全的下載結果容器
 final class DownloadResultHolder: @unchecked Sendable {
     private let lock = NSLock()
     private var _outputPath: String?
-    private var _lastError: String?
+    private var _errorLines: [String] = []
     private var _downloadedFiles: [String] = []
 
     var outputPath: String? {
@@ -13,10 +14,11 @@ final class DownloadResultHolder: @unchecked Sendable {
         return _outputPath
     }
 
-    var lastError: String? {
+    var errorContext: String? {
         lock.lock()
         defer { lock.unlock() }
-        return _lastError
+        guard !_errorLines.isEmpty else { return nil }
+        return _errorLines.joined(separator: "\n")
     }
 
     var downloadedFiles: [String] {
@@ -31,10 +33,10 @@ final class DownloadResultHolder: @unchecked Sendable {
         _outputPath = path
     }
 
-    func setError(_ error: String) {
+    func appendError(_ error: String) {
         lock.lock()
         defer { lock.unlock() }
-        _lastError = error
+        _errorLines.append(error)
     }
 
     func addDownloadedFile(_ path: String) {
@@ -146,19 +148,28 @@ protocol YTDLPServiceProtocol {
 
 /// 下載進度回調
 typealias ProgressCallback = (Double) -> Void
+typealias DownloadOperationID = UUID
 
 /// yt-dlp 服務
 actor YTDLPService {
     static let shared = YTDLPService()
+    private static let pipeDrainTimeout: TimeInterval = 1
 
-    private var runningProcesses: [UUID: Process] = [:]
-    /// 已被使用者取消的任務 ID，用於避免取消後仍觸發 cookies 重試
-    private var cancelledTaskIds: Set<UUID> = []
+    private let ytdlpPathProvider: (() async -> String?)?
+    private var runningProcesses: [DownloadOperationID: Process] = [:]
+    private var activeDownloadOperations: [UUID: DownloadOperationID] = [:]
+    private var cancelledOperationIDs: Set<DownloadOperationID> = []
 
-    private init() {}
+    init(ytdlpPathProvider: (() async -> String?)? = nil) {
+        self.ytdlpPathProvider = ytdlpPathProvider
+    }
 
     /// 尋找 yt-dlp 可執行檔路徑
     func findYTDLPPath() async -> String? {
+        if let ytdlpPathProvider {
+            return await ytdlpPathProvider()
+        }
+
         let possiblePaths = [
             "/opt/homebrew/bin/yt-dlp",      // Apple Silicon Homebrew
             "/usr/local/bin/yt-dlp",          // Intel Homebrew
@@ -209,8 +220,8 @@ actor YTDLPService {
     /// （會員 / 年齡限制 / 私人影片 / 機器人驗證）時，才自動帶 Safari cookies 重試。
     /// 整個流程全自動，使用者無需手動切換。
     ///
-    /// 註：重試僅在 commandTemplate 原本含 `--cookies-from-browser safari` 時啟用
-    /// （預設指令即包含）。若使用者自訂指令移除了該參數，視為不使用 cookies，不會重試。
+    /// 註：target 403 retry 對所有 command template 生效；只有原始 template 含
+    /// `--cookies-from-browser safari` 時，明確登入錯誤才會啟用 Safari cookies fallback。
     func download(
         taskId: UUID,
         url: String,
@@ -220,8 +231,8 @@ actor YTDLPService {
         audioSelection: AudioSelection? = nil,
         onProgress: @escaping ProgressCallback
     ) async throws -> String {
-        // 開始新下載前清除舊的取消標記
-        cancelledTaskIds.remove(taskId)
+        let operationID = beginDownloadOperation(taskId: taskId)
+        defer { finishDownloadOperation(taskId: taskId, operationID: operationID) }
 
         // 如果有選擇特定音軌語言，修改 format 字串
         var template = commandTemplate
@@ -237,31 +248,244 @@ actor YTDLPService {
             ? SafariCookiesService.shared.removeSafariCookies(template)
             : template
 
-        do {
-            return try await executeDownload(
-                taskId: taskId,
-                url: url,
-                processedTemplate: firstTemplate,
-                outputDirectory: outputDirectory,
-                subtitleSelection: subtitleSelection,
-                onProgress: onProgress
-            )
-        } catch let error as YTDLPError {
-            // 只有在模板原本帶 cookies、且錯誤顯示需要登入時，才帶 cookies 重試
-            guard hasCookies, Self.shouldRetryWithCookies(error) else { throw error }
+        return try await executeDownloadFlow(
+            taskId: taskId,
+            url: url,
+            firstTemplate: firstTemplate,
+            cookieTemplateProvider: hasCookies
+                ? { SafariCookiesService.shared.transformCommand(template) }
+                : nil,
+            outputDirectory: outputDirectory,
+            subtitleSelection: subtitleSelection,
+            onProgress: onProgress,
+            operationID: operationID
+        )
+    }
 
-            TubifyLogger.ytdlp.info("下載失敗（疑似需要登入），改用 Safari cookies 重試: \(url)")
-            TubifyLogger.cookies.info("偵測到需登入內容，轉換 Safari cookies 文件後重試")
-            let cookieTemplate = SafariCookiesService.shared.transformCommand(template)
-            return try await executeDownload(
+    /// 執行完整下載流程：target 403 在同一個 template 內重新啟動 process，明確登入錯誤才切換 cookies。
+    func executeDownloadFlow(
+        taskId: UUID,
+        url: String,
+        firstTemplate: String,
+        cookieTemplateProvider: (() -> String)?,
+        outputDirectory: String,
+        subtitleSelection: SubtitleSelection?,
+        onProgress: @escaping ProgressCallback,
+        attemptExecutor: ((String) async throws -> String)? = nil,
+        sleeper: ((UInt64) async throws -> Void)? = nil,
+        cancellationProbe: (() -> Bool)? = nil,
+        operationID: DownloadOperationID? = nil
+    ) async throws -> String {
+        let flowOperationID = operationID ?? UUID()
+        let executeAttempt = attemptExecutor ?? { [self] processedTemplate in
+            try await executeDownload(
                 taskId: taskId,
+                operationID: flowOperationID,
                 url: url,
-                processedTemplate: cookieTemplate,
+                processedTemplate: processedTemplate,
                 outputDirectory: outputDirectory,
                 subtitleSelection: subtitleSelection,
                 onProgress: onProgress
             )
         }
+
+        do {
+            return try await executeWithTransient403Retries(
+                taskId: taskId,
+                operationID: flowOperationID,
+                template: firstTemplate,
+                executeAttempt: executeAttempt,
+                sleeper: sleeper,
+                cancellationProbe: cancellationProbe
+            )
+        } catch let error as YTDLPError {
+            // 只有在模板原本帶 cookies、且錯誤顯示需要登入時，才帶 cookies 重試。
+            guard let cookieTemplateProvider, Self.shouldRetryWithCookies(error) else {
+                throw error
+            }
+
+            TubifyLogger.ytdlp.info("下載失敗（疑似需要登入），改用 Safari cookies 重試: \(url)")
+            TubifyLogger.cookies.info("偵測到需登入內容，轉換 Safari cookies 文件後重試")
+            return try await executeWithTransient403Retries(
+                taskId: taskId,
+                operationID: flowOperationID,
+                template: cookieTemplateProvider(),
+                executeAttempt: executeAttempt,
+                sleeper: sleeper,
+                cancellationProbe: cancellationProbe
+            )
+        }
+    }
+
+    /// 對單一 processed template 執行最多一次 initial attempt 與三次 target 403 retry。
+    private func executeWithTransient403Retries(
+        taskId: UUID,
+        operationID: DownloadOperationID,
+        template: String,
+        executeAttempt: (String) async throws -> String,
+        sleeper: ((UInt64) async throws -> Void)?,
+        cancellationProbe: (() -> Bool)?
+    ) async throws -> String {
+        let retryDelays: [UInt64] = [2_000_000_000, 5_000_000_000, 10_000_000_000]
+        let sleepSlice: (UInt64) async throws -> Void = sleeper ?? { nanoseconds in
+            try await Task.sleep(nanoseconds: nanoseconds)
+        }
+
+        for attempt in 0...retryDelays.count {
+            guard !isCancelled(taskId: taskId, operationID: operationID, cancellationProbe: cancellationProbe) else {
+                throw YTDLPError.cancelled
+            }
+
+            do {
+                let outputPath = try await executeAttempt(template)
+                guard !isCancelled(taskId: taskId, operationID: operationID, cancellationProbe: cancellationProbe) else {
+                    throw YTDLPError.cancelled
+                }
+                return outputPath
+            } catch let error as YTDLPError {
+                guard Self.isRetryableDownload403(error), attempt < retryDelays.count else {
+                    throw error
+                }
+
+                let retryNumber = attempt + 1
+                let delay = retryDelays[attempt]
+                TubifyLogger.ytdlp.info(
+                    "403 retry taskId=\(taskId.uuidString) retry=\(retryNumber)/\(retryDelays.count) delay=\(Double(delay) / 1_000_000_000) seconds"
+                )
+                try await waitForRetry(
+                    taskId: taskId,
+                    operationID: operationID,
+                    delay: delay,
+                    sleeper: sleepSlice,
+                    cancellationProbe: cancellationProbe
+                )
+            }
+        }
+
+        throw YTDLPError.executionFailed("403 retry policy exhausted without an error")
+    }
+
+    /// 以不超過 100 ms 的 async slices 等待 retry，並在每個 slice 後觀察取消。
+    private func waitForRetry(
+        taskId: UUID,
+        operationID: DownloadOperationID,
+        delay: UInt64,
+        sleeper: (UInt64) async throws -> Void,
+        cancellationProbe: (() -> Bool)?
+    ) async throws {
+        let maxSlice: UInt64 = 100_000_000
+        var remaining = delay
+
+        while remaining > 0 {
+            let slice = min(remaining, maxSlice)
+            do {
+                try await sleeper(slice)
+            } catch {
+                throw YTDLPError.cancelled
+            }
+            guard !isCancelled(taskId: taskId, operationID: operationID, cancellationProbe: cancellationProbe) else {
+                throw YTDLPError.cancelled
+            }
+            remaining -= slice
+        }
+    }
+
+    private func isCancelled(
+        taskId: UUID,
+        operationID: DownloadOperationID,
+        cancellationProbe: (() -> Bool)?
+    ) -> Bool {
+        if let activeOperationID = activeDownloadOperations[taskId], activeOperationID != operationID {
+            return true
+        }
+        return cancelledOperationIDs.contains(operationID) || (cancellationProbe?() ?? false)
+    }
+
+    private static func drainPipes(
+        _ outputPipe: FileHandle,
+        _ errorPipe: FileHandle,
+        deadline: Date
+    ) -> (output: Data, error: Data) {
+        let fileDescriptors = [outputPipe.fileDescriptor, errorPipe.fileDescriptor]
+        let originalFlags = fileDescriptors.map { fcntl($0, F_GETFL) }
+        guard originalFlags.allSatisfy({ $0 >= 0 }) else {
+            return (Data(), Data())
+        }
+
+        for (fileDescriptor, flags) in zip(fileDescriptors, originalFlags) {
+            guard fcntl(fileDescriptor, F_SETFL, flags | O_NONBLOCK) >= 0 else {
+                for (restoreDescriptor, restoreFlags) in zip(fileDescriptors, originalFlags) {
+                    _ = fcntl(restoreDescriptor, F_SETFL, restoreFlags)
+                }
+                return (Data(), Data())
+            }
+        }
+        defer {
+            for (fileDescriptor, flags) in zip(fileDescriptors, originalFlags) {
+                _ = fcntl(fileDescriptor, F_SETFL, flags)
+            }
+        }
+
+        var data = [Data(), Data()]
+        var open = [true, true]
+        var nextIndex = 0
+        var isInitialRead = true
+        var buffer = [UInt8](repeating: 0, count: 8192)
+
+        while isInitialRead || Date().timeIntervalSince(deadline) < 0 {
+            var descriptors = fileDescriptors.enumerated().map { index, fileDescriptor in
+                pollfd(
+                    fd: open[index] ? fileDescriptor : -1,
+                    events: Int16(POLLIN | POLLHUP | POLLERR),
+                    revents: 0
+                )
+            }
+
+            if !isInitialRead {
+                let remaining = deadline.timeIntervalSinceNow
+                guard remaining > 0 else { break }
+                let timeoutMilliseconds = max(1, Int32((remaining * 1_000).rounded(.up)))
+                let pollResult = descriptors.withUnsafeMutableBufferPointer {
+                    Darwin.poll($0.baseAddress, nfds_t($0.count), timeoutMilliseconds)
+                }
+                if pollResult == 0 {
+                    break
+                }
+                if pollResult < 0 && errno != EINTR {
+                    break
+                }
+            }
+
+            for offset in 0..<fileDescriptors.count {
+                let index = (nextIndex + offset) % fileDescriptors.count
+                guard open[index] else { continue }
+                let events = descriptors[index].revents
+                if events & Int16(POLLNVAL) != 0 {
+                    open[index] = false
+                    continue
+                }
+                guard isInitialRead || events & Int16(POLLIN | POLLHUP | POLLERR) != 0 else {
+                    continue
+                }
+
+                let bytesRead = buffer.withUnsafeMutableBytes { bytes in
+                    Darwin.read(fileDescriptors[index], bytes.baseAddress, bytes.count)
+                }
+                if bytesRead > 0 {
+                    data[index].append(contentsOf: buffer[..<bytesRead])
+                } else if bytesRead == 0 {
+                    open[index] = false
+                } else if errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK {
+                    open[index] = false
+                }
+            }
+
+            isInitialRead = false
+            nextIndex = (nextIndex + 1) % fileDescriptors.count
+            if !open.contains(true) { break }
+        }
+
+        return (data[0], data[1])
     }
 
     /// 判斷 stderr 的一行是否為值得保留的錯誤訊息。
@@ -316,9 +540,17 @@ actor YTDLPService {
         return loginSignals.contains { lowered.contains($0) }
     }
 
+    /// 只匹配 yt-dlp 直接回報的 video-data HTTP 403。
+    static func isRetryableDownload403(_ error: YTDLPError) -> Bool {
+        guard case .executionFailed(let message) = error else { return false }
+        return message.contains("unable to download video data: HTTP Error 403: Forbidden")
+            && !message.contains("Giving up after")
+    }
+
     /// 實際執行一次 yt-dlp 下載（template 已完成音軌與 cookies 處理）
     private func executeDownload(
         taskId: UUID,
+        operationID: DownloadOperationID,
         url: String,
         processedTemplate: String,
         outputDirectory: String,
@@ -397,7 +629,7 @@ actor YTDLPService {
         process.standardError = errorPipe
 
         // 儲存 process 以便取消
-        runningProcesses[taskId] = process
+        runningProcesses[operationID] = process
 
         // 使用線程安全的容器來儲存結果
         let resultHolder = DownloadResultHolder()
@@ -444,38 +676,53 @@ actor YTDLPService {
             }
 
             if isStderr, Self.isErrorLine(line) {
-                resultHolder.setError(line)
+                resultHolder.appendError(line)
             }
         }
 
         // 處理輸出（stdout / stderr）
         // 各自使用獨立的 LineBuffer，確保跨 chunk 的行不會被切斷。
+        let pipeProcessingLock = NSLock()
         let outputBuffer = LineBuffer()
         let errorBuffer = LineBuffer()
 
+        let processData: (Data, LineBuffer, Bool) -> Void = { data, buffer, isStderr in
+            for line in buffer.feed(data) {
+                handleLine(line, isStderr)
+            }
+        }
+
         // 直接把原始位元組交給 LineBuffer，由它湊齊整行後才解碼
         outputPipe.fileHandleForReading.readabilityHandler = { handle in
+            pipeProcessingLock.lock()
+            defer { pipeProcessingLock.unlock() }
+
             let data = handle.availableData
             guard !data.isEmpty else { return }
-
-            for line in outputBuffer.feed(data) {
-                handleLine(line, false)
-            }
+            processData(data, outputBuffer, false)
         }
 
         errorPipe.fileHandleForReading.readabilityHandler = { handle in
+            pipeProcessingLock.lock()
+            defer { pipeProcessingLock.unlock() }
+
             let data = handle.availableData
             guard !data.isEmpty else { return }
-
-            for line in errorBuffer.feed(data) {
-                handleLine(line, true)
-            }
+            processData(data, errorBuffer, true)
         }
 
         do {
+            // 在 process.run() 前再次檢查，避免取消後啟動新的 yt-dlp process。
+            if isCancelled(taskId: taskId, operationID: operationID, cancellationProbe: nil) {
+                throw YTDLPError.cancelled
+            }
             try process.run()
         } catch {
-            runningProcesses.removeValue(forKey: taskId)
+            if error is YTDLPError {
+                runningProcesses.removeValue(forKey: operationID)
+                throw error
+            }
+            runningProcesses.removeValue(forKey: operationID)
             throw YTDLPError.executionFailed(error.localizedDescription)
         }
 
@@ -489,23 +736,39 @@ actor YTDLPService {
         // 清理
         outputPipe.fileHandleForReading.readabilityHandler = nil
         errorPipe.fileHandleForReading.readabilityHandler = nil
-        runningProcesses.removeValue(forKey: taskId)
 
-        // 補上沒有換行結尾的最後一行（yt-dlp 失敗時的 ERROR 常落在這裡）
-        if let remainder = outputBuffer.flush() {
-            handleLine(remainder, false)
+        // handler 停止後先 bounded drain pipe，確保 terminationHandler 先執行時仍不會遺失尾端輸出，
+        // 同時避免殘留 writer 讓 actor 無限等待 EOF。
+        pipeProcessingLock.withLock {
+            let drainDeadline = Date().addingTimeInterval(Self.pipeDrainTimeout)
+            let remaining = Self.drainPipes(
+                outputPipe.fileHandleForReading,
+                errorPipe.fileHandleForReading,
+                deadline: drainDeadline
+            )
+            processData(remaining.output, outputBuffer, false)
+            processData(remaining.error, errorBuffer, true)
+
+            // 補上沒有換行結尾的最後一行（yt-dlp 失敗時的 ERROR 常落在這裡）
+            if let remainder = outputBuffer.flush() {
+                handleLine(remainder, false)
+            }
+            if let remainder = errorBuffer.flush() {
+                handleLine(remainder, true)
+            }
+            outputPipe.fileHandleForReading.closeFile()
+            errorPipe.fileHandleForReading.closeFile()
         }
-        if let remainder = errorBuffer.flush() {
-            handleLine(remainder, true)
+        runningProcesses.removeValue(forKey: operationID)
+
+        // Process 結束後再次檢查，避免 stale operation 在成功結果路徑回傳。
+        if isCancelled(taskId: taskId, operationID: operationID, cancellationProbe: nil) {
+            throw YTDLPError.cancelled
         }
 
         // 檢查結果
         if terminationStatus != 0 {
-            // 若任務已被使用者取消，視為取消（避免被當成「需登入」而觸發 cookies 重試）
-            if cancelledTaskIds.contains(taskId) {
-                throw YTDLPError.cancelled
-            }
-            let errorMessage = resultHolder.lastError ?? "未知錯誤 (退出碼: \(terminationStatus))"
+            let errorMessage = resultHolder.errorContext ?? "未知錯誤 (退出碼: \(terminationStatus))"
             LogFileManager.shared.logDownloadError(taskId: taskId, error: errorMessage)
             throw YTDLPError.executionFailed(errorMessage)
         }
@@ -583,13 +846,32 @@ actor YTDLPService {
 
     /// 取消下載
     func cancel(taskId: UUID) {
-        // 標記為已取消，避免取消後 executeDownload 把錯誤誤判為「需登入」而帶 cookies 重試
-        cancelledTaskIds.insert(taskId)
-        if let process = runningProcesses[taskId] {
-            process.terminate()
-            runningProcesses.removeValue(forKey: taskId)
-            TubifyLogger.ytdlp.info("已取消下載: \(taskId.uuidString)")
+        guard let operationID = activeDownloadOperations[taskId] else { return }
+        cancelOperation(operationID)
+        TubifyLogger.ytdlp.info("已取消下載: \(taskId.uuidString)")
+    }
+
+    private func beginDownloadOperation(taskId: UUID) -> DownloadOperationID {
+        let operationID = UUID()
+        if let previousOperationID = activeDownloadOperations[taskId] {
+            cancelOperation(previousOperationID)
         }
+        activeDownloadOperations[taskId] = operationID
+        return operationID
+    }
+
+    private func cancelOperation(_ operationID: DownloadOperationID) {
+        cancelledOperationIDs.insert(operationID)
+        if let process = runningProcesses[operationID] {
+            process.terminate()
+            runningProcesses.removeValue(forKey: operationID)
+        }
+    }
+
+    private func finishDownloadOperation(taskId: UUID, operationID: DownloadOperationID) {
+        cancelledOperationIDs.remove(operationID)
+        guard activeDownloadOperations[taskId] == operationID else { return }
+        activeDownloadOperations.removeValue(forKey: taskId)
     }
 
     /// 解析命令參數

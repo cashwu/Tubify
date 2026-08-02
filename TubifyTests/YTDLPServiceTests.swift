@@ -4,6 +4,23 @@ import XCTest
 /// YTDLPService 測試
 final class YTDLPServiceTests: XCTestCase {
 
+    private final class ScriptedDownloadFlow {
+        var results: [Result<String, YTDLPError>]
+        var templates: [String] = []
+
+        init(_ results: [Result<String, YTDLPError>]) {
+            self.results = results
+        }
+
+        func execute(template: String) throws -> String {
+            templates.append(template)
+            guard !results.isEmpty else {
+                throw YTDLPError.executionFailed("script exhausted")
+            }
+            return try results.removeFirst().get()
+        }
+    }
+
     // MARK: - 進度解析測試
 
     func testParseProgressFromStandardOutput() {
@@ -135,6 +152,539 @@ final class YTDLPServiceTests: XCTestCase {
         XCTAssertEqual(error.errorDescription, "下載已取消")
     }
 
+    func testIsRetryableDownload403OnlyMatchesTargetVideoDataError() {
+        let retryable = YTDLPError.executionFailed(
+            "ERROR: unable to download video data: HTTP Error 403: Forbidden"
+        )
+        XCTAssertTrue(YTDLPService.isRetryableDownload403(retryable))
+
+        let nonRetryableExecutionErrors = [
+            "ERROR: Unable to download webpage: HTTP Error 403: Forbidden",
+            "ERROR: Unable to download subtitle: HTTP Error 403: Forbidden",
+            "ERROR: fragment downloader: HTTP Error 403: Forbidden",
+            "ERROR: Giving up after 10 retries: HTTP Error 403: Forbidden",
+            "ERROR: unable to download video data: HTTP Error 403: Forbidden; Giving up after 10 retries",
+            "ERROR: unable to download video data: HTTP Error 429: Too Many Requests",
+            "ERROR: unable to download video data: HTTP Error 500: Internal Server Error",
+            "ERROR: Sign in to confirm you're not a bot"
+        ]
+        for message in nonRetryableExecutionErrors {
+            XCTAssertFalse(
+                YTDLPService.isRetryableDownload403(.executionFailed(message)),
+                "不應重試：\(message)"
+            )
+        }
+
+        XCTAssertFalse(YTDLPService.isRetryableDownload403(.notFound))
+        XCTAssertFalse(YTDLPService.isRetryableDownload403(.parseError("bad output")))
+        XCTAssertFalse(YTDLPService.isRetryableDownload403(.cancelled))
+    }
+
+    func testProductionDownloadCancellationTerminatesFixtureProcessWithoutCookiesFallback() async throws {
+        let fixture = try makeYTDLPFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let service = YTDLPService(ytdlpPathProvider: { fixture.executable.path })
+        let taskId = UUID()
+        let downloadTask = Task { () -> String in
+            do {
+                _ = try await service.download(
+                    taskId: taskId,
+                    url: "https://youtube.com/watch?v=active-cancellation",
+                    commandTemplate: "ACTIVE --cookies-from-browser safari $youtubeUrl",
+                    outputDirectory: fixture.directory.path,
+                    onProgress: { _ in }
+                )
+                return "success"
+            } catch let error as YTDLPError {
+                return error.errorDescription ?? "unknown"
+            } catch {
+                return String(describing: error)
+            }
+        }
+
+        let activeMarkerFound = await waitForFile(fixture.activeMarker)
+        XCTAssertTrue(activeMarkerFound)
+        await service.cancel(taskId: taskId)
+
+        let cancellationResult = await downloadTask.value
+        XCTAssertEqual(cancellationResult, YTDLPError.cancelled.errorDescription)
+        let activePID = try String(contentsOf: fixture.pid, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+        let processExited = await waitForProcessExit(activePID)
+        XCTAssertTrue(processExited)
+        let invocationLog = try String(contentsOf: fixture.log, encoding: .utf8)
+        XCTAssertEqual(invocationLog.components(separatedBy: "\n").filter { $0.contains("ACTIVE") }.count, 1)
+        XCTAssertFalse(invocationLog.contains("--cookies-from-browser"))
+    }
+
+    func testProductionDownloadDrainsStderrAfterProcessTerminationAndRetries() async throws {
+        let fixture = try makeYTDLPFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let service = YTDLPService(ytdlpPathProvider: { fixture.executable.path })
+        let outputPath = try await service.download(
+            taskId: UUID(),
+            url: "https://youtube.com/watch?v=drain-403",
+            commandTemplate: "DRAIN_403 $youtubeUrl",
+            outputDirectory: fixture.directory.path,
+            onProgress: { _ in }
+        )
+
+        XCTAssertEqual(
+            URL(fileURLWithPath: outputPath).resolvingSymlinksInPath().path,
+            fixture.newOutput.resolvingSymlinksInPath().path
+        )
+        let invocations = try String(contentsOf: fixture.log, encoding: .utf8)
+            .split(separator: "\n")
+        XCTAssertEqual(invocations.filter { $0.contains("DRAIN_403") }.count, 2)
+    }
+
+    func testProductionDownloadDrainsStderrAfterStdoutConsumesSharedDeadline() async throws {
+        let fixture = try makeYTDLPFixture()
+        defer {
+            terminateProcess(at: fixture.writerPID)
+            try? FileManager.default.removeItem(at: fixture.directory)
+        }
+
+        let service = YTDLPService(ytdlpPathProvider: { fixture.executable.path })
+        let outputPath = try await service.download(
+            taskId: UUID(),
+            url: "https://youtube.com/watch?v=stdout-starvation-403",
+            commandTemplate: "STARVING_STDOUT_403 $youtubeUrl",
+            outputDirectory: fixture.directory.path,
+            onProgress: { _ in }
+        )
+
+        XCTAssertEqual(
+            URL(fileURLWithPath: outputPath).resolvingSymlinksInPath().path,
+            fixture.newOutput.resolvingSymlinksInPath().path
+        )
+        let invocations = try String(contentsOf: fixture.log, encoding: .utf8)
+            .split(separator: "\n")
+        XCTAssertEqual(invocations.filter { $0.contains("STARVING_STDOUT_403") }.count, 2)
+
+        let writerPID = try String(contentsOf: fixture.writerPID, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let writerExited = await waitForProcessExit(writerPID)
+        XCTAssertTrue(writerExited)
+    }
+
+    func testProductionDownloadHandlesStdoutEOFWhileStderrWriterIsIdle() async throws {
+        let fixture = try makeYTDLPFixture()
+        defer {
+            terminateProcess(at: fixture.writerPID)
+            try? FileManager.default.removeItem(at: fixture.directory)
+        }
+
+        let service = YTDLPService(ytdlpPathProvider: { fixture.executable.path })
+        let outputPath = try await service.download(
+            taskId: UUID(),
+            url: "https://youtube.com/watch?v=stdout-eof-idle-stderr-403",
+            commandTemplate: "STDOUT_EOF_IDLE_STDERR_403 $youtubeUrl",
+            outputDirectory: fixture.directory.path,
+            onProgress: { _ in }
+        )
+
+        XCTAssertEqual(
+            URL(fileURLWithPath: outputPath).resolvingSymlinksInPath().path,
+            fixture.newOutput.resolvingSymlinksInPath().path
+        )
+        let invocations = try String(contentsOf: fixture.log, encoding: .utf8)
+            .split(separator: "\n")
+        XCTAssertEqual(invocations.filter { $0.contains("STDOUT_EOF_IDLE_STDERR_403") }.count, 2)
+
+        let writerPID = try String(contentsOf: fixture.writerPID, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let writerExited = await waitForProcessExit(writerPID)
+        XCTAssertTrue(writerExited)
+    }
+
+    func testProductionDownloadDoesNotRetryMultilineGivingUpAfterContext() async throws {
+        let fixture = try makeYTDLPFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let service = YTDLPService(ytdlpPathProvider: { fixture.executable.path })
+        do {
+            _ = try await service.download(
+                taskId: UUID(),
+                url: "https://youtube.com/watch?v=multiline-403",
+                commandTemplate: "MULTILINE_403 $youtubeUrl",
+                outputDirectory: fixture.directory.path,
+                onProgress: { _ in }
+            )
+            XCTFail("包含 Giving up after context 的多行 stderr 不應重試")
+        } catch let error as YTDLPError {
+            guard case .executionFailed(let message) = error else {
+                return XCTFail("錯誤類型不符：\(error)")
+            }
+            XCTAssertTrue(message.contains("Giving up after"))
+            XCTAssertTrue(message.contains("unable to download video data: HTTP Error 403: Forbidden"))
+        }
+
+        let invocations = try String(contentsOf: fixture.log, encoding: .utf8)
+            .split(separator: "\n")
+        XCTAssertEqual(invocations.filter { $0.contains("MULTILINE_403") }.count, 1)
+    }
+
+    func testProductionDownloadBoundsStderrDrainWhenWriterNeverCloses() async throws {
+        let fixture = try makeYTDLPFixture()
+        defer {
+            terminateProcess(at: fixture.writerPID)
+            try? FileManager.default.removeItem(at: fixture.directory)
+        }
+
+        let service = YTDLPService(ytdlpPathProvider: { fixture.executable.path })
+        let startedAt = Date()
+        do {
+            _ = try await service.download(
+                taskId: UUID(),
+                url: "https://youtube.com/watch?v=hanging-writer",
+                commandTemplate: "HANG_WRITER $youtubeUrl",
+                outputDirectory: fixture.directory.path,
+                onProgress: { _ in }
+            )
+            XCTFail("writer 未關閉時仍應回報下載錯誤")
+        } catch let error as YTDLPError {
+            guard case .executionFailed = error else {
+                return XCTFail("錯誤類型不符：\(error)")
+            }
+        }
+
+        XCTAssertLessThan(Date().timeIntervalSince(startedAt), 5)
+        let writerPID = try String(contentsOf: fixture.writerPID, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let writerExited = await waitForProcessExit(writerPID)
+        XCTAssertTrue(writerExited)
+        let invocations = try String(contentsOf: fixture.log, encoding: .utf8)
+            .split(separator: "\n")
+        XCTAssertEqual(invocations.filter { $0.contains("HANG_WRITER") }.count, 1)
+    }
+
+    func testOverlappingOperationsStopStaleRetryBeforeStartingAnotherProcess() async throws {
+        let fixture = try makeYTDLPFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let service = YTDLPService(ytdlpPathProvider: { fixture.executable.path })
+        let taskId = UUID()
+        let oldTask = Task { () -> String in
+            do {
+                _ = try await service.download(
+                    taskId: taskId,
+                    url: "https://youtube.com/watch?v=old-operation",
+                    commandTemplate: "OLD $youtubeUrl",
+                    outputDirectory: fixture.directory.path,
+                    onProgress: { _ in }
+                )
+                return "success"
+            } catch let error as YTDLPError {
+                return error.errorDescription ?? "unknown"
+            } catch {
+                return String(describing: error)
+            }
+        }
+
+        let oldMarkerFound = await waitForFile(fixture.oldMarker)
+        XCTAssertTrue(oldMarkerFound)
+        let newTask = Task { () -> String in
+            do {
+                return try await service.download(
+                    taskId: taskId,
+                    url: "https://youtube.com/watch?v=new-operation",
+                    commandTemplate: "NEW $youtubeUrl",
+                    outputDirectory: fixture.directory.path,
+                    onProgress: { _ in }
+                )
+            } catch let error as YTDLPError {
+                return error.errorDescription ?? "unknown"
+            } catch {
+                return String(describing: error)
+            }
+        }
+
+        let newResult = await newTask.value
+        let oldResult = await oldTask.value
+        XCTAssertEqual(
+            URL(fileURLWithPath: newResult).resolvingSymlinksInPath().path,
+            fixture.newOutput.resolvingSymlinksInPath().path
+        )
+        XCTAssertEqual(oldResult, YTDLPError.cancelled.errorDescription)
+
+        let invocations = try String(contentsOf: fixture.log, encoding: .utf8)
+            .split(separator: "\n")
+            .map(String.init)
+        XCTAssertEqual(invocations.filter { $0.contains("OLD") }.count, 1)
+        XCTAssertEqual(invocations.filter { $0.contains("NEW") }.count, 1)
+    }
+
+    func testExecuteDownloadFlowRetriesTarget403ThenSucceeds() async throws {
+        let taskId = UUID()
+        let scripted = ScriptedDownloadFlow([
+            .failure(.executionFailed("unable to download video data: HTTP Error 403: Forbidden")),
+            .success("/Downloads/video.mp4")
+        ])
+        var sleepSlices: [UInt64] = []
+
+        let outputPath = try await YTDLPService.shared.executeDownloadFlow(
+            taskId: taskId,
+            url: "https://youtube.com/watch?v=target-403",
+            firstTemplate: "FIRST_TEMPLATE",
+            cookieTemplateProvider: nil,
+            outputDirectory: "/Downloads",
+            subtitleSelection: nil,
+            onProgress: { _ in },
+            attemptExecutor: { template in try scripted.execute(template: template) },
+            sleeper: { sleepSlices.append($0) },
+            cancellationProbe: { false }
+        )
+
+        XCTAssertEqual(outputPath, "/Downloads/video.mp4")
+        XCTAssertEqual(scripted.templates, ["FIRST_TEMPLATE", "FIRST_TEMPLATE"])
+        XCTAssertEqual(sleepSlices.reduce(0, +), 2_000_000_000)
+        XCTAssertTrue(sleepSlices.allSatisfy { $0 <= 100_000_000 })
+    }
+
+    func testExecuteDownloadFlowChecksCancellationAfterSuccessfulAttempt() async {
+        var cancellationObserved = false
+
+        do {
+            _ = try await YTDLPService.shared.executeDownloadFlow(
+                taskId: UUID(),
+                url: "https://youtube.com/watch?v=success-cancellation-race",
+                firstTemplate: "FIRST_TEMPLATE",
+                cookieTemplateProvider: nil,
+                outputDirectory: "/Downloads",
+                subtitleSelection: nil,
+                onProgress: { _ in },
+                attemptExecutor: { _ in
+                    cancellationObserved = true
+                    return "/Downloads/video.mp4"
+                },
+                sleeper: { _ in },
+                cancellationProbe: { cancellationObserved }
+            )
+            XCTFail("成功 attempt 後仍應觀察取消")
+        } catch let error as YTDLPError {
+            guard case .cancelled = error else {
+                return XCTFail("錯誤類型不符：\(error)")
+            }
+        } catch {
+            XCTFail("錯誤類型不符：\(error)")
+        }
+    }
+
+    func testExecuteDownloadFlowRetriesThreeTimesWithExactDelaysAndSucceeds() async throws {
+        let scripted = ScriptedDownloadFlow([
+            .failure(.executionFailed("unable to download video data: HTTP Error 403: Forbidden")),
+            .failure(.executionFailed("unable to download video data: HTTP Error 403: Forbidden")),
+            .failure(.executionFailed("unable to download video data: HTTP Error 403: Forbidden")),
+            .success("/Downloads/video.mp4")
+        ])
+        var sleepSlices: [UInt64] = []
+
+        let outputPath = try await YTDLPService.shared.executeDownloadFlow(
+            taskId: UUID(),
+            url: "https://youtube.com/watch?v=target-403",
+            firstTemplate: "FIRST_TEMPLATE",
+            cookieTemplateProvider: nil,
+            outputDirectory: "/Downloads",
+            subtitleSelection: nil,
+            onProgress: { _ in },
+            attemptExecutor: { template in try scripted.execute(template: template) },
+            sleeper: { sleepSlices.append($0) },
+            cancellationProbe: { false }
+        )
+
+        XCTAssertEqual(outputPath, "/Downloads/video.mp4")
+        XCTAssertEqual(scripted.templates.count, 4)
+        XCTAssertEqual(sleepSlices.count, 170)
+        XCTAssertEqual(sleepSlices.prefix(20).reduce(0, +), 2_000_000_000)
+        XCTAssertEqual(sleepSlices.dropFirst(20).prefix(50).reduce(0, +), 5_000_000_000)
+        XCTAssertEqual(sleepSlices.dropFirst(70).reduce(0, +), 10_000_000_000)
+        XCTAssertTrue(sleepSlices.allSatisfy { $0 <= 100_000_000 })
+    }
+
+    func testExecuteDownloadFlowThrowsLast403AfterFourAttempts() async {
+        let finalMessage = "attempt 4: unable to download video data: HTTP Error 403: Forbidden"
+        let scripted = ScriptedDownloadFlow([
+            .failure(.executionFailed("attempt 1: unable to download video data: HTTP Error 403: Forbidden")),
+            .failure(.executionFailed("attempt 2: unable to download video data: HTTP Error 403: Forbidden")),
+            .failure(.executionFailed("attempt 3: unable to download video data: HTTP Error 403: Forbidden")),
+            .failure(.executionFailed(finalMessage))
+        ])
+
+        do {
+            _ = try await YTDLPService.shared.executeDownloadFlow(
+                taskId: UUID(),
+                url: "https://youtube.com/watch?v=target-403",
+                firstTemplate: "FIRST_TEMPLATE",
+                cookieTemplateProvider: nil,
+                outputDirectory: "/Downloads",
+                subtitleSelection: nil,
+                onProgress: { _ in },
+                attemptExecutor: { template in try scripted.execute(template: template) },
+                sleeper: { _ in },
+                cancellationProbe: { false }
+            )
+            XCTFail("應在 4 次 target 403 後拋出最後錯誤")
+        } catch let error as YTDLPError {
+            guard case .executionFailed(let message) = error else {
+                return XCTFail("錯誤類型不符：\(error)")
+            }
+            XCTAssertEqual(message, finalMessage)
+        } catch {
+            XCTFail("錯誤類型不符：\(error)")
+        }
+
+        XCTAssertEqual(scripted.templates.count, 4)
+    }
+
+    func testExecuteDownloadFlowDoesNotRetryNonTargetErrors() async {
+        let messages = [
+            "Unable to download webpage: HTTP Error 403: Forbidden",
+            "Unable to download subtitle: HTTP Error 403: Forbidden",
+            "fragment downloader: HTTP Error 403: Forbidden",
+            "Giving up after 10 retries: HTTP Error 403: Forbidden",
+            "unable to download video data: HTTP Error 429: Too Many Requests",
+            "unable to download video data: HTTP Error 503: Service Unavailable",
+            "Sign in to confirm you're not a bot"
+        ]
+
+        for message in messages {
+            let scripted = ScriptedDownloadFlow([.failure(.executionFailed(message))])
+            var sleepCalled = false
+
+            do {
+                _ = try await YTDLPService.shared.executeDownloadFlow(
+                    taskId: UUID(),
+                    url: "https://youtube.com/watch?v=non-target",
+                    firstTemplate: "FIRST_TEMPLATE",
+                    cookieTemplateProvider: nil,
+                    outputDirectory: "/Downloads",
+                    subtitleSelection: nil,
+                    onProgress: { _ in },
+                    attemptExecutor: { template in try scripted.execute(template: template) },
+                    sleeper: { _ in sleepCalled = true },
+                    cancellationProbe: { false }
+                )
+                XCTFail("應立即拋出錯誤：\(message)")
+            } catch let error as YTDLPError {
+                guard case .executionFailed(let actualMessage) = error else {
+                    return XCTFail("錯誤類型不符：\(error)")
+                }
+                XCTAssertEqual(actualMessage, message)
+            } catch {
+                XCTFail("錯誤類型不符：\(error)")
+            }
+
+            XCTAssertEqual(scripted.templates.count, 1)
+            XCTAssertFalse(sleepCalled)
+        }
+    }
+
+    func testExecuteDownloadFlowPreservesCookiesAndCancellationContracts() async {
+        let target403 = YTDLPError.executionFailed(
+            "unable to download video data: HTTP Error 403: Forbidden"
+        )
+
+        let target403Scripted = ScriptedDownloadFlow([
+            .failure(target403), .failure(target403), .failure(target403), .failure(target403)
+        ])
+        var cookieProviderCalled = false
+        do {
+            _ = try await YTDLPService.shared.executeDownloadFlow(
+                taskId: UUID(),
+                url: "https://youtube.com/watch?v=403",
+                firstTemplate: "NO_COOKIES_TEMPLATE",
+                cookieTemplateProvider: {
+                    cookieProviderCalled = true
+                    return "COOKIES_TEMPLATE"
+                },
+                outputDirectory: "/Downloads",
+                subtitleSelection: nil,
+                onProgress: { _ in },
+                attemptExecutor: { template in try target403Scripted.execute(template: template) },
+                sleeper: { _ in },
+                cancellationProbe: { false }
+            )
+            XCTFail("應拋出 target 403")
+        } catch {
+            XCTAssertFalse(cookieProviderCalled)
+        }
+        XCTAssertEqual(
+            target403Scripted.templates,
+            ["NO_COOKIES_TEMPLATE", "NO_COOKIES_TEMPLATE", "NO_COOKIES_TEMPLATE", "NO_COOKIES_TEMPLATE"]
+        )
+
+        let loginScripted = ScriptedDownloadFlow([
+            .failure(.executionFailed("Sign in to confirm you're not a bot")),
+            .success("/Downloads/private.mp4")
+        ])
+        let loginOutput = try? await YTDLPService.shared.executeDownloadFlow(
+            taskId: UUID(),
+            url: "https://youtube.com/watch?v=login",
+            firstTemplate: "NO_COOKIES_TEMPLATE",
+            cookieTemplateProvider: { "COOKIES_TEMPLATE" },
+            outputDirectory: "/Downloads",
+            subtitleSelection: nil,
+            onProgress: { _ in },
+            attemptExecutor: { template in try loginScripted.execute(template: template) },
+            sleeper: { _ in },
+            cancellationProbe: { false }
+        )
+        XCTAssertEqual(loginOutput, "/Downloads/private.mp4")
+        XCTAssertEqual(loginScripted.templates, ["NO_COOKIES_TEMPLATE", "COOKIES_TEMPLATE"])
+
+        let activeCancellationScripted = ScriptedDownloadFlow([.failure(.cancelled)])
+        do {
+            _ = try await YTDLPService.shared.executeDownloadFlow(
+                taskId: UUID(),
+                url: "https://youtube.com/watch?v=cancelled",
+                firstTemplate: "FIRST_TEMPLATE",
+                cookieTemplateProvider: { "COOKIES_TEMPLATE" },
+                outputDirectory: "/Downloads",
+                subtitleSelection: nil,
+                onProgress: { _ in },
+                attemptExecutor: { template in try activeCancellationScripted.execute(template: template) },
+                sleeper: { _ in },
+                cancellationProbe: { false }
+            )
+            XCTFail("應拋出取消")
+        } catch let error as YTDLPError {
+            guard case .cancelled = error else { return XCTFail("錯誤類型不符：\(error)") }
+        } catch {
+            XCTFail("錯誤類型不符：\(error)")
+        }
+        XCTAssertEqual(activeCancellationScripted.templates.count, 1)
+
+        let backoffCancellationScripted = ScriptedDownloadFlow([.failure(target403)])
+        var cancelledDuringBackoff = false
+        var observedSlices: [UInt64] = []
+        do {
+            _ = try await YTDLPService.shared.executeDownloadFlow(
+                taskId: UUID(),
+                url: "https://youtube.com/watch?v=backoff-cancelled",
+                firstTemplate: "FIRST_TEMPLATE",
+                cookieTemplateProvider: nil,
+                outputDirectory: "/Downloads",
+                subtitleSelection: nil,
+                onProgress: { _ in },
+                attemptExecutor: { template in try backoffCancellationScripted.execute(template: template) },
+                sleeper: { slice in
+                    observedSlices.append(slice)
+                    cancelledDuringBackoff = true
+                },
+                cancellationProbe: { cancelledDuringBackoff }
+            )
+            XCTFail("應在第一個 backoff slice 後拋出取消")
+        } catch let error as YTDLPError {
+            guard case .cancelled = error else { return XCTFail("錯誤類型不符：\(error)") }
+        } catch {
+            XCTFail("錯誤類型不符：\(error)")
+        }
+        XCTAssertEqual(backoffCancellationScripted.templates.count, 1)
+        XCTAssertEqual(observedSlices, [100_000_000])
+    }
+
     func testEndedLiveErrorClassification() {
         let endedLiveError = "ERROR: [youtube] TR_NgGeXWGc: This live event has ended."
         let unavailableError = "ERROR: [youtube] abc123: Video unavailable"
@@ -205,12 +755,12 @@ final class YTDLPServiceTests: XCTestCase {
         XCTAssertEqual(holder.outputPath, "/path/to/video.mp4")
     }
 
-    func testDownloadResultHolderSetError() {
+    func testDownloadResultHolderErrorContext() {
         let holder = DownloadResultHolder()
-        XCTAssertNil(holder.lastError)
+        XCTAssertNil(holder.errorContext)
 
-        holder.setError("ERROR: Video unavailable")
-        XCTAssertEqual(holder.lastError, "ERROR: Video unavailable")
+        holder.appendError("ERROR: Video unavailable")
+        XCTAssertEqual(holder.errorContext, "ERROR: Video unavailable")
     }
 
     func testDownloadResultHolderThreadSafety() {
@@ -222,8 +772,8 @@ final class YTDLPServiceTests: XCTestCase {
             DispatchQueue.global().async {
                 holder.setOutputPath("/path/\(i)")
                 _ = holder.outputPath
-                holder.setError("Error \(i)")
-                _ = holder.lastError
+                holder.appendError("Error \(i)")
+                _ = holder.errorContext
                 expectation.fulfill()
             }
         }
@@ -511,5 +1061,197 @@ final class YTDLPServiceTests: XCTestCase {
     func testIsErrorLineIgnoresNormalOutput() {
         XCTAssertFalse(YTDLPService.isErrorLine("[download]  45.2% of 100.00MiB at 5.00MiB/s"))
         XCTAssertFalse(YTDLPService.isErrorLine("[download] Destination: /Downloads/video.mp4"))
+    }
+
+    private struct YTDLPFixture {
+        let directory: URL
+        let executable: URL
+        let log: URL
+        let pid: URL
+        let activeMarker: URL
+        let oldMarker: URL
+        let newOutput: URL
+        let writerPID: URL
+    }
+
+    private func makeYTDLPFixture() throws -> YTDLPFixture {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Tubify-YTDLPFixture-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let executable = directory.appendingPathComponent("yt-dlp-fixture")
+        let log = directory.appendingPathComponent("invocations.log")
+        let pid = directory.appendingPathComponent("process.pid")
+        let activeMarker = directory.appendingPathComponent("active.marker")
+        let oldMarker = directory.appendingPathComponent("old.marker")
+        let newOutput = directory.appendingPathComponent("new.mp4")
+        let writerPID = directory.appendingPathComponent("writer.pid")
+        let script = """
+        #!/bin/sh
+        log=\(shellQuote(log.path))
+        pid=\(shellQuote(pid.path))
+        echo "$*" >> "$log"
+        echo "$$" > "$pid"
+        case "$*" in
+          *ACTIVE*)
+            touch \(shellQuote(activeMarker.path))
+            exec /usr/bin/tail -f /dev/null
+            ;;
+          *OLD*)
+            touch \(shellQuote(oldMarker.path))
+            echo 'ERROR: unable to download video data: HTTP Error 403: Forbidden' >&2
+            sleep 0.2
+            exit 1
+            ;;
+          *DRAIN_403*)
+            if [ "$(grep -c 'DRAIN_403' "$log" 2>/dev/null || true)" -eq 1 ]; then
+              (sleep 0.05; printf 'ERROR: unable to download video data: HTTP Error 403: Forbidden\\n' >&2) &
+              exit 1
+            fi
+            touch \(shellQuote(newOutput.path))
+            printf 'FINAL_PATH:%s\\n' \(shellQuote(newOutput.path))
+            ;;
+          *STARVING_STDOUT_403*)
+            if [ "$(grep -c 'STARVING_STDOUT_403' "$log" 2>/dev/null || true)" -eq 1 ]; then
+              (
+                i=0
+                while [ "$i" -lt 512 ]; do
+                  printf 'background stderr output\\n' >&2
+                  i=$((i + 1))
+                done
+                sleep 0.05
+                printf 'ERROR: unable to download video data: HTTP Error 403: Forbidden\\n' >&2 || exit
+              ) &
+              (
+                while true; do
+                  printf 'background stdout output\\n' || exit
+                  sleep 0.01
+                done
+              ) &
+              echo "$!" > \(shellQuote(writerPID.path))
+              exit 1
+            fi
+            touch \(shellQuote(newOutput.path))
+            printf 'FINAL_PATH:%s\\n' \(shellQuote(newOutput.path))
+            ;;
+          *STDOUT_EOF_IDLE_STDERR_403*)
+            if [ "$(grep -c 'STDOUT_EOF_IDLE_STDERR_403' "$log" 2>/dev/null || true)" -eq 1 ]; then
+              (
+                exec 1>/dev/null
+                sleep 0.2
+                printf 'ERROR: unable to download video data: HTTP Error 403: Forbidden\\n' >&2
+                sleep 0.1
+              ) &
+              echo "$!" > \(shellQuote(writerPID.path))
+              exit 1
+            fi
+            touch \(shellQuote(newOutput.path))
+            printf 'FINAL_PATH:%s\\n' \(shellQuote(newOutput.path))
+            ;;
+          *MULTILINE_403*)
+            printf '[download] Giving up after 10 retries\\n' >&2
+            printf 'ERROR: unable to download video data: HTTP Error 403: Forbidden\\n' >&2
+            sleep 0.2
+            exit 1
+            ;;
+          *HANG_WRITER*)
+            (
+              while true; do
+                printf 'background writer output\\n' >&2 || exit
+                sleep 0.01
+              done
+            ) &
+            echo "$!" > \(shellQuote(writerPID.path))
+            exit 1
+            ;;
+          *NEW*)
+            touch \(shellQuote(newOutput.path))
+            printf 'FINAL_PATH:%s\\n' \(shellQuote(newOutput.path))
+            ;;
+        esac
+        """
+        try script.write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+
+        return YTDLPFixture(
+            directory: directory,
+            executable: executable,
+            log: log,
+            pid: pid,
+            activeMarker: activeMarker,
+            oldMarker: oldMarker,
+            newOutput: newOutput,
+            writerPID: writerPID
+        )
+    }
+
+    private func shellQuote(_ value: String) -> String {
+        "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
+    }
+
+    private func waitForFile(_ url: URL) async -> Bool {
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline {
+            if FileManager.default.fileExists(atPath: url.path) {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        return false
+    }
+
+    private func terminateProcess(at pidFile: URL) {
+        guard let pid = try? String(contentsOf: pidFile, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !pid.isEmpty else {
+            return
+        }
+
+        let probe = Process()
+        probe.executableURL = URL(fileURLWithPath: "/bin/kill")
+        probe.arguments = ["-0", pid]
+        try? probe.run()
+        probe.waitUntilExit()
+        guard probe.terminationStatus == 0 else { return }
+
+        let terminate = Process()
+        terminate.executableURL = URL(fileURLWithPath: "/bin/kill")
+        terminate.arguments = ["-TERM", pid]
+        try? terminate.run()
+        terminate.waitUntilExit()
+
+        let stillRunning = Process()
+        stillRunning.executableURL = URL(fileURLWithPath: "/bin/kill")
+        stillRunning.arguments = ["-0", pid]
+        try? stillRunning.run()
+        stillRunning.waitUntilExit()
+        guard stillRunning.terminationStatus == 0 else { return }
+
+        let forceTerminate = Process()
+        forceTerminate.executableURL = URL(fileURLWithPath: "/bin/kill")
+        forceTerminate.arguments = ["-KILL", pid]
+        try? forceTerminate.run()
+        forceTerminate.waitUntilExit()
+    }
+
+    private func waitForProcessExit(_ pid: String) async -> Bool {
+        guard !pid.isEmpty else { return false }
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline {
+            let probe = Process()
+            probe.executableURL = URL(fileURLWithPath: "/bin/kill")
+            probe.arguments = ["-0", pid]
+            do {
+                try probe.run()
+                probe.waitUntilExit()
+                if probe.terminationStatus != 0 {
+                    return true
+                }
+            } catch {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        return false
     }
 }
