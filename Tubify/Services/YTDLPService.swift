@@ -215,13 +215,14 @@ actor YTDLPService {
 
     /// 下載影片
     ///
-    /// 策略：先「不帶 cookies」下載——公開影片用此即可，且能避開帶 cookies 時
-    /// YouTube 對串流網址的綁定驗證所造成的 HTTP 403。只有在失敗且錯誤顯示需要登入
-    /// （會員 / 年齡限制 / 私人影片 / 機器人驗證）時，才自動帶 Safari cookies 重試。
+    /// 策略：先「不帶 cookies」下載——公開影片用此即可。失敗後在兩種情況下自動帶
+    /// Safari cookies 重試：錯誤顯示需要登入（會員 / 年齡限制 / 私人影片 / 機器人驗證），
+    /// 或 yt-dlp 回報 video-data HTTP 403。後者是 YouTube 對缺少 GVS PO Token 的匿名
+    /// session 的封鎖（下載進行到一半才中斷），帶 cookies 可改走 HLS 而繞過。
     /// 整個流程全自動，使用者無需手動切換。
     ///
-    /// 註：target 403 retry 對所有 command template 生效；只有原始 template 含
-    /// `--cookies-from-browser safari` 時，明確登入錯誤才會啟用 Safari cookies fallback。
+    /// 註：video-data 403 對不帶 cookies fallback 的 template 才做原地 backoff retry；
+    /// 有 fallback 時直接切換 cookies，避免在註定失敗的指令上空轉。
     func download(
         taskId: UUID,
         url: String,
@@ -252,9 +253,7 @@ actor YTDLPService {
             taskId: taskId,
             url: url,
             firstTemplate: firstTemplate,
-            cookieTemplateProvider: hasCookies
-                ? { SafariCookiesService.shared.transformCommand(template) }
-                : nil,
+            cookieTemplateProvider: hasCookies ? { SafariCookiesService.shared.transformCommand(template) } : nil,
             outputDirectory: outputDirectory,
             subtitleSelection: subtitleSelection,
             onProgress: onProgress,
@@ -262,12 +261,13 @@ actor YTDLPService {
         )
     }
 
-    /// 執行完整下載流程：target 403 在同一個 template 內重新啟動 process，明確登入錯誤才切換 cookies。
+    /// 執行完整下載流程：可切換 cookies 時，登入錯誤與 video-data 403 都直接改帶 cookies 重試；
+    /// 沒有 cookies fallback 時，video-data 403 才在同一個 template 內做 backoff retry。
     func executeDownloadFlow(
         taskId: UUID,
         url: String,
         firstTemplate: String,
-        cookieTemplateProvider: (() -> String)?,
+        cookieTemplateProvider: (() -> String?)?,
         outputDirectory: String,
         subtitleSelection: SubtitleSelection?,
         onProgress: @escaping ProgressCallback,
@@ -294,22 +294,44 @@ actor YTDLPService {
                 taskId: taskId,
                 operationID: flowOperationID,
                 template: firstTemplate,
+                // 有 cookies fallback 時，video-data 403 靠 backoff 重試同一條指令也不會成功，
+                // 直接把錯誤交給下方 catch 切換 cookies。
+                allowTransient403Retries: cookieTemplateProvider == nil,
                 executeAttempt: executeAttempt,
                 sleeper: sleeper,
                 cancellationProbe: cancellationProbe
             )
         } catch let error as YTDLPError {
-            // 只有在模板原本帶 cookies、且錯誤顯示需要登入時，才帶 cookies 重試。
             guard let cookieTemplateProvider, Self.shouldRetryWithCookies(error) else {
                 throw error
             }
 
-            TubifyLogger.ytdlp.info("下載失敗（疑似需要登入），改用 Safari cookies 重試: \(url)")
-            TubifyLogger.cookies.info("偵測到需登入內容，轉換 Safari cookies 文件後重試")
+            guard let cookieTemplate = cookieTemplateProvider() else {
+                // 導出失敗，多半是缺少完整磁碟存取權限。登入類錯誤重試無益，直接拋出；
+                // video-data 403 仍可能是暫時性的，退回原 template 補做 backoff，
+                // 不因 cookies 不可用而連帶失去這層韌性。
+                TubifyLogger.cookies.error("Safari cookies 導出失敗（請確認已授予完整磁碟存取權限）")
+                guard Self.isDownloadVideoData403(error) else { throw error }
+
+                TubifyLogger.ytdlp.info("無 cookies 可用，改以原指令重試 video-data 403: \(url)")
+                return try await executeWithTransient403Retries(
+                    taskId: taskId,
+                    operationID: flowOperationID,
+                    template: firstTemplate,
+                    allowTransient403Retries: true,
+                    executeAttempt: executeAttempt,
+                    sleeper: sleeper,
+                    cancellationProbe: cancellationProbe
+                )
+            }
+
+            TubifyLogger.ytdlp.info("下載失敗（疑似需要登入或缺少 PO Token），改用 Safari cookies 重試: \(url)")
+            TubifyLogger.cookies.info("轉換 Safari cookies 文件後重試")
             return try await executeWithTransient403Retries(
                 taskId: taskId,
                 operationID: flowOperationID,
-                template: cookieTemplateProvider(),
+                template: cookieTemplate,
+                allowTransient403Retries: true,
                 executeAttempt: executeAttempt,
                 sleeper: sleeper,
                 cancellationProbe: cancellationProbe
@@ -318,15 +340,19 @@ actor YTDLPService {
     }
 
     /// 對單一 processed template 執行最多一次 initial attempt 與三次 target 403 retry。
+    /// `allowTransient403Retries` 為 false 時不做 403 backoff，首次失敗即拋出。
     private func executeWithTransient403Retries(
         taskId: UUID,
         operationID: DownloadOperationID,
         template: String,
+        allowTransient403Retries: Bool,
         executeAttempt: (String) async throws -> String,
         sleeper: ((UInt64) async throws -> Void)?,
         cancellationProbe: (() -> Bool)?
     ) async throws -> String {
-        let retryDelays: [UInt64] = [2_000_000_000, 5_000_000_000, 10_000_000_000]
+        let retryDelays: [UInt64] = allowTransient403Retries
+            ? [2_000_000_000, 5_000_000_000, 10_000_000_000]
+            : []
         let sleepSlice: (UInt64) async throws -> Void = sleeper ?? { nanoseconds in
             try await Task.sleep(nanoseconds: nanoseconds)
         }
@@ -509,9 +535,14 @@ actor YTDLPService {
         return lowered.contains("got error:") || lowered.contains("giving up after")
     }
 
-    /// 判斷下載錯誤是否可能因「需要登入」而起，需帶 cookies 重試
-    /// 公開影片不帶 cookies 即可成功，因此只在錯誤訊息含登入相關訊號時才重試
+    /// 判斷是否該改帶 Safari cookies 重試：需要登入，或 video-data 403（缺少 GVS PO Token）。
     static func shouldRetryWithCookies(_ error: YTDLPError) -> Bool {
+        indicatesLoginRequired(error) || isDownloadVideoData403(error)
+    }
+
+    /// 判斷下載錯誤是否可能因「需要登入」而起
+    /// 公開影片不帶 cookies 即可成功，因此只在錯誤訊息含登入相關訊號時才視為需登入
+    static func indicatesLoginRequired(_ error: YTDLPError) -> Bool {
         guard case .executionFailed(let message) = error else { return false }
         let lowered = message.lowercased()
         // 僅匹配明確的「需登入」訊號，避免如 "account" 之類過於寬鬆的字串
@@ -540,11 +571,19 @@ actor YTDLPService {
         return loginSignals.contains { lowered.contains($0) }
     }
 
-    /// 只匹配 yt-dlp 直接回報的 video-data HTTP 403。
+    private static let videoData403Marker = "unable to download video data: HTTP Error 403: Forbidden"
+
+    /// 匹配 yt-dlp 回報的 video-data HTTP 403，不論 yt-dlp 自身是否已放棄重試。
+    /// 這類 403 現多為缺少 GVS PO Token 所致，是帶 cookies 重試的訊號。
+    static func isDownloadVideoData403(_ error: YTDLPError) -> Bool {
+        guard case .executionFailed(let message) = error else { return false }
+        return message.contains(videoData403Marker)
+    }
+
+    /// 只匹配值得原地 backoff 重試的 video-data HTTP 403（yt-dlp 尚未自行放棄）。
     static func isRetryableDownload403(_ error: YTDLPError) -> Bool {
         guard case .executionFailed(let message) = error else { return false }
-        return message.contains("unable to download video data: HTTP Error 403: Forbidden")
-            && !message.contains("Giving up after")
+        return message.contains(videoData403Marker) && !message.contains("Giving up after")
     }
 
     /// 實際執行一次 yt-dlp 下載（template 已完成音軌與 cookies 處理）

@@ -416,6 +416,7 @@ final class YTDLPServiceTests: XCTestCase {
         XCTAssertEqual(invocations.filter { $0.contains("NEW") }.count, 1)
     }
 
+    /// 同時是「沒有 cookies fallback 時，video-data 403 仍保留原地 backoff」的回歸測試。
     func testExecuteDownloadFlowRetriesTarget403ThenSucceeds() async throws {
         let taskId = UUID()
         let scripted = ScriptedDownloadFlow([
@@ -586,34 +587,36 @@ final class YTDLPServiceTests: XCTestCase {
             "unable to download video data: HTTP Error 403: Forbidden"
         )
 
+        // video-data 403 多為缺少 GVS PO Token：重試同一條不帶 cookies 的指令不會成功，
+        // 因此應立刻切換 cookies template，且切換前不做 backoff。
         let target403Scripted = ScriptedDownloadFlow([
-            .failure(target403), .failure(target403), .failure(target403), .failure(target403)
+            .failure(target403), .failure(target403), .success("/Downloads/po-token.mp4")
         ])
         var cookieProviderCalled = false
-        do {
-            _ = try await YTDLPService.shared.executeDownloadFlow(
-                taskId: UUID(),
-                url: "https://youtube.com/watch?v=403",
-                firstTemplate: "NO_COOKIES_TEMPLATE",
-                cookieTemplateProvider: {
-                    cookieProviderCalled = true
-                    return "COOKIES_TEMPLATE"
-                },
-                outputDirectory: "/Downloads",
-                subtitleSelection: nil,
-                onProgress: { _ in },
-                attemptExecutor: { template in try target403Scripted.execute(template: template) },
-                sleeper: { _ in },
-                cancellationProbe: { false }
-            )
-            XCTFail("應拋出 target 403")
-        } catch {
-            XCTAssertFalse(cookieProviderCalled)
-        }
+        var sleepSlices: [UInt64] = []
+        let target403Output = try? await YTDLPService.shared.executeDownloadFlow(
+            taskId: UUID(),
+            url: "https://youtube.com/watch?v=403",
+            firstTemplate: "NO_COOKIES_TEMPLATE",
+            cookieTemplateProvider: {
+                cookieProviderCalled = true
+                return "COOKIES_TEMPLATE"
+            },
+            outputDirectory: "/Downloads",
+            subtitleSelection: nil,
+            onProgress: { _ in },
+            attemptExecutor: { template in try target403Scripted.execute(template: template) },
+            sleeper: { sleepSlices.append($0) },
+            cancellationProbe: { false }
+        )
+        XCTAssertTrue(cookieProviderCalled)
+        XCTAssertEqual(target403Output, "/Downloads/po-token.mp4")
+        // 第一次 403 直接切 cookies（無 backoff），cookies template 內才保留 403 backoff retry。
         XCTAssertEqual(
             target403Scripted.templates,
-            ["NO_COOKIES_TEMPLATE", "NO_COOKIES_TEMPLATE", "NO_COOKIES_TEMPLATE", "NO_COOKIES_TEMPLATE"]
+            ["NO_COOKIES_TEMPLATE", "COOKIES_TEMPLATE", "COOKIES_TEMPLATE"]
         )
+        XCTAssertEqual(sleepSlices.reduce(0, +), 2_000_000_000)
 
         let loginScripted = ScriptedDownloadFlow([
             .failure(.executionFailed("Sign in to confirm you're not a bot")),
@@ -683,6 +686,95 @@ final class YTDLPServiceTests: XCTestCase {
         }
         XCTAssertEqual(backoffCancellationScripted.templates.count, 1)
         XCTAssertEqual(observedSlices, [100_000_000])
+    }
+
+    /// Safari cookies 導出失敗（多半是缺少完整磁碟存取權限）時，provider 回傳 nil。
+    /// 此時不得帶著仍含 `--cookies-from-browser` 的 template 重試——那會讓 yt-dlp 子進程掛起——
+    /// 但也不能連帶失去對暫時性 403 的韌性，應退回原 template 補做 backoff。
+    func testExecuteDownloadFlowFallsBackToBackoffWhenCookieExportFails() async throws {
+        let target403 = YTDLPError.executionFailed("unable to download video data: HTTP Error 403: Forbidden")
+        // 第 1 次是切換前的 attempt（無 backoff），第 2 次起才是退回原 template 的 backoff retry。
+        let scripted = ScriptedDownloadFlow([
+            .failure(target403), .failure(target403), .success("/Downloads/video.mp4")
+        ])
+        var cookieProviderCalled = false
+        var sleepSlices: [UInt64] = []
+
+        let outputPath = try await YTDLPService.shared.executeDownloadFlow(
+            taskId: UUID(),
+            url: "https://youtube.com/watch?v=no-full-disk-access",
+            firstTemplate: "NO_COOKIES_TEMPLATE",
+            cookieTemplateProvider: {
+                cookieProviderCalled = true
+                return nil
+            },
+            outputDirectory: "/Downloads",
+            subtitleSelection: nil,
+            onProgress: { _ in },
+            attemptExecutor: { template in try scripted.execute(template: template) },
+            sleeper: { sleepSlices.append($0) },
+            cancellationProbe: { false }
+        )
+
+        XCTAssertTrue(cookieProviderCalled)
+        XCTAssertEqual(outputPath, "/Downloads/video.mp4")
+        XCTAssertEqual(
+            scripted.templates,
+            ["NO_COOKIES_TEMPLATE", "NO_COOKIES_TEMPLATE", "NO_COOKIES_TEMPLATE"]
+        )
+        XCTAssertEqual(sleepSlices.reduce(0, +), 2_000_000_000)
+    }
+
+    /// 導出失敗且錯誤屬於「需要登入」時，重試同一條指令無益，應直接拋出。
+    func testExecuteDownloadFlowThrowsLoginErrorWhenCookieExportFails() async {
+        let loginMessage = "ERROR: Sign in to confirm you're not a bot"
+        let scripted = ScriptedDownloadFlow([.failure(.executionFailed(loginMessage))])
+        var sleepCalled = false
+
+        do {
+            _ = try await YTDLPService.shared.executeDownloadFlow(
+                taskId: UUID(),
+                url: "https://youtube.com/watch?v=login-no-full-disk-access",
+                firstTemplate: "NO_COOKIES_TEMPLATE",
+                cookieTemplateProvider: { nil },
+                outputDirectory: "/Downloads",
+                subtitleSelection: nil,
+                onProgress: { _ in },
+                attemptExecutor: { template in try scripted.execute(template: template) },
+                sleeper: { _ in sleepCalled = true },
+                cancellationProbe: { false }
+            )
+            XCTFail("cookies 導出失敗的登入錯誤應直接拋出")
+        } catch let error as YTDLPError {
+            guard case .executionFailed(let message) = error else {
+                return XCTFail("錯誤類型不符：\(error)")
+            }
+            XCTAssertEqual(message, loginMessage)
+        } catch {
+            XCTFail("錯誤類型不符：\(error)")
+        }
+
+        XCTAssertEqual(scripted.templates, ["NO_COOKIES_TEMPLATE"])
+        XCTAssertFalse(sleepCalled)
+    }
+
+    /// `isDownloadVideoData403` 是 cookies fallback 的觸發訊號，與 backoff 訊號
+    /// `isRetryableDownload403`（見 testIsRetryableDownload403OnlyMatchesTargetVideoDataError）
+    /// 的關鍵差異是：yt-dlp 已自行放棄（"Giving up after"）時它仍為 true。
+    func testDownloadVideoData403CoversGivingUpCase() {
+        let givingUp = YTDLPError.executionFailed(
+            "ERROR: unable to download video data: HTTP Error 403: Forbidden; Giving up after 10 retries"
+        )
+        XCTAssertTrue(YTDLPService.isDownloadVideoData403(givingUp))
+        XCTAssertFalse(YTDLPService.isRetryableDownload403(givingUp))
+
+        XCTAssertTrue(YTDLPService.isDownloadVideoData403(
+            .executionFailed("ERROR: unable to download video data: HTTP Error 403: Forbidden")
+        ))
+        XCTAssertFalse(YTDLPService.isDownloadVideoData403(
+            .executionFailed("ERROR: unable to download video data: HTTP Error 429: Too Many Requests")
+        ))
+        XCTAssertFalse(YTDLPService.isDownloadVideoData403(.cancelled))
     }
 
     func testEndedLiveErrorClassification() {

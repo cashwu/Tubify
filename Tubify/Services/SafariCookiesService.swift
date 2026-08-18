@@ -8,12 +8,12 @@ class SafariCookiesService {
 
     private init() {}
 
-    /// Safari cookies 可能的檔案路徑（macOS 26+ 使用新路徑）
+    /// Safari cookies 可能的檔案路徑（依序嘗試，取第一個存在者）
     private var possibleCookiesPaths: [String] {
         [
-            // macOS 26 (Tahoe) 及之後版本使用此路徑
+            // Safari 沙箱化前的舊路徑；部分機器仍留有此目錄（多半是空的）
             NSHomeDirectory() + "/Library/Cookies/Cookies.binarycookies",
-            // macOS 15 及之前版本使用容器路徑
+            // Safari 沙箱化後的容器路徑，macOS 26.5 實測仍在此
             NSHomeDirectory() + "/Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies"
         ]
     }
@@ -82,9 +82,11 @@ class SafariCookiesService {
     }
 
     /// 將 --cookies-from-browser safari 替換為 --cookies 文件
-    func transformCommand(_ command: String) -> String {
+    /// 導出失敗（多半是缺少完整磁碟存取權限）時回傳 nil——原樣回傳會讓沒有權限的
+    /// yt-dlp 子進程自行去讀 Safari cookies 而掛起。
+    func transformCommand(_ command: String) -> String? {
         guard let cookiesPath = exportSafariCookies() else {
-            return command
+            return nil
         }
 
         return command
