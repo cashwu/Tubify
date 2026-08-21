@@ -187,7 +187,20 @@ enum MetadataError: Error, LocalizedError {
 actor YouTubeMetadataService {
     static let shared = YouTubeMetadataService()
 
-    private init() {}
+    /// 測試用的 yt-dlp 路徑接縫；正式程式碼一律使用 `shared`，其 provider 為 nil。
+    private let ytdlpPathProvider: (() async -> String?)?
+
+    init(ytdlpPathProvider: (() async -> String?)? = nil) {
+        self.ytdlpPathProvider = ytdlpPathProvider
+    }
+
+    /// actor 內全部 yt-dlp 路徑解析的單一入口。
+    private func resolveYTDLPPath() async -> String? {
+        if let ytdlpPathProvider {
+            return await ytdlpPathProvider()
+        }
+        return await YTDLPService.shared.findYTDLPPath()
+    }
 
     /// 設定子進程的環境變數，確保可以找到 node 等工具
     /// macOS app 從 Finder 啟動時不會繼承 shell 的 PATH
@@ -209,7 +222,7 @@ actor YouTubeMetadataService {
 
     /// 獲取單一影片資訊
     func fetchVideoInfo(url: String, cookiesArguments: [String] = []) async throws -> VideoInfo {
-        guard let ytdlpPath = await YTDLPService.shared.findYTDLPPath() else {
+        guard let ytdlpPath = await resolveYTDLPPath() else {
             throw MetadataError.ytdlpNotFound
         }
 
@@ -290,7 +303,7 @@ actor YouTubeMetadataService {
 
     /// 獲取播放清單資訊
     func fetchPlaylistInfo(url: String, cookiesArguments: [String] = []) async throws -> (title: String, videos: [VideoInfo]) {
-        guard let ytdlpPath = await YTDLPService.shared.findYTDLPPath() else {
+        guard let ytdlpPath = await resolveYTDLPPath() else {
             throw MetadataError.ytdlpNotFound
         }
 
@@ -460,7 +473,7 @@ actor YouTubeMetadataService {
 
     /// 獲取影片的字幕資訊
     func fetchSubtitles(url: String, cookiesArguments: [String] = []) async throws -> [SubtitleTrack] {
-        guard let ytdlpPath = await YTDLPService.shared.findYTDLPPath() else {
+        guard let ytdlpPath = await resolveYTDLPPath() else {
             throw MetadataError.ytdlpNotFound
         }
 
@@ -556,7 +569,7 @@ actor YouTubeMetadataService {
 
     /// 獲取影片的音軌資訊
     func fetchAudioTracks(url: String, cookiesArguments: [String] = []) async throws -> [AudioTrack] {
-        guard let ytdlpPath = await YTDLPService.shared.findYTDLPPath() else {
+        guard let ytdlpPath = await resolveYTDLPPath() else {
             throw MetadataError.ytdlpNotFound
         }
 
@@ -670,16 +683,61 @@ actor YouTubeMetadataService {
     /// 一併回傳 liveStatus/releaseTimestamp，供播放清單路徑偵測首播狀態
     /// （--flat-playlist 不提供這些欄位，需靠此完整 JSON 取得）
     func fetchMediaOptions(url: String, cookiesArguments: [String] = []) async throws -> MediaOptions {
-        guard let ytdlpPath = await YTDLPService.shared.findYTDLPPath() else {
+        guard let ytdlpPath = await resolveYTDLPPath() else {
             throw MetadataError.ytdlpNotFound
         }
 
         TubifyLogger.ytdlp.info("獲取媒體選項: \(url)")
 
+        // 使用 --skip-download 避免 yt-dlp 嘗試驗證下載格式導致 403 錯誤
+        let baseArguments = ["-J", "--skip-download", "--no-playlist"]
+
+        // 第一次一律不帶 cookies：帶上帳號 cookies 會讓 yt-dlp 改用不回傳 subtitles 的
+        // client，公開影片的使用者上傳字幕會因此從查詢結果中消失
+        let firstOutcome = try await runMediaOptionsInvocation(
+            ytdlpPath: ytdlpPath,
+            arguments: baseArguments + [url]
+        )
+        switch firstOutcome {
+        case .succeeded(let options):
+            return options
+
+        case .failed(let firstMessage):
+            // 只有需登入的失敗才值得帶 cookies 重試；其餘失敗重試無益，徒增一倍等待
+            guard YTDLPService.indicatesLoginRequired(message: firstMessage), !cookiesArguments.isEmpty else {
+                throw MetadataError.fetchFailed(firstMessage)
+            }
+
+            TubifyLogger.ytdlp.info("媒體選項查詢失敗（疑似需要登入），改帶 cookies 重試: \(url)")
+            let retryOutcome = try await runMediaOptionsInvocation(
+                ytdlpPath: ytdlpPath,
+                arguments: baseArguments + cookiesArguments + [url]
+            )
+            switch retryOutcome {
+            case .succeeded(let options):
+                return options
+            case .failed(let retryMessage):
+                throw MetadataError.fetchFailed(retryMessage)
+            }
+        }
+    }
+
+    /// 單次媒體選項 invocation 的結果。非 0 exit code 以 `.failed` 表示，讓呼叫端能與
+    /// 「與 exit code 無關的失敗」區分：後者由本方法直接拋出，不進入重試判定。
+    private enum MediaOptionsInvocationOutcome {
+        case succeeded(MediaOptions)
+        case failed(message: String)
+    }
+
+    /// 執行一次媒體選項查詢並解析其輸出。
+    /// 找不到 process 無法啟動時直接拋出既有的 `MetadataError.fetchFailed`。
+    private func runMediaOptionsInvocation(
+        ytdlpPath: String,
+        arguments: [String]
+    ) async throws -> MediaOptionsInvocationOutcome {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: ytdlpPath)
-        // 使用 --skip-download 避免 yt-dlp 嘗試驗證下載格式導致 403 錯誤
-        process.arguments = ["-J", "--skip-download", "--no-playlist"] + cookiesArguments + [url]
+        process.arguments = arguments
         configureProcessEnvironment(process)
 
         let pipe = Pipe()
@@ -729,24 +787,24 @@ actor YouTubeMetadataService {
 
         if process.terminationStatus != 0 {
             let errorMessage = String(data: errorData, encoding: .utf8) ?? "未知錯誤"
-            throw MetadataError.fetchFailed(errorMessage)
+            return .failed(message: errorMessage)
         }
 
         // 解析 JSON 並提取字幕和音軌資訊
         do {
             guard let json = try JSONSerialization.jsonObject(with: outputData) as? [String: Any] else {
-                return MediaOptions(subtitles: [], audioTracks: [], formats: [], liveStatus: nil, releaseTimestamp: nil)
+                return .succeeded(MediaOptions(subtitles: [], audioTracks: [], formats: [], liveStatus: nil, releaseTimestamp: nil))
             }
-            return MediaOptions(
+            return .succeeded(MediaOptions(
                 subtitles: parseSubtitles(from: json),
                 audioTracks: parseAudioTracks(from: json),
                 formats: parseFormats(from: json),
                 liveStatus: json["live_status"] as? String,
                 releaseTimestamp: json["release_timestamp"] as? Int
-            )
+            ))
         } catch {
             TubifyLogger.ytdlp.error("解析媒體選項失敗: \(error.localizedDescription)")
-            return MediaOptions(subtitles: [], audioTracks: [], formats: [], liveStatus: nil, releaseTimestamp: nil)
+            return .succeeded(MediaOptions(subtitles: [], audioTracks: [], formats: [], liveStatus: nil, releaseTimestamp: nil))
         }
     }
 

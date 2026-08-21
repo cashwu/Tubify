@@ -703,6 +703,12 @@ actor YTDLPService {
     /// 公開影片不帶 cookies 即可成功，因此只在錯誤訊息含登入相關訊號時才視為需登入
     static func indicatesLoginRequired(_ error: YTDLPError) -> Bool {
         guard case .executionFailed(let message) = error else { return false }
+        return indicatesLoginRequired(message: message)
+    }
+
+    /// 訊號清單的單一事實來源。媒體選項查詢的錯誤型別是 `MetadataError.fetchFailed(String)`，
+    /// 無法共用 `YTDLPError` 版本，因此以訊息字串作為共用入口。
+    static func indicatesLoginRequired(message: String) -> Bool {
         let lowered = message.lowercased()
         // 僅匹配明確的「需登入」訊號，避免如 "account" 之類過於寬鬆的字串
         // 誤判公開影片的其他錯誤，反而把它推回會觸發 403 的帶 cookies 路徑

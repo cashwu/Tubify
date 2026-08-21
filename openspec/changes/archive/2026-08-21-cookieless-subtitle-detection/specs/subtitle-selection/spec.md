@@ -1,68 +1,4 @@
-# subtitle-selection Specification
-
-## Purpose
-
-TBD - created by archiving change 'add-clear-all-subtitles'. Update Purpose after archive.
-
-## Requirements
-
-### Requirement: Clear all selected subtitles
-
-When subtitle choices are displayed, the system SHALL provide a control labeled "全部取消" that clears every selected subtitle without dismissing the media selection view. Activating this control SHALL NOT change the selected audio track.
-
-#### Scenario: Clear the default subtitle selection
-
-- **WHEN** the media selection view initially has multiple subtitle languages selected and the user activates "全部取消"
-- **THEN** the system SHALL leave every subtitle language unselected and keep the media selection view open
-
-##### Example: Keep only one of three subtitles
-
-- **GIVEN** `zh-TW`, `en`, and `ja` subtitles are selected by default
-- **WHEN** the user activates "全部取消" and then selects `en`
-- **THEN** only the `en` subtitle SHALL be selected for download
-
-#### Scenario: Preserve the selected audio track
-
-- **WHEN** the user has selected an audio track and activates "全部取消" in the subtitle section
-- **THEN** the system SHALL preserve the selected audio track unchanged
-
-
-<!-- @trace
-source: add-clear-all-subtitles
-updated: 2026-07-13
-code:
-  - .agents/skills/spectra-commit/SKILL.md
-  - .agents/skills/spectra-propose-plus/SKILL.md
-  - .agents/skills/spectra-apply-plus/SKILL.md
-  - Tubify/Views/MediaSelectionView.swift
-  - .agents/skills/spectra-verify/SKILL.md
-  - TubifyTests/MediaSelectionLogicTests.swift
-  - .agents/skills/spectra-analyze/SKILL.md
--->
-
----
-
-### Requirement: Preserve default subtitle selection
-
-The system SHALL continue to select all supported subtitle languages when the media selection view first appears.
-
-#### Scenario: Open media selection with supported subtitles
-
-- **WHEN** the media selection view appears with supported subtitle languages available
-- **THEN** the system SHALL initially select every supported subtitle language
-
-<!-- @trace
-source: add-clear-all-subtitles
-updated: 2026-07-13
-code:
-  - .agents/skills/spectra-commit/SKILL.md
-  - .agents/skills/spectra-propose-plus/SKILL.md
-  - .agents/skills/spectra-apply-plus/SKILL.md
-  - Tubify/Views/MediaSelectionView.swift
-  - .agents/skills/spectra-verify/SKILL.md
-  - TubifyTests/MediaSelectionLogicTests.swift
-  - .agents/skills/spectra-analyze/SKILL.md
--->
+## ADDED Requirements
 
 ### Requirement: 媒體選項偵測優先不帶 cookies
 
@@ -129,17 +65,6 @@ code:
 - **THEN** 系統 MUST NOT 執行帶 cookies 的重試
 - **AND** 系統 SHALL 沿用既有的錯誤回報方式
 
-<!-- @trace
-source: cookieless-subtitle-detection
-updated: 2026-08-21
-code:
-  - Tubify/Services/YTDLPService.swift
-  - Tubify/Services/YouTubeMetadataService.swift
-  - TubifyTests/YTDLPServiceTests.swift
-  - TubifyTests/YouTubeMetadataServiceTests.swift
-tests:
--->
-
 ### Requirement: 媒體選項查詢重用下載路徑的登入訊號定義
 
 系統判斷媒體選項查詢的失敗訊息是否代表「需登入」時，SHALL 呼叫與下載路徑相同的登入訊號入口，MUST NOT 另行維護第二份訊號清單。此處共用的是「需登入」訊號定義本身，不是整體的 cookies 重試決策：下載路徑另有的 video-data 403 訊號 MUST NOT 被媒體選項查詢採用，因為媒體選項查詢帶 `--skip-download`、不下載 video data。
@@ -156,14 +81,3 @@ tests:
 - **GIVEN** 不帶 cookies 的媒體選項查詢以 video-data 403 訊息失敗
 - **WHEN** 系統判斷是否重試
 - **THEN** 系統 MUST NOT 因該訊息本身觸發帶 cookies 的重試
-
-<!-- @trace
-source: cookieless-subtitle-detection
-updated: 2026-08-21
-code:
-  - Tubify/Services/YTDLPService.swift
-  - Tubify/Services/YouTubeMetadataService.swift
-  - TubifyTests/YTDLPServiceTests.swift
-  - TubifyTests/YouTubeMetadataServiceTests.swift
-tests:
--->

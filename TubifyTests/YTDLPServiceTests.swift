@@ -785,6 +785,40 @@ final class YTDLPServiceTests: XCTestCase {
         XCTAssertEqual(YTDLPErrorClassification.classify(unavailableError), .other)
     }
 
+    // MARK: - 登入訊號分類測試（indicatesLoginRequired(message:)）
+
+    /// 字串入口對既有訊號清單中的代表性訊息（私人影片、會員限定、年齡限制、bot 驗證）
+    /// 判定為需登入。
+    func testIndicatesLoginRequiredForKnownLoginMessages() {
+        let loginMessages = [
+            "ERROR: [youtube] abc123: Private video. Sign in if you've been granted access to this video",
+            "ERROR: [youtube] abc123: Join this channel to get access to members-only content like this video",
+            "ERROR: [youtube] abc123: This video is age-restricted and only available on YouTube. For more information, see https://support.google.com/youtube/answer/2802167",
+            "ERROR: [youtube] abc123: Sign in to confirm you're not a bot. Use --cookies-from-browser or --cookies for the authentication."
+        ]
+        for message in loginMessages {
+            XCTAssertTrue(
+                YTDLPService.indicatesLoginRequired(message: message),
+                "應判定為需登入：\(message)"
+            )
+        }
+    }
+
+    /// 一般失敗訊息與無法解碼 stderr 時的 `未知錯誤` fallback 字串不得判定為需登入。
+    func testIndicatesLoginRequiredIsFalseForNonLoginMessages() {
+        let nonLoginMessages = [
+            "ERROR: Unable to download webpage: The read operation timed out",
+            "ERROR: [youtube] abc123: Video unavailable",
+            "未知錯誤"
+        ]
+        for message in nonLoginMessages {
+            XCTAssertFalse(
+                YTDLPService.indicatesLoginRequired(message: message),
+                "不應判定為需登入：\(message)"
+            )
+        }
+    }
+
     // MARK: - 帶 cookies 重試判斷測試（shouldRetryWithCookies）
 
     /// 迴歸測試：Instagram「empty media response / 需登入 / 改用 cookies」錯誤
