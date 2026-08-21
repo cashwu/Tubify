@@ -1,0 +1,15 @@
+skill	round	round_type	criticals	warnings	decision	fixed_files
+propose	1	full	4	1	next_round	4
+propose	2	micro	0	2	next_round	2
+propose	3	micro	0	0	passed	0
+propose	4	full	0	4	next_round	4
+propose	5	micro	0	0	passed	2
+propose	6	full	1	4	next_round	4
+propose	7	micro	0	0	passed	2
+apply	1	full	0	1	next_round	2
+apply	2	micro	0	0	passed	1
+apply	3	full	0	1	next_round	4
+apply	4	micro	0	1	next_round	4
+apply	5	micro	0	0	passed	4
+apply	6	full	0	1	next_round	1
+apply	7	micro	0	0	passed	0

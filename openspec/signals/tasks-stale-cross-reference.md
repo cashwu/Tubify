@@ -2,11 +2,12 @@
 id: tasks-stale-cross-reference
 type: recurring-finding
 status: open
-occurrences: 1
+occurrences: 2
 first_seen: 2026-06-29
-last_seen: 2026-06-29
+last_seen: 2026-08-21
 links:
   - openspec/changes/route-download-command-by-site/reviews/propose-r2.md
+  - openspec/changes/cleanup-orphaned-part-files/reviews/propose-r4.md
 ---
 
 # tasks.md 跨任務參考在重新編號後失效
@@ -18,3 +19,4 @@ links:
 ## Occurrences
 
 - 2026-06-29 — `route-download-command-by-site` — spectra-propose-plus round 2（Reviewer A，confidence 88，Warning）：新增 task group 4 使 UI／測試群組由 4、5 順延為 5、6 後，task 2.1 的「（見 5.1）」仍指向已變成 `EmptyStateView` 文案的 5.1，而非單元測試任務 6.1。
+- 2026-08-21 — `cleanup-orphaned-part-files` — cash-propose round 4（Reviewer A，confidence 90，Warning，disposition fix-introduced）：新增 tasks 1.14–1.16 後，task 2.3 的「執行任務 1.2 至 1.13 的測試確認全部通過」未擴充範圍，使唯一驗證該輪 Critical 修復的 task 1.14 不會被執行。範圍參考同樣是跨任務字面參考，新增任務時必須一併更新。已改為涵蓋全部新增 task，verdict 為 resolved。

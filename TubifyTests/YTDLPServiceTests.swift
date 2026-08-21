@@ -1155,6 +1155,502 @@ final class YTDLPServiceTests: XCTestCase {
         XCTAssertFalse(YTDLPService.isErrorLine("[download] Destination: /Downloads/video.mp4"))
     }
 
+
+
+    // MARK: - 清理的 seam 測試（失敗處置與刪除原語）
+
+    /// 以 `attemptExecutor` 驅動 `executeDownloadFlow`，回傳 output path 與觀察到的清理結果。
+    private func runCleanupFlow(
+        outputDirectory: String,
+        attempt: @escaping (String) async throws -> String
+    ) async throws -> (path: String, outcome: CleanupOutcome?) {
+        var observed: CleanupOutcome?
+        let path = try await YTDLPService.shared.executeDownloadFlow(
+            taskId: UUID(),
+            url: "https://youtube.com/watch?v=cleanup-seam",
+            firstTemplate: "yt-dlp $youtubeUrl",
+            cookieTemplateProvider: nil,
+            outputDirectory: outputDirectory,
+            subtitleSelection: nil,
+            onProgress: { _ in },
+            attemptExecutor: attempt,
+            cleanupObserver: { observed = $0 }
+        )
+        return (path, observed)
+    }
+
+    private func makeCleanupSeamDirectory() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Tubify-CleanupSeam-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    /// 建立一個滿足除了受測條件以外全部條件的候選檔，其 mtime 早於最終輸出檔。
+    @discardableResult
+    private func makeCandidate(_ directory: URL, _ name: String, mtime: Date) throws -> URL {
+        let url = directory.appendingPathComponent(name)
+        try "partial".write(to: url, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.modificationDate: mtime], ofItemAtPath: url.path)
+        return url
+    }
+
+    @discardableResult
+    private func makeFinalOutput(_ directory: URL, _ name: String, mtime: Date) throws -> URL {
+        let url = directory.appendingPathComponent(name)
+        try "final".write(to: url, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.modificationDate: mtime], ofItemAtPath: url.path)
+        return url
+    }
+
+    func testCleanupAbandonsWhenFinalPathParentDiffersFromOutputDirectory() async throws {
+        let outputDirectory = try makeCleanupSeamDirectory()
+        let elsewhere = try makeCleanupSeamDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: outputDirectory)
+            try? FileManager.default.removeItem(at: elsewhere)
+        }
+
+        let past = Date(timeIntervalSince1970: 1_000_000)
+        // outputDirectory 必須實際存在且快照可取得，否則會先命中 .snapshotUnavailable
+        let finalOutput = try makeFinalOutput(elsewhere, "video.mp4", mtime: past.addingTimeInterval(60))
+
+        let result = try await runCleanupFlow(outputDirectory: outputDirectory.path) { _ in
+            try self.makeCandidate(outputDirectory, "video.f401.mp4.part", mtime: past)
+            return finalOutput.path
+        }
+
+        XCTAssertEqual(result.outcome, .abandoned(.outputDirectoryMismatch))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: outputDirectory.appendingPathComponent("video.f401.mp4.part").path
+        ))
+    }
+
+    func testCleanupAbandonsWhenFinalOutputIsMissing() async throws {
+        let outputDirectory = try makeCleanupSeamDirectory()
+        defer { try? FileManager.default.removeItem(at: outputDirectory) }
+
+        let past = Date(timeIntervalSince1970: 1_000_000)
+        let result = try await runCleanupFlow(outputDirectory: outputDirectory.path) { _ in
+            // 區辨性候選檔：若沒有 finalPathUnavailable 這道 guard 就會被刪除
+            try self.makeCandidate(outputDirectory, "video.f401.mp4.part", mtime: past)
+            // 刻意不建立所回傳的 final path
+            return outputDirectory.appendingPathComponent("video.mp4").path
+        }
+
+        XCTAssertEqual(result.outcome, .abandoned(.finalPathUnavailable))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: outputDirectory.appendingPathComponent("video.f401.mp4.part").path
+        ))
+    }
+
+    func testCleanupAbandonsWhenSnapshotIsUnavailable() async throws {
+        let parent = try makeCleanupSeamDirectory()
+        defer { try? FileManager.default.removeItem(at: parent) }
+        // 取得快照時 outputDirectory 尚不存在
+        let outputDirectory = parent.appendingPathComponent("late", isDirectory: true)
+
+        let past = Date(timeIntervalSince1970: 1_000_000)
+        let result = try await runCleanupFlow(outputDirectory: outputDirectory.path) { _ in
+            try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
+            try self.makeCandidate(outputDirectory, "video.f401.mp4.part", mtime: past)
+            let final = try self.makeFinalOutput(
+                outputDirectory, "video.mp4", mtime: past.addingTimeInterval(60)
+            )
+            return final.path
+        }
+
+        XCTAssertEqual(result.outcome, .abandoned(.snapshotUnavailable))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: outputDirectory.appendingPathComponent("video.f401.mp4.part").path
+        ))
+    }
+
+    func testCleanupAbandonsWhenDirectoryEnumerationFails() async throws {
+        let outputDirectory = try makeCleanupSeamDirectory()
+        // 還原必須以 defer 註冊：中途拋錯時未還原的 0o333 目錄會擋下遞迴刪除
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o755], ofItemAtPath: outputDirectory.path
+            )
+            try? FileManager.default.removeItem(at: outputDirectory)
+        }
+
+        let past = Date(timeIntervalSince1970: 1_000_000)
+        let result = try await runCleanupFlow(outputDirectory: outputDirectory.path) { _ in
+            try self.makeCandidate(outputDirectory, "video.f401.mp4.part", mtime: past)
+            let final = try self.makeFinalOutput(
+                outputDirectory, "video.mp4", mtime: past.addingTimeInterval(60)
+            )
+            // 0o333 使 contentsOfDirectory 失敗，但 fileExists、mtime 讀取與 unlink 仍可行。
+            // 不可用 0o111——那會讓 unlink 也失敗，測試就無法區辨「放棄了」與「想刪但刪不掉」。
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o333], ofItemAtPath: outputDirectory.path
+            )
+            return final.path
+        }
+
+        XCTAssertEqual(result.outcome, .abandoned(.directoryEnumerationFailed))
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: outputDirectory.path
+        )
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: outputDirectory.appendingPathComponent("video.f401.mp4.part").path
+        ))
+    }
+
+    func testCleanupContinuesAfterUnlinkFailure() async throws {
+        let outputDirectory = try makeCleanupSeamDirectory()
+        let locked = outputDirectory.appendingPathComponent("video.f401.mp4.part")
+        defer {
+            _ = try? Process.run(
+                URL(fileURLWithPath: "/usr/bin/chflags"), arguments: ["nouchg", locked.path]
+            ).waitUntilExit()
+            try? FileManager.default.removeItem(at: outputDirectory)
+        }
+
+        let past = Date(timeIntervalSince1970: 1_000_000)
+        let result = try await runCleanupFlow(outputDirectory: outputDirectory.path) { _ in
+            try self.makeCandidate(outputDirectory, "video.f401.mp4.part", mtime: past)
+            // 刻意以非字典序建立三個候選檔。實作把列舉結果收成 Set 後才迭代，而 Swift 的
+            // Set 迭代順序由 per-process 隨機 hash seed 決定；兩個元素只有 2 種排列，
+            // 約半數執行會恰好命中排序後的順序而漏掉迴歸，三個元素把漏檢率降到 1/6。
+            try self.makeCandidate(outputDirectory, "video.f251.webm.part", mtime: past)
+            try self.makeCandidate(outputDirectory, "video.f603.mp4.part", mtime: past)
+            try self.makeCandidate(outputDirectory, "video.f140.m4a.part", mtime: past)
+            let final = try self.makeFinalOutput(
+                outputDirectory, "video.mp4", mtime: past.addingTimeInterval(60)
+            )
+            // immutable flag 使 unlink 以 EPERM 失敗。不可改用 chmod：macOS 的 unlink
+            // 取決於父目錄寫入權限，唯讀檔案仍會被成功刪除。
+            let chflags = try Process.run(
+                URL(fileURLWithPath: "/usr/bin/chflags"), arguments: ["uchg", locked.path]
+            )
+            chflags.waitUntilExit()
+            return final.path
+        }
+
+        XCTAssertEqual(
+            result.outcome,
+            .completed(
+                deleted: ["video.f140.m4a.part", "video.f251.webm.part", "video.f603.mp4.part"],
+                failed: ["video.f401.mp4.part"]
+            )
+        )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: locked.path))
+        for deleted in ["video.f251.webm.part", "video.f603.mp4.part", "video.f140.m4a.part"] {
+            XCTAssertFalse(FileManager.default.fileExists(
+                atPath: outputDirectory.appendingPathComponent(deleted).path
+            ))
+        }
+    }
+
+    func testCleanupContinuesAfterAttributeReadFailure() async throws {
+        let outputDirectory = try makeCleanupSeamDirectory()
+        let denied = outputDirectory.appendingPathComponent("video.f401.mp4.part")
+        defer {
+            _ = try? Process.run(
+                URL(fileURLWithPath: "/bin/chmod"), arguments: ["-N", denied.path]
+            ).waitUntilExit()
+            try? FileManager.default.removeItem(at: outputDirectory)
+        }
+
+        let past = Date(timeIntervalSince1970: 1_000_000)
+        let result = try await runCleanupFlow(outputDirectory: outputDirectory.path) { _ in
+            try self.makeCandidate(outputDirectory, "video.f401.mp4.part", mtime: past)
+            try self.makeCandidate(outputDirectory, "video.f251.webm.part", mtime: past)
+            let final = try self.makeFinalOutput(
+                outputDirectory, "video.mp4", mtime: past.addingTimeInterval(60)
+            )
+            // ACL deny readattr 使該候選檔仍出現在列舉結果中，但屬性讀取整批失敗
+            let acl = try Process.run(
+                URL(fileURLWithPath: "/bin/chmod"),
+                arguments: ["+a", "\(NSUserName()) deny readattr", denied.path]
+            )
+            acl.waitUntilExit()
+            return final.path
+        }
+
+        XCTAssertEqual(
+            result.outcome,
+            .completed(deleted: ["video.f251.webm.part"], failed: ["video.f401.mp4.part"])
+        )
+        // 不能用 fileExists 斷言：deny readattr 同樣會讓它失敗。改以目錄列舉觀察該檔仍在。
+        let remaining = try FileManager.default.contentsOfDirectory(atPath: outputDirectory.path)
+        XCTAssertTrue(remaining.contains("video.f401.mp4.part"))
+        XCTAssertFalse(remaining.contains("video.f251.webm.part"))
+    }
+
+    func testExistingSeamTestsProduceNoFilesystemSideEffects() async throws {
+        // 既有 seam 測試一律傳入不存在的輸出目錄，清理必須對它們完全無副作用。
+        // 使用帶 UUID 的路徑而非字面 /Downloads，避免依賴「該機器上此目錄不存在」的環境前提。
+        let absent = "/Downloads-\(UUID().uuidString)"
+        let result = try await runCleanupFlow(outputDirectory: absent) { _ in
+            "\(absent)/video.mp4"
+        }
+
+        XCTAssertEqual(result.path, "\(absent)/video.mp4")
+        XCTAssertEqual(result.outcome, .abandoned(.snapshotUnavailable))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: "\(absent)/video.mp4"))
+    }
+
+    func testUnlinkRefusesDirectoryAndDoesNotFollowSymlink() throws {
+        let directory = try makeCleanupSeamDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        // 刪除原語測試：不經過候選條件序列。目錄的 isRegularFile 為 false，走完整清理流程
+        // 一定會在型別檢查就被濾掉，unlink 根本不會被呼叫。
+        let candidateDirectory = directory.appendingPathComponent("video.f401.mp4.part")
+        try FileManager.default.createDirectory(at: candidateDirectory, withIntermediateDirectories: true)
+        let inner = candidateDirectory.appendingPathComponent("user-data.txt")
+        try "precious".write(to: inner, atomically: true, encoding: .utf8)
+
+        XCTAssertEqual(unlink(candidateDirectory.path), -1)
+        XCTAssertEqual(errno, EPERM)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: candidateDirectory.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: inner.path))
+
+        // 空目錄是區分 unlink 與 rmdir／remove(3) 的關鍵反例：後兩者同樣不遞迴，卻會刪掉空目錄
+        let emptyDirectory = directory.appendingPathComponent("video.f405.mp4.part")
+        try FileManager.default.createDirectory(at: emptyDirectory, withIntermediateDirectories: true)
+        XCTAssertEqual(unlink(emptyDirectory.path), -1)
+        XCTAssertEqual(errno, EPERM)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: emptyDirectory.path))
+
+        let target = directory.appendingPathComponent("real-target", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let targetInner = target.appendingPathComponent("kept.txt")
+        try "kept".write(to: targetInner, atomically: true, encoding: .utf8)
+        let link = directory.appendingPathComponent("video.f402.mp4.part")
+        try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: target.path)
+
+        XCTAssertEqual(unlink(link.path), 0)
+        XCTAssertNil(try? FileManager.default.attributesOfItem(atPath: link.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: targetInner.path))
+    }
+
+    // MARK: - 孤兒中間檔清理（cleanup-orphaned-part-files）
+
+    /// cleanup fixture 的項目宣告。`stamp` 為 `touch -t` 格式的時間戳。
+    private enum CleanupItem {
+        case file(String, stamp: String)
+        case directory(String, inner: String, stamp: String)
+        case symlink(String, target: String, stamp: String)
+        case final(String, stamp: String)
+
+        var specLine: String {
+            switch self {
+            case let .file(name, stamp):
+                return "file|\(name)|\(stamp)|"
+            case let .directory(name, inner, stamp):
+                return "dir|\(name)|\(stamp)|\(inner)"
+            case let .symlink(name, target, stamp):
+                return "symlink|\(name)|\(stamp)|\(target)"
+            case let .final(name, stamp):
+                return "final|\(name)|\(stamp)|"
+            }
+        }
+    }
+
+    /// 早於最終輸出檔的時間戳，供候選項目使用。
+    private static let cleanupEarlyStamp = "202001010000"
+    /// 最終輸出檔的時間戳，明確晚於 `cleanupEarlyStamp`。
+    private static let cleanupFinalStamp = "202001020000"
+
+    private func writeCleanupSpec(_ fixture: YTDLPFixture, _ items: [CleanupItem]) throws {
+        let contents = items.map(\.specLine).joined(separator: "\n") + "\n"
+        try contents.write(to: fixture.cleanupSpec, atomically: true, encoding: .utf8)
+    }
+
+    /// 以 fixture 的「多 attempt 成功」case 跑完整的 production download 流程。
+    private func runCleanupDownload(
+        _ fixture: YTDLPFixture,
+        marker: String = "CLEANUP_MULTI"
+    ) async throws -> String {
+        let service = YTDLPService(ytdlpPathProvider: { fixture.executable.path })
+        return try await service.download(
+            taskId: UUID(),
+            url: "https://youtube.com/watch?v=cleanup",
+            commandTemplate: "\(marker) $youtubeUrl",
+            outputDirectory: fixture.directory.path,
+            onProgress: { _ in }
+        )
+    }
+
+    private func fixtureFileExists(_ fixture: YTDLPFixture, _ name: String) -> Bool {
+        FileManager.default.fileExists(atPath: fixture.directory.appendingPathComponent(name).path)
+    }
+
+    /// symbolic link 自身是否存在。`fileExists` 會 follow link，dangling link 會回傳 false。
+    private func fixtureSymlinkExists(_ fixture: YTDLPFixture, _ name: String) -> Bool {
+        let path = fixture.directory.appendingPathComponent(name).path
+        return (try? FileManager.default.attributesOfItem(atPath: path)) != nil
+    }
+
+    func testCleanupRemovesPartFileLeftByEarlierAttempt() async throws {
+        let fixture = try makeYTDLPFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        // 主幹取自 spec scenario 的 ##### Example:，也是本 change 的動機案例
+        let stem = "火箭降落的全过程，拍到了！"
+        try writeCleanupSpec(fixture, [
+            .file("\(stem).f401.mp4.part", stamp: Self.cleanupEarlyStamp),
+            .final("\(stem).mp4", stamp: Self.cleanupFinalStamp)
+        ])
+
+        let outputPath = try await runCleanupDownload(fixture)
+
+        XCTAssertEqual(
+            URL(fileURLWithPath: outputPath).resolvingSymlinksInPath().path,
+            fixture.directory.appendingPathComponent("\(stem).mp4").resolvingSymlinksInPath().path
+        )
+        XCTAssertFalse(fixtureFileExists(fixture, "\(stem).f401.mp4.part"))
+        XCTAssertTrue(fixtureFileExists(fixture, "\(stem).mp4"))
+    }
+
+    func testCleanupRemovesYtdlAndFragmentCompanions() async throws {
+        let fixture = try makeYTDLPFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        try writeCleanupSpec(fixture, [
+            .file("video.f401.mp4.part", stamp: Self.cleanupEarlyStamp),
+            .file("video.f401.mp4.ytdl", stamp: Self.cleanupEarlyStamp),
+            .file("video.f251.webm.part-Frag12", stamp: Self.cleanupEarlyStamp),
+            .final("video.mp4", stamp: Self.cleanupFinalStamp)
+        ])
+
+        _ = try await runCleanupDownload(fixture)
+
+        XCTAssertFalse(fixtureFileExists(fixture, "video.f401.mp4.part"))
+        XCTAssertFalse(fixtureFileExists(fixture, "video.f401.mp4.ytdl"))
+        XCTAssertFalse(fixtureFileExists(fixture, "video.f251.webm.part-Frag12"))
+    }
+
+    func testCleanupKeepsFinalOutputAndSubtitleFile() async throws {
+        let fixture = try makeYTDLPFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        try writeCleanupSpec(fixture, [
+            .file("video.zh-TW.srt", stamp: Self.cleanupEarlyStamp),
+            .final("video.mp4", stamp: Self.cleanupFinalStamp)
+        ])
+
+        _ = try await runCleanupDownload(fixture)
+
+        XCTAssertTrue(fixtureFileExists(fixture, "video.mp4"))
+        XCTAssertTrue(fixtureFileExists(fixture, "video.zh-TW.srt"))
+    }
+
+    func testCleanupKeepsPartFileOfDifferentStem() async throws {
+        let fixture = try makeYTDLPFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        try writeCleanupSpec(fixture, [
+            .file("other.f401.mp4.part", stamp: Self.cleanupEarlyStamp),
+            .final("video.mp4", stamp: Self.cleanupFinalStamp)
+        ])
+
+        _ = try await runCleanupDownload(fixture)
+
+        XCTAssertTrue(fixtureFileExists(fixture, "other.f401.mp4.part"))
+    }
+
+    func testCleanupKeepsPartFileWhoseStemIsDottedPrefixExtension() async throws {
+        let fixture = try makeYTDLPFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        try writeCleanupSpec(fixture, [
+            .file("Lecture 1.5.f401.mp4.part", stamp: Self.cleanupEarlyStamp),
+            .final("Lecture 1.mp4", stamp: Self.cleanupFinalStamp)
+        ])
+
+        _ = try await runCleanupDownload(fixture)
+
+        XCTAssertTrue(fixtureFileExists(fixture, "Lecture 1.5.f401.mp4.part"))
+        XCTAssertTrue(fixtureFileExists(fixture, "Lecture 1.mp4"))
+    }
+
+    func testCleanupKeepsPartFilePresentBeforeDownloadStarted() async throws {
+        let fixture = try makeYTDLPFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        // 下載開始前就存在，因此會落入目錄快照。mtime 必須明確設早於最終輸出檔——
+        // 否則寫入當下的真實時間會晚於 fixture 的 2020 年最終檔，該檔會被 mtime 條件攔下，
+        // 快照條件就永遠不會是唯一的攔截點，測試也就驗不到它。
+        let preexisting = fixture.directory.appendingPathComponent("video.mp4.part")
+        try "stale".write(to: preexisting, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: 1_000_000)],
+            ofItemAtPath: preexisting.path
+        )
+
+        try writeCleanupSpec(fixture, [
+            .final("video.mp4", stamp: Self.cleanupFinalStamp)
+        ])
+
+        _ = try await runCleanupDownload(fixture)
+
+        XCTAssertTrue(fixtureFileExists(fixture, "video.mp4.part"))
+    }
+
+    func testCleanupKeepsCandidateWhoseMtimeIsNotEarlierThanFinalOutput() async throws {
+        let fixture = try makeYTDLPFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        try writeCleanupSpec(fixture, [
+            // 候選檔 mtime 晚於最終輸出檔
+            .file("video.f401.mp4.part", stamp: "202001030000"),
+            .final("video.mp4", stamp: Self.cleanupFinalStamp)
+        ])
+
+        _ = try await runCleanupDownload(fixture)
+
+        XCTAssertTrue(fixtureFileExists(fixture, "video.f401.mp4.part"))
+    }
+
+    func testCleanupKeepsEverythingWhenDownloadFails() async throws {
+        let fixture = try makeYTDLPFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        try writeCleanupSpec(fixture, [
+            .file("video.f401.mp4.part", stamp: Self.cleanupEarlyStamp)
+        ])
+
+        do {
+            _ = try await runCleanupDownload(fixture, marker: "CLEANUP_FAIL")
+            XCTFail("預期下載失敗")
+        } catch let error as YTDLPError {
+            guard case .executionFailed = error else {
+                return XCTFail("預期 executionFailed，實際為 \(error)")
+            }
+        }
+
+        XCTAssertTrue(fixtureFileExists(fixture, "video.f401.mp4.part"))
+        // 單次 attempt 即結束，未套用 2/5/10 秒 backoff
+        let invocations = try String(contentsOf: fixture.log, encoding: .utf8)
+            .split(separator: "\n")
+        XCTAssertEqual(invocations.filter { $0.contains("CLEANUP_FAIL") }.count, 1)
+    }
+
+    func testCleanupKeepsDirectoryAndSymlinkMatchingCandidateShape() async throws {
+        let fixture = try makeYTDLPFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        try writeCleanupSpec(fixture, [
+            .directory("video.f401.mp4.part", inner: "user-data.txt", stamp: Self.cleanupEarlyStamp),
+            .symlink("video.f402.mp4.part", target: "video.mp4", stamp: Self.cleanupEarlyStamp),
+            .final("video.mp4", stamp: Self.cleanupFinalStamp)
+        ])
+
+        _ = try await runCleanupDownload(fixture)
+
+        // 目錄兩項斷言的實際保護來源是 unlink 對目錄的 EPERM（見 testUnlinkRefusesDirectory…），
+        // 型別檢查的鑑別力由下方的 symlink 斷言承擔——symlink 若未被型別檢查排除就會被 unlink 刪掉。
+        XCTAssertTrue(fixtureFileExists(fixture, "video.f401.mp4.part"))
+        XCTAssertTrue(fixtureFileExists(fixture, "video.f401.mp4.part/user-data.txt"))
+        XCTAssertTrue(fixtureSymlinkExists(fixture, "video.f402.mp4.part"))
+    }
+
     private struct YTDLPFixture {
         let directory: URL
         let executable: URL
@@ -1164,6 +1660,10 @@ final class YTDLPServiceTests: XCTestCase {
         let oldMarker: URL
         let newOutput: URL
         let writerPID: URL
+        /// 清理測試用的項目清單。每行格式為 `kind|relativePath|touchStamp|extra`，以 `|` 分隔
+        /// 是因為候選檔名含有空格（例如 `Lecture 1.5.f401.mp4.part`）。
+        /// kind 為 `file`／`dir`／`symlink`／`final`；`dir` 的 extra 是內層檔名，`symlink` 的 extra 是 target。
+        let cleanupSpec: URL
     }
 
     private func makeYTDLPFixture() throws -> YTDLPFixture {
@@ -1178,12 +1678,55 @@ final class YTDLPServiceTests: XCTestCase {
         let oldMarker = directory.appendingPathComponent("old.marker")
         let newOutput = directory.appendingPathComponent("new.mp4")
         let writerPID = directory.appendingPathComponent("writer.pid")
+        let cleanupSpec = directory.appendingPathComponent("cleanup-spec.txt")
         let script = """
         #!/bin/sh
         log=\(shellQuote(log.path))
         pid=\(shellQuote(pid.path))
+        cleanupspec=\(shellQuote(cleanupSpec.path))
         echo "$*" >> "$log"
         echo "$$" > "$pid"
+
+        # 依 cleanup-spec.txt 在目前工作目錄（即 outputDirectory）建立項目。
+        # 這些項目必須在 invocation 期間建立，若由測試在呼叫 download 之前建立，
+        # 會落入清理的目錄快照而被提前排除，測試就走不到後續條件。
+        build_cleanup_items() {
+          want=$1
+          [ -f "$cleanupspec" ] || return 0
+          while IFS='|' read -r kind rel stamp extra; do
+            [ -z "$kind" ] && continue
+            [ "$kind" = "$want" ] || continue
+            case "$kind" in
+              file)
+                : > "$rel"
+                touch -t "$stamp" "$rel"
+                ;;
+              dir)
+                mkdir -p "$rel"
+                : > "$rel/$extra"
+                # 內層檔案的建立會更新目錄 mtime，因此 touch 必須排在其後
+                touch -t "$stamp" "$rel"
+                ;;
+              symlink)
+                ln -s "$extra" "$rel"
+                # -h 才是設定連結自身的 mtime；不帶 -h 會 follow 到 target
+                touch -h -t "$stamp" "$rel"
+                ;;
+            esac
+          done < "$cleanupspec"
+        }
+
+        emit_final() {
+          [ -f "$cleanupspec" ] || return 0
+          while IFS='|' read -r kind rel stamp extra; do
+            [ "$kind" = "final" ] || continue
+            : > "$rel"
+            touch -t "$stamp" "$rel"
+            printf 'FINAL_PATH:%s\\n' "$PWD/$rel"
+            return 0
+          done < "$cleanupspec"
+        }
+
         case "$*" in
           *ACTIVE*)
             touch \(shellQuote(activeMarker.path))
@@ -1256,6 +1799,22 @@ final class YTDLPServiceTests: XCTestCase {
             echo "$!" > \(shellQuote(writerPID.path))
             exit 1
             ;;
+          *CLEANUP_MULTI*)
+            if [ "$(grep -c 'CLEANUP_MULTI' "$log" 2>/dev/null || true)" -eq 1 ]; then
+              build_cleanup_items file
+              build_cleanup_items dir
+              build_cleanup_items symlink
+              printf 'ERROR: unable to download video data: HTTP Error 403: Forbidden\\n' >&2
+              exit 1
+            fi
+            emit_final
+            ;;
+          *CLEANUP_FAIL*)
+            build_cleanup_items file
+            printf '[download] Giving up after 10 retries\\n' >&2
+            printf 'ERROR: unable to download video data: HTTP Error 403: Forbidden\\n' >&2
+            exit 1
+            ;;
           *NEW*)
             touch \(shellQuote(newOutput.path))
             printf 'FINAL_PATH:%s\\n' \(shellQuote(newOutput.path))
@@ -1273,7 +1832,8 @@ final class YTDLPServiceTests: XCTestCase {
             activeMarker: activeMarker,
             oldMarker: oldMarker,
             newOutput: newOutput,
-            writerPID: writerPID
+            writerPID: writerPID,
+            cleanupSpec: cleanupSpec
         )
     }
 

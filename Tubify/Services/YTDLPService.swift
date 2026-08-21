@@ -1,6 +1,31 @@
 import Foundation
 import Darwin
 
+/// 一次孤兒中間檔清理的結果，供測試觀察每條 return 路徑。
+///
+/// 清理的致命與非致命失敗都只寫日誌，而 `TubifyLogger` 是 `os.Logger`、`LogFileManager`
+/// 寫入真實的 `~/Library/Logs/Tubify/`，兩者都無法在測試中斷言。沒有這個型別，
+/// 「放棄整輪清理」這個事件本身就無法被驗收。
+enum CleanupOutcome: Equatable {
+    /// 判斷前提不成立，整輪清理放棄。
+    enum AbandonReason: Equatable {
+        /// 下載開始前的目錄快照取不到，無法證明候選檔是本次產生的
+        case snapshotUnavailable
+        /// 最終輸出路徑的父目錄與本次下載的輸出目錄不同
+        case outputDirectoryMismatch
+        /// 最終輸出檔不存在，或讀不到它的 content modification date
+        case finalPathUnavailable
+        /// 輸出目錄列舉失敗
+        case directoryEnumerationFailed
+    }
+
+    case abandoned(AbandonReason)
+    /// `deleted` 為成功刪除的檔名，`failed` 為屬性讀取失敗或 `unlink` 失敗而跳過的候選檔名。
+    /// 被名稱層條件、型別檢查或 mtime 條件過濾掉的項目兩者皆不列入——它們不是處理失敗，
+    /// 而是不符合候選資格。兩者皆為檔名而非完整路徑，且已排序。
+    case completed(deleted: [String], failed: [String])
+}
+
 /// 線程安全的下載結果容器
 final class DownloadResultHolder: @unchecked Sendable {
     private let lock = NSLock()
@@ -274,9 +299,14 @@ actor YTDLPService {
         attemptExecutor: ((String) async throws -> String)? = nil,
         sleeper: ((UInt64) async throws -> Void)? = nil,
         cancellationProbe: (() -> Bool)? = nil,
-        operationID: DownloadOperationID? = nil
+        operationID: DownloadOperationID? = nil,
+        cleanupObserver: ((CleanupOutcome) -> Void)? = nil
     ) async throws -> String {
         let flowOperationID = operationID ?? UUID()
+
+        // 快照必須在第一個 attempt 之前取得：孤兒中間檔是本次呼叫的某個 attempt 產生的，
+        // 一定不在快照中，而下載開始前就存在的第三方 partial 檔一定在。
+        let preexistingEntryNames = directoryEntryNames(outputDirectory)
         let executeAttempt = attemptExecutor ?? { [self] processedTemplate in
             try await executeDownload(
                 taskId: taskId,
@@ -289,8 +319,9 @@ actor YTDLPService {
             )
         }
 
+        let outputPath: String
         do {
-            return try await executeWithTransient403Retries(
+            outputPath = try await executeWithTransient403Retries(
                 taskId: taskId,
                 operationID: flowOperationID,
                 template: firstTemplate,
@@ -306,7 +337,19 @@ actor YTDLPService {
                 throw error
             }
 
-            guard let cookieTemplate = cookieTemplateProvider() else {
+            if let cookieTemplate = cookieTemplateProvider() {
+                TubifyLogger.ytdlp.info("下載失敗（疑似需要登入或缺少 PO Token），改用 Safari cookies 重試: \(url)")
+                TubifyLogger.cookies.info("轉換 Safari cookies 文件後重試")
+                outputPath = try await executeWithTransient403Retries(
+                    taskId: taskId,
+                    operationID: flowOperationID,
+                    template: cookieTemplate,
+                    allowTransient403Retries: true,
+                    executeAttempt: executeAttempt,
+                    sleeper: sleeper,
+                    cancellationProbe: cancellationProbe
+                )
+            } else {
                 // 導出失敗，多半是缺少完整磁碟存取權限。登入類錯誤重試無益，直接拋出；
                 // video-data 403 仍可能是暫時性的，退回原 template 補做 backoff，
                 // 不因 cookies 不可用而連帶失去這層韌性。
@@ -314,7 +357,7 @@ actor YTDLPService {
                 guard Self.isDownloadVideoData403(error) else { throw error }
 
                 TubifyLogger.ytdlp.info("無 cookies 可用，改以原指令重試 video-data 403: \(url)")
-                return try await executeWithTransient403Retries(
+                outputPath = try await executeWithTransient403Retries(
                     taskId: taskId,
                     operationID: flowOperationID,
                     template: firstTemplate,
@@ -324,19 +367,135 @@ actor YTDLPService {
                     cancellationProbe: cancellationProbe
                 )
             }
-
-            TubifyLogger.ytdlp.info("下載失敗（疑似需要登入或缺少 PO Token），改用 Safari cookies 重試: \(url)")
-            TubifyLogger.cookies.info("轉換 Safari cookies 文件後重試")
-            return try await executeWithTransient403Retries(
-                taskId: taskId,
-                operationID: flowOperationID,
-                template: cookieTemplate,
-                allowTransient403Retries: true,
-                executeAttempt: executeAttempt,
-                sleeper: sleeper,
-                cancellationProbe: cancellationProbe
-            )
         }
+
+        // 單一成功出口：三條成功路徑共用這段收尾。放在 executeDownload 內會在每個 attempt
+        // 後執行，可能刪掉當前 attempt 正在使用的續傳檔。
+        cleanupOrphanedPartFiles(
+            finalPath: outputPath,
+            outputDirectory: outputDirectory,
+            preexistingEntryNames: preexistingEntryNames,
+            taskId: taskId,
+            observer: cleanupObserver
+        )
+        return outputPath
+    }
+
+    /// 目錄直接內容的檔名集合；失敗時回傳 nil。
+    private func directoryEntryNames(_ directory: String) -> Set<String>? {
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: directory) else {
+            return nil
+        }
+        return Set(names)
+    }
+
+    /// 候選中間檔的形態：去掉 `<stem>.` 前綴後的剩餘部分必須整體符合此式。
+    ///
+    /// 只比對 `<stem>.` 前綴並不足夠——最終檔為 `Lecture 1.mp4` 時，另一個任務的
+    /// `Lecture 1.5.f401.mp4.part` 同樣以 `Lecture 1.` 開頭，但其剩餘部分 `5.f401.mp4.part`
+    /// 不符合此式而被排除。
+    private static let orphanRemainderPattern = try? NSRegularExpression(
+        pattern: "^(f[0-9]+\\.)?[A-Za-z0-9]{1,5}\\.(part|ytdl|part-Frag[0-9]+)$"
+    )
+
+    private static func matchesOrphanRemainder(_ remainder: String) -> Bool {
+        guard let regex = orphanRemainderPattern else { return false }
+        let range = NSRange(remainder.startIndex..., in: remainder)
+        return regex.firstMatch(in: remainder, range: range) != nil
+    }
+
+    /// 清除本次下載較早失敗 attempt 留下的孤兒中間檔。
+    ///
+    /// 跨 process 重試會啟動另一個 yt-dlp process，而 yt-dlp 只清理自己該次 process 用到的
+    /// 中間檔。當重試選中不同格式時，前一個 attempt 的 partial 檔既不會被續傳也不會被刪除。
+    ///
+    /// 下載目錄是共用的（多個並行任務，預設 `~/Downloads` 也是瀏覽器的下載目的地），因此
+    /// 刪除條件刻意設計得很窄：寧可漏刪也不可誤刪。任何失敗都只記錄日誌，不改變下載結果。
+    private func cleanupOrphanedPartFiles(
+        finalPath: String,
+        outputDirectory: String,
+        preexistingEntryNames: Set<String>?,
+        taskId: UUID,
+        observer: ((CleanupOutcome) -> Void)?
+    ) {
+        func abandon(_ reason: CleanupOutcome.AbandonReason, _ message: String) {
+            TubifyLogger.ytdlp.warning("清理孤兒中間檔放棄 taskId=\(taskId.uuidString) 原因=\(String(describing: reason)): \(message)")
+            observer?(.abandoned(reason))
+        }
+
+        // 快照取不到就無法證明候選檔是本次產生的
+        guard let preexistingEntryNames else {
+            return abandon(.snapshotUnavailable, "下載開始前的目錄快照取得失敗")
+        }
+
+        let finalURL = URL(fileURLWithPath: finalPath)
+        let parentDirectory = finalURL.deletingLastPathComponent()
+        // 列舉目錄取自 finalPath 的 parent，避免 stem 與列舉範圍來自不同來源
+        guard parentDirectory.standardizedFileURL.path
+            == URL(fileURLWithPath: outputDirectory).standardizedFileURL.path else {
+            return abandon(.outputDirectoryMismatch, "最終輸出路徑不在本次下載的輸出目錄內: \(finalPath)")
+        }
+
+        guard FileManager.default.fileExists(atPath: finalPath),
+              let finalModifiedAt = try? finalURL.resourceValues(forKeys: [.contentModificationDateKey])
+                  .contentModificationDate else {
+            return abandon(.finalPathUnavailable, "最終輸出檔不存在或無法讀取 mtime: \(finalPath)")
+        }
+
+        guard let entryNames = directoryEntryNames(parentDirectory.path) else {
+            return abandon(.directoryEnumerationFailed, "輸出目錄列舉失敗: \(parentDirectory.path)")
+        }
+
+        let finalName = finalURL.lastPathComponent
+        let stemPrefix = finalURL.deletingPathExtension().lastPathComponent + "."
+        var deleted: [String] = []
+        var failed: [String] = []
+
+        for name in entryNames {
+            // 名稱層條件：不在快照中、以 <stem>. 為前綴、剩餘部分符合中間檔形態。
+            // path != finalPath 是 defence-in-depth——最終輸出檔的剩餘部分恰為單一副檔名而
+            // 不含點，形態比對已必然排除它。
+            guard !preexistingEntryNames.contains(name),
+                  name.hasPrefix(stemPrefix),
+                  Self.matchesOrphanRemainder(String(name.dropFirst(stemPrefix.count))),
+                  name != finalName else {
+                continue
+            }
+
+            // 型別與 mtime 來自同一次 getattrlist，必須一併讀取：拆成兩條分支時，排在前面的
+            // 型別檢查會完全遮蔽後者，使 mtime 讀取失敗成為不可達的死分支。
+            // 另刻意新建 URL 而非取用 contentsOfDirectory(at:includingPropertiesForKeys:)
+            // 的預取快取——預取值會把判定與 unlink 之間的窗口擴大到整個迴圈。
+            let candidateURL = URL(fileURLWithPath: parentDirectory.path + "/" + name)
+            guard let values = try? candidateURL.resourceValues(
+                forKeys: [.isRegularFileKey, .contentModificationDateKey]
+            ), let isRegularFile = values.isRegularFile,
+               let modifiedAt = values.contentModificationDate else {
+                TubifyLogger.ytdlp.warning("清理孤兒中間檔略過 taskId=\(taskId.uuidString) 檔名=\(name): 屬性讀取失敗")
+                failed.append(name)
+                continue
+            }
+
+            // 型別檢查是提早排除，不是最終保證；「對任何目錄一律失敗」由下方的 unlink 承擔
+            guard isRegularFile, modifiedAt < finalModifiedAt else { continue }
+
+            // unlink 對任何目錄一律以 EPERM 失敗（與是否為空無關）且不 follow symbolic link，
+            // 因此即使路徑在型別檢查之後被替換成目錄，該目錄也不會被移除。
+            // removeItem 會遞迴刪除，rmdir 則會刪掉空目錄，兩者都沒有這個保證。
+            if unlink(candidateURL.path) == 0 {
+                TubifyLogger.ytdlp.info("清理孤兒中間檔 taskId=\(taskId.uuidString) 已刪除=\(name)")
+                deleted.append(name)
+            } else {
+                // 立即擷取：errno 會被後續任何系統呼叫覆寫，不能依賴日誌插值的求值順序
+                let unlinkErrno = errno
+                TubifyLogger.ytdlp.warning("清理孤兒中間檔略過 taskId=\(taskId.uuidString) 檔名=\(name): unlink 失敗 errno=\(unlinkErrno)")
+                failed.append(name)
+            }
+        }
+
+        // contentsOfDirectory 的回傳順序在 APFS 上既非建立順序也非字典序，排序後才能被
+        // 相等性斷言穩定比較
+        observer?(.completed(deleted: deleted.sorted(), failed: failed.sorted()))
     }
 
     /// 對單一 processed template 執行最多一次 initial attempt 與三次 target 403 retry。
