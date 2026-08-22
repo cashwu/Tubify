@@ -323,7 +323,13 @@ final class YouTubeMetadataServiceTests: XCTestCase {
 
     private static let mediaOptionsURL = "https://www.youtube.com/watch?v=abc123"
     private static let cookiesArguments = ["--cookies-from-browser", "safari"]
-    private static let baseArguments = ["-J", "--skip-download", "--no-playlist"]
+    /// 依 design D5，本常數刻意以獨立字面值作為 oracle，不引用
+    /// `YTDLPService.youtubePlayerClientArgumentValue`：測試與被測程式共用同一個值時，
+    /// 該值被改動就無法被偵測。
+    private static let baseArguments = [
+        "-J", "--skip-download", "--no-playlist",
+        "--extractor-args", "youtube:player_client=default,web_embedded"
+    ]
 
     /// 有可用 cookies 時，第一次 invocation 的引數仍不得含 cookies 參數。
     func testFirstMediaOptionsInvocationOmitsCookies() async throws {
@@ -406,6 +412,41 @@ final class YouTubeMetadataServiceTests: XCTestCase {
             Self.baseArguments + Self.cookiesArguments + [Self.mediaOptionsURL]
         )
         XCTAssertEqual(options.subtitles.map(\.languageCode), ["zh"])
+    }
+
+    /// 兩次 invocation 都恰帶一組 player client 的 extractor args。
+    /// 只驗「有沒有注入、注入幾次」，因此引用 `YTDLPService.youtubePlayerClientArgumentValue`；
+    /// 該值本身的正確性由 `baseArguments` 的獨立字面值 oracle 承接（design D5）。
+    func testBothMediaOptionsInvocationsCarryExactlyOnePlayerClientArgument() async throws {
+        let fixture = try makeMetadataFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        try fixture.setCall(
+            1,
+            exitCode: 1,
+            stdout: "",
+            stderr: "ERROR: [youtube] abc123: Private video. Sign in if you've been granted access to this video"
+        )
+        try fixture.setCall(2, exitCode: 0, stdout: #"{"subtitles": {"zh": [{"ext": "vtt"}]}}"#)
+
+        let service = YouTubeMetadataService(ytdlpPathProvider: { fixture.executable.path })
+        _ = try await service.fetchMediaOptions(
+            url: Self.mediaOptionsURL,
+            cookiesArguments: Self.cookiesArguments
+        )
+
+        XCTAssertEqual(fixture.invocationCount, 2)
+        for index in 1...2 {
+            let arguments = try XCTUnwrap(fixture.arguments(at: index))
+            let flagPositions = arguments.indices.filter { arguments[$0] == "--extractor-args" }
+            XCTAssertEqual(flagPositions.count, 1, "第 \(index) 次 invocation 的 --extractor-args 應恰為 1 個")
+            let flagIndex = try XCTUnwrap(flagPositions.first)
+            XCTAssertTrue(arguments.indices.contains(flagIndex + 1), "第 \(index) 次 invocation 的 --extractor-args 後方缺少值")
+            XCTAssertEqual(
+                arguments[flagIndex + 1],
+                YTDLPService.youtubePlayerClientArgumentValue,
+                "第 \(index) 次 invocation 的 --extractor-args 值不符"
+            )
+        }
     }
 
     /// 兩次皆失敗時以第二次的訊息回報，且不做第三次 invocation。

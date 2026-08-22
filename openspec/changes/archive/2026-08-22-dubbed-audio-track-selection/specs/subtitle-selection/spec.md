@@ -1,0 +1,66 @@
+## MODIFIED Requirements
+
+### Requirement: 媒體選項偵測優先不帶 cookies
+
+系統取得某個影片的媒體選項時，SHALL 先以不帶 cookies 的 yt-dlp invocation 查詢，使公開影片的使用者上傳字幕不會因為帶上帳號 cookies 而從查詢結果中消失。只有在不帶 cookies 的查詢以非 0 exit code 失敗、且失敗訊息符合既有的「需登入」訊號、且呼叫端確實提供了 cookies 參數時，系統才 SHALL 以帶 cookies 的 invocation 重試一次。單次媒體選項查詢的 yt-dlp invocation 次數 MUST NOT 超過 2 次。兩次 invocation 的引數都 SHALL 包含指定 player client 的 `--extractor-args` 與其值。
+
+#### Scenario: 有可用 cookies 時第一次查詢仍不帶 cookies
+
+- **GIVEN** 呼叫端提供了非空的 cookies 參數
+- **WHEN** 系統查詢某個影片的媒體選項
+- **THEN** 第一次 yt-dlp invocation 的引數 MUST NOT 包含任何該 cookies 參數的元素
+- **AND** 第一次 yt-dlp invocation SHALL 保留既有的 `-J`、`--skip-download`、`--no-playlist` 三個旗標、指定 player client 的 `--extractor-args` 與其值，以及目標 url，且不含其他引數
+
+##### Example: 公開影片的字幕軌不因 cookies 消失
+
+- **GIVEN** 某公開影片含一軌使用者上傳的 `zh` 字幕
+- **AND** 呼叫端提供了非空的 cookies 參數
+- **WHEN** 系統查詢該影片的媒體選項
+- **THEN** 查詢結果 SHALL 包含 `zh` 字幕軌
+- **AND** 該影片 SHALL 進入等待媒體選擇的狀態而非直接排入下載佇列
+
+#### Scenario: 第一次查詢成功則不重試
+
+- **GIVEN** 呼叫端提供了非空的 cookies 參數
+- **WHEN** 不帶 cookies 的第一次 invocation 以 exit code 0 結束
+- **THEN** 系統 SHALL 回傳該次結果
+- **AND** 系統 MUST NOT 執行第二次 invocation
+- **AND** 該次結果是否包含任何字幕軌或音軌 MUST NOT 改變此判定
+
+#### Scenario: 需登入錯誤且有 cookies 時帶 cookies 重試
+
+- **GIVEN** 呼叫端提供了非空的 cookies 參數
+- **AND** 不帶 cookies 的第一次 invocation 以非 0 exit code 失敗
+- **WHEN** 失敗訊息符合既有的「需登入」訊號
+- **THEN** 系統 SHALL 執行第二次 invocation，其引數 SHALL 恰為第一次 invocation 的引數加上該 cookies 參數的全部元素，既有的 `-J`、`--skip-download`、`--no-playlist`、指定 player client 的 `--extractor-args` 與其值，以及目標 url MUST 全數保留
+- **AND** 第二次 invocation 的結果 SHALL 作為本次媒體選項查詢的結果
+
+#### Scenario: 重試後仍失敗以第二次的訊息回報
+
+- **GIVEN** 系統已依「需登入」訊號執行了帶 cookies 的第二次 invocation
+- **WHEN** 第二次 invocation 亦以非 0 exit code 失敗
+- **THEN** 系統 SHALL 以第二次失敗的訊息回報媒體選項查詢失敗
+- **AND** 系統 MUST NOT 執行第三次 invocation
+
+#### Scenario: 非需登入錯誤不重試
+
+- **GIVEN** 呼叫端提供了非空的 cookies 參數
+- **AND** 不帶 cookies 的第一次 invocation 以非 0 exit code 失敗
+- **WHEN** 失敗訊息不符合既有的「需登入」訊號
+- **THEN** 系統 MUST NOT 執行第二次 invocation
+- **AND** 系統 SHALL 以第一次失敗的訊息回報媒體選項查詢失敗
+
+#### Scenario: 沒有可用 cookies 時不重試
+
+- **GIVEN** 呼叫端提供的 cookies 參數為空
+- **AND** 不帶 cookies 的第一次 invocation 失敗且訊息符合「需登入」訊號
+- **WHEN** 系統處理該次失敗
+- **THEN** 系統 MUST NOT 執行第二次 invocation
+- **AND** 系統 SHALL 以第一次失敗的訊息回報媒體選項查詢失敗
+
+#### Scenario: 與 exit code 無關的失敗不觸發重試
+
+- **GIVEN** 呼叫端提供了非空的 cookies 參數
+- **WHEN** 媒體選項查詢因找不到 yt-dlp 執行檔或無法啟動 process 而失敗
+- **THEN** 系統 MUST NOT 執行帶 cookies 的重試
+- **AND** 系統 SHALL 沿用既有的錯誤回報方式

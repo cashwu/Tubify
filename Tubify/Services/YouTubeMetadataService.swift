@@ -690,7 +690,9 @@ actor YouTubeMetadataService {
         TubifyLogger.ytdlp.info("獲取媒體選項: \(url)")
 
         // 使用 --skip-download 避免 yt-dlp 嘗試驗證下載格式導致 403 錯誤
-        let baseArguments = ["-J", "--skip-download", "--no-playlist"]
+        // 明確指定 player client：yt-dlp 自選的預設 client 只回傳原聲音軌，
+        // 配音音軌不會出現在 formats 中
+        let baseArguments = ["-J", "--skip-download", "--no-playlist"] + YTDLPService.youtubeExtractorArguments
 
         // 第一次一律不帶 cookies：帶上帳號 cookies 會讓 yt-dlp 改用不回傳 subtitles 的
         // client，公開影片的使用者上傳字幕會因此從查詢結果中消失

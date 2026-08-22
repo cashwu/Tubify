@@ -785,6 +785,274 @@ final class YTDLPServiceTests: XCTestCase {
         XCTAssertEqual(YTDLPErrorClassification.classify(unavailableError), .other)
     }
 
+    // MARK: - 下載範本注入 extractor args
+
+    /// argv 中等於 `--extractor-args` 的位置；用於同時斷言注入次數與其值。
+    private func extractorArgsPositions(in arguments: [String]) -> [Int] {
+        arguments.indices.filter { arguments[$0] == "--extractor-args" }
+    }
+
+    /// 選定音軌語言時，第一次 invocation 必須帶上共用常數指定的 player client。
+    func testDownloadWithSelectedAudioLanguageInjectsExtractorArgs() async throws {
+        let fixture = try makeYTDLPFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let service = YTDLPService(ytdlpPathProvider: { fixture.executable.path })
+        _ = try await service.download(
+            taskId: UUID(),
+            url: "https://youtube.com/watch?v=extractor-args",
+            commandTemplate: "NEW -f \"bv*+ba\" $youtubeUrl",
+            outputDirectory: fixture.directory.path,
+            audioSelection: AudioSelection(selectedLanguage: "ja"),
+            onProgress: { _ in }
+        )
+
+        let arguments = try XCTUnwrap(fixture.arguments(at: 1))
+        let positions = extractorArgsPositions(in: arguments)
+        XCTAssertEqual(positions.count, 1)
+        let flagIndex = try XCTUnwrap(positions.first)
+        XCTAssertTrue(arguments.indices.contains(flagIndex + 1), "--extractor-args 後方缺少值")
+        XCTAssertEqual(arguments[flagIndex + 1], YTDLPService.youtubePlayerClientArgumentValue)
+    }
+
+    /// 未選定語言時不得注入。兩個 case 缺一不可：`audioSelection` 為 nil 會在
+    /// `if let audioSel` 就出局，走不到 `selectedLanguage` 的判定；持久化的舊任務可能帶著
+    /// `selectedLanguage` 為 nil 的選擇復原，那條路徑只有第二個 case 走得到。
+    func testDownloadWithoutSelectedAudioLanguageOmitsExtractorArgs() async throws {
+        for audioSelection in [nil, AudioSelection(selectedLanguage: nil)] {
+            let fixture = try makeYTDLPFixture()
+            defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+            let service = YTDLPService(ytdlpPathProvider: { fixture.executable.path })
+            _ = try await service.download(
+                taskId: UUID(),
+                url: "https://youtube.com/watch?v=no-audio-selection",
+                commandTemplate: "NEW -f \"bv*+ba\" $youtubeUrl",
+                outputDirectory: fixture.directory.path,
+                audioSelection: audioSelection,
+                onProgress: { _ in }
+            )
+
+            let arguments = try XCTUnwrap(fixture.arguments(at: 1))
+            XCTAssertFalse(
+                arguments.contains(where: { $0 == "--extractor-args" || $0.hasPrefix("--extractor-args=") }),
+                "audioSelection=\(String(describing: audioSelection)) 不應注入 extractor args"
+            )
+        }
+    }
+
+    /// 範本已自帶 `--extractor-args` 時不覆蓋也不重複注入。範本同時具備語言選擇與 `-f`，
+    /// 確保測試走到的是「已含引數」的判定分支，而非在更早的條件就出局。
+    func testDownloadDoesNotOverrideTemplateProvidedExtractorArgs() async throws {
+        let fixture = try makeYTDLPFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let service = YTDLPService(ytdlpPathProvider: { fixture.executable.path })
+        _ = try await service.download(
+            taskId: UUID(),
+            url: "https://youtube.com/watch?v=template-extractor-args",
+            commandTemplate: "NEW -f \"bv*+ba\" --extractor-args \"youtube:player_client=web_embedded\" $youtubeUrl",
+            outputDirectory: fixture.directory.path,
+            audioSelection: AudioSelection(selectedLanguage: "ja"),
+            onProgress: { _ in }
+        )
+
+        let arguments = try XCTUnwrap(fixture.arguments(at: 1))
+        let positions = extractorArgsPositions(in: arguments)
+        XCTAssertEqual(positions.count, 1)
+        let flagIndex = try XCTUnwrap(positions.first)
+        XCTAssertTrue(arguments.indices.contains(flagIndex + 1), "--extractor-args 後方缺少值")
+        XCTAssertEqual(arguments[flagIndex + 1], "youtube:player_client=web_embedded")
+    }
+
+    /// 範本含 cookies 時，第一次 invocation 已移除 cookies 但仍帶 extractor args。
+    /// 兩項合起來可鑑別「注入晚於 `firstTemplate` 計算」的錯誤實作：那種寫法下第 1 次
+    /// invocation 不會帶有 extractor args。
+    func testDownloadInjectsExtractorArgsBeforeCookiesAreStripped() async throws {
+        let fixture = try makeYTDLPFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let service = YTDLPService(ytdlpPathProvider: { fixture.executable.path })
+        _ = try await service.download(
+            taskId: UUID(),
+            url: "https://youtube.com/watch?v=cookies-then-extractor-args",
+            commandTemplate: "NEW -f \"bv*+ba\" --cookies-from-browser safari $youtubeUrl",
+            outputDirectory: fixture.directory.path,
+            audioSelection: AudioSelection(selectedLanguage: "ja"),
+            onProgress: { _ in }
+        )
+
+        let arguments = try XCTUnwrap(fixture.arguments(at: 1))
+        XCTAssertTrue(arguments.contains("--extractor-args"))
+        XCTAssertTrue(arguments.contains(YTDLPService.youtubePlayerClientArgumentValue))
+        XCTAssertFalse(arguments.contains("--cookies-from-browser"))
+    }
+
+    /// cookies 重試路徑把 provider 回傳的範本原樣送進 argv：兩次 invocation 都帶 extractor args，
+    /// 且值中的 `,` 未被 `parseCommandArguments` 切斷。不傳 attemptExecutor，讓 fixture 實際執行。
+    func testCookieRetryPreservesExtractorArgsInArgv() async throws {
+        let fixture = try makeYTDLPFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let extractorArgs = "--extractor-args \"\(YTDLPService.youtubePlayerClientArgumentValue)\""
+        let service = YTDLPService(ytdlpPathProvider: { fixture.executable.path })
+        _ = try await service.executeDownloadFlow(
+            taskId: UUID(),
+            url: "https://youtube.com/watch?v=cookie-retry-extractor-args",
+            firstTemplate: "OLD -f \"bv*+ba[language=ja]\" \(extractorArgs) $youtubeUrl",
+            cookieTemplateProvider: {
+                "NEW -f \"bv*+ba[language=ja]\" --cookies-from-browser safari \(extractorArgs) $youtubeUrl"
+            },
+            outputDirectory: fixture.directory.path,
+            subtitleSelection: nil,
+            onProgress: { _ in }
+        )
+
+        XCTAssertEqual(fixture.invocationCount, 2)
+        for index in 1...2 {
+            let arguments = try XCTUnwrap(fixture.arguments(at: index))
+            XCTAssertEqual(extractorArgsPositions(in: arguments).count, 1, "第 \(index) 次 invocation")
+            XCTAssertTrue(
+                arguments.contains(YTDLPService.youtubePlayerClientArgumentValue),
+                "第 \(index) 次 invocation 的 extractor args 值被切斷"
+            )
+        }
+        XCTAssertFalse(try XCTUnwrap(fixture.arguments(at: 1)).contains("--cookies-from-browser"))
+        XCTAssertTrue(try XCTUnwrap(fixture.arguments(at: 2)).contains("--cookies-from-browser"))
+    }
+
+    /// 移除 cookies 參數的處理不得順帶移除已注入的 extractor args。
+    func testRemoveSafariCookiesPreservesExtractorArgs() {
+        let template = "yt-dlp -f \"bv*+ba[language=ja]\" --cookies-from-browser safari "
+            + "--extractor-args \"\(YTDLPService.youtubePlayerClientArgumentValue)\" $youtubeUrl"
+
+        let stripped = SafariCookiesService.shared.removeSafariCookies(template)
+
+        XCTAssertTrue(stripped.contains("--extractor-args"))
+        XCTAssertTrue(stripped.contains(YTDLPService.youtubePlayerClientArgumentValue))
+        XCTAssertFalse(stripped.contains("--cookies-from-browser"))
+    }
+
+    // MARK: - format 語言限制
+
+    /// 以 fixture 執行一次帶語言選擇的下載，回傳 argv 中 `-f` 之後緊接的元素。
+    private func recordedFormatValue(
+        template: String,
+        language: String,
+        marker: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws -> String {
+        let fixture = try makeYTDLPFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let service = YTDLPService(ytdlpPathProvider: { fixture.executable.path })
+        _ = try await service.download(
+            taskId: UUID(),
+            url: "https://youtube.com/watch?v=\(marker)",
+            commandTemplate: template,
+            outputDirectory: fixture.directory.path,
+            audioSelection: AudioSelection(selectedLanguage: language),
+            onProgress: { _ in }
+        )
+
+        let arguments = try XCTUnwrap(fixture.arguments(at: 1), file: file, line: line)
+        let formatIndex = try XCTUnwrap(arguments.firstIndex(of: "-f"), file: file, line: line)
+        XCTAssertTrue(arguments.indices.contains(formatIndex + 1), "-f 後方缺少值", file: file, line: line)
+        return arguments[formatIndex + 1]
+    }
+
+    /// 預設範本的每一個 alternative 都帶上語言限制，且尾端不再附加未受限的原始字串。
+    func testDefaultFormatTemplateConstrainsEveryAlternative() async throws {
+        let formatValue = try await recordedFormatValue(
+            template: "NEW -f \"bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/b\" $youtubeUrl",
+            language: "ja",
+            marker: "default-format"
+        )
+
+        XCTAssertEqual(formatValue, "bv*[ext=mp4]+ba[ext=m4a][language=ja]/bv*+ba[language=ja]/b[language=ja]")
+    }
+
+    /// 語言限制落在 alternative 的最後一個 `+` 組成部分。
+    func testLanguageConstraintLandsOnLastPlusPart() async throws {
+        let formatValue = try await recordedFormatValue(
+            template: "NEW -f \"bv+ba\" $youtubeUrl",
+            language: "ja",
+            marker: "last-plus-part"
+        )
+
+        XCTAssertEqual(formatValue, "bv+ba[language=ja]")
+    }
+
+    /// 中括號內的 `/` 不參與切分。以完整字串相等為斷言：「alternative 數量不變」這類計數
+    /// 斷言在 bracket-aware 與 naive 兩種實作下都會成立，沒有鑑別力。
+    func testSeparatorsInsideBracketsAreNotSplitPoints() async throws {
+        let formatValue = try await recordedFormatValue(
+            template: "NEW -f \"ba[format_note*=A/B]+bv\" $youtubeUrl",
+            language: "ja",
+            marker: "bracketed-separator"
+        )
+
+        XCTAssertEqual(formatValue, "ba[format_note*=A/B]+bv[language=ja]")
+    }
+
+    /// `,` 分隔的獨立下載群組各自受限；不納入切分層級時，`,` 之前的群組會完全沒有語言限制。
+    func testCommaSeparatedGroupsAreEachConstrained() async throws {
+        let formatValue = try await recordedFormatValue(
+            template: "NEW -f \"bv+ba,b\" $youtubeUrl",
+            language: "ja",
+            marker: "comma-groups"
+        )
+
+        XCTAssertEqual(formatValue, "bv+ba[language=ja],b[language=ja]")
+    }
+
+    /// 範本不含 `-f` 與 `--format` 時補上受限的預設 format。
+    func testTemplateWithoutFormatArgumentGetsConstrainedDefault() async throws {
+        let formatValue = try await recordedFormatValue(
+            template: "NEW $youtubeUrl",
+            language: "ja",
+            marker: "no-format-argument"
+        )
+
+        XCTAssertEqual(formatValue, "bv*+ba[language=ja]/b[language=ja]")
+    }
+
+    /// 取不到選定語言時以失敗結束：format 不可用的訊息不觸發任何重試，
+    /// invocation 恰為 1 次，錯誤沿既有 `YTDLPError.executionFailed` 路徑呈現。
+    func testUnavailableFormatFailsWithoutAnyRetry() async throws {
+        let formatUnavailableMessage = "ERROR: [youtube] video: Requested format is not available. "
+            + "Use --list-formats for a list of available formats"
+
+        XCTAssertFalse(YTDLPService.shouldRetryWithCookies(.executionFailed(formatUnavailableMessage)))
+
+        let fixture = try makeYTDLPFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let service = YTDLPService(ytdlpPathProvider: { fixture.executable.path })
+        do {
+            _ = try await service.download(
+                taskId: UUID(),
+                url: "https://youtube.com/watch?v=format-unavailable",
+                commandTemplate: "FORMAT_UNAVAILABLE -f \"bv*+ba\" --cookies-from-browser safari $youtubeUrl",
+                outputDirectory: fixture.directory.path,
+                audioSelection: AudioSelection(selectedLanguage: "ja"),
+                onProgress: { _ in }
+            )
+            XCTFail("選定語言的 format 不可用時應以失敗結束")
+        } catch let error as YTDLPError {
+            guard case .executionFailed(let message) = error else {
+                return XCTFail("錯誤類型不符：\(error)")
+            }
+            XCTAssertTrue(
+                message.contains("Requested format is not available"),
+                "錯誤訊息未帶上 yt-dlp 的原始訊息：\(message)"
+            )
+        }
+
+        XCTAssertEqual(fixture.invocationCount, 1)
+    }
+
     // MARK: - 登入訊號分類測試（indicatesLoginRequired(message:)）
 
     /// 字串入口對既有訊號清單中的代表性訊息（私人影片、會員限定、年齡限制、bot 驗證）
@@ -1698,6 +1966,23 @@ final class YTDLPServiceTests: XCTestCase {
         /// 是因為候選檔名含有空格（例如 `Lecture 1.5.f401.mp4.part`）。
         /// kind 為 `file`／`dir`／`symlink`／`final`；`dir` 的 extra 是內層檔名，`symlink` 的 extra 是 target。
         let cleanupSpec: URL
+
+        /// 目前為止發生的 invocation 次數。
+        var invocationCount: Int {
+            let counter = directory.appendingPathComponent("invocation-count")
+            guard let text = try? String(contentsOf: counter, encoding: .utf8) else { return 0 }
+            return Int(text.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+        }
+
+        /// 第 `index` 次（1-based）invocation 的完整引數；該次呼叫未發生時回傳 nil。
+        func arguments(at index: Int) -> [String]? {
+            let file = directory.appendingPathComponent("invocation-\(index).args")
+            guard let text = try? String(contentsOf: file, encoding: .utf8) else { return nil }
+            // 每個引數各佔一行並帶結尾換行，split 後的最後一個空片段須捨去
+            var lines = text.components(separatedBy: "\n")
+            if lines.last == "" { lines.removeLast() }
+            return lines
+        }
     }
 
     private func makeYTDLPFixture() throws -> YTDLPFixture {
@@ -1718,8 +2003,20 @@ final class YTDLPServiceTests: XCTestCase {
         log=\(shellQuote(log.path))
         pid=\(shellQuote(pid.path))
         cleanupspec=\(shellQuote(cleanupSpec.path))
+        dir=\(shellQuote(directory.path))
         echo "$*" >> "$log"
         echo "$$" > "$pid"
+
+        # 逐次獨立記錄 argv：`echo "$*"` 無法區分 token 邊界，帶空白或逗號的引數需要逐行記錄
+        counter="$dir/invocation-count"
+        n=$(cat "$counter" 2>/dev/null || echo 0)
+        n=$((n + 1))
+        printf '%s\\n' "$n" > "$counter"
+        argsfile="$dir/invocation-$n.args"
+        : > "$argsfile"
+        for arg in "$@"; do
+          printf '%s\\n' "$arg" >> "$argsfile"
+        done
 
         # 依 cleanup-spec.txt 在目前工作目錄（即 outputDirectory）建立項目。
         # 這些項目必須在 invocation 期間建立，若由測試在呼叫 download 之前建立，
@@ -1847,6 +2144,10 @@ final class YTDLPServiceTests: XCTestCase {
             build_cleanup_items file
             printf '[download] Giving up after 10 retries\\n' >&2
             printf 'ERROR: unable to download video data: HTTP Error 403: Forbidden\\n' >&2
+            exit 1
+            ;;
+          *FORMAT_UNAVAILABLE*)
+            printf 'ERROR: [youtube] video: Requested format is not available. Use --list-formats for a list of available formats\\n' >&2
             exit 1
             ;;
           *NEW*)

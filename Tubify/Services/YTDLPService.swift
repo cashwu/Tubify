@@ -180,6 +180,11 @@ actor YTDLPService {
     static let shared = YTDLPService()
     private static let pipeDrainTimeout: TimeInterval = 1
 
+    /// yt-dlp player client 集合的單一事實來源：媒體選項查詢與下載範本注入都只從這裡取值。
+    /// 併用 `default` 與 `web_embedded`：前者維持既有 format 覆蓋率，後者才會列出配音音軌。
+    static let youtubePlayerClientArgumentValue = "youtube:player_client=default,web_embedded"
+    static let youtubeExtractorArguments: [String] = ["--extractor-args", youtubePlayerClientArgumentValue]
+
     private let ytdlpPathProvider: (() async -> String?)?
     private var runningProcesses: [DownloadOperationID: Process] = [:]
     private var activeDownloadOperations: [UUID: DownloadOperationID] = [:]
@@ -264,6 +269,9 @@ actor YTDLPService {
         var template = commandTemplate
         if let audioSel = audioSelection, let lang = audioSel.selectedLanguage {
             template = injectAudioLanguage(into: template, language: lang)
+            // 下載必須與媒體選項查詢使用同一組 player client，否則 [language=xx] 匹配不到任何
+            // format。注入排在 cookies 處理之前，兩條 template 分支才都帶得到該引數。
+            template = injectExtractorArgs(into: template)
             TubifyLogger.ytdlp.info("選擇音軌語言: \(lang)")
         }
 
@@ -1134,8 +1142,24 @@ actor YTDLPService {
         return percent / 100.0
     }
 
+    /// 在指令範本尾端補上指定 player client 的 `--extractor-args`。
+    /// 範本已自帶該引數時原樣回傳：使用者設定優先於本注入。
+    nonisolated private func injectExtractorArgs(into template: String) -> String {
+        let tokens = template.split(separator: " ").map(String.init)
+        let alreadyPresent = tokens.contains {
+            $0 == "--extractor-args" || $0.hasPrefix("--extractor-args=")
+        }
+        guard !alreadyPresent else {
+            TubifyLogger.ytdlp.info("範本已含 extractor args，略過注入")
+            return template
+        }
+
+        return template + " --extractor-args \"" + Self.youtubePlayerClientArgumentValue + "\""
+    }
+
     /// 將音軌語言選擇注入到 format 字串中
-    /// 例如: "-f bv+ba" -> "-f bv+ba[language=ja]/bv+ba"
+    /// 例如: "-f bv+ba" -> "-f bv+ba[language=ja]"
+    /// 範本完全不含 -f／--format 時，補上一組已受限的預設 format
     nonisolated private func injectAudioLanguage(into template: String, language: String) -> String {
         // 尋找 -f 或 --format 參數及其值
         // 常見格式:
@@ -1174,51 +1198,64 @@ actor YTDLPService {
                 result = result.replacingCharacters(in: fullMatchRange, with: replacement)
 
                 TubifyLogger.ytdlp.debug("修改 format: \(formatValue) -> \(modifiedFormat)")
-                break
+                return result
             }
         }
 
-        return result
+        // 範本沒有 format 參數：補上一組已受限的預設，否則 yt-dlp 會自行挑選原聲音軌
+        let fallbackFormat = "bv*+ba[language=\(language)]/b[language=\(language)]"
+        TubifyLogger.ytdlp.debug("範本不含 format 參數，補上: \(fallbackFormat)")
+        return result + " -f \"" + fallbackFormat + "\""
     }
 
     /// 在 format 字串中注入語言選擇
-    /// 例如: "bv+ba[ext=m4a]" -> "bv+ba[ext=m4a][language=ja]/bv+ba[ext=m4a]"
+    /// 例如: "bv*+ba/b" -> "bv*+ba[language=ja]/b[language=ja]"
+    ///
+    /// 每一個 alternative 都必須帶上語言限制：留下任何未受限的 alternative，該語言的 format
+    /// 不存在時 yt-dlp 會靜默改用其他語言完成下載，使用者拿不到任何訊號。
     nonisolated private func injectLanguageIntoFormat(_ format: String, language: String) -> String {
-        // 找到音訊部分（ba, bestaudio 等）
-        // 常見模式: bv+ba, bestvideo+bestaudio, bv[...]+ba[...]
+        // 切分層級由外而內：`,` 是獨立下載群組、`/` 是 alternative、`+` 是組成部分。
+        // 中括號內的分隔字元屬於 format 過濾條件（例如 `[format_note*=A/B]`），不參與切分。
+        let groups = splitOutsideBrackets(format, separator: ",").map { group in
+            splitOutsideBrackets(group, separator: "/").map { alternative in
+                var parts = splitOutsideBrackets(alternative, separator: "+")
+                // yt-dlp 慣例為 `video+audio`，語言限制因此落在最後一個組成部分；
+                // 單一 part 的 alternative（例如 `b`）本身就承載音訊，同樣落上限制。
+                if let lastIndex = parts.indices.last {
+                    parts[lastIndex] += "[language=\(language)]"
+                }
+                return parts.joined(separator: "+")
+            }.joined(separator: "/")
+        }
 
-        // 策略：在音訊格式選擇器後加入 [language=XX]，並加入 fallback
-        // 例如: bv+ba[ext=m4a] -> bv+ba[ext=m4a][language=ja]/bv+ba[ext=m4a]
+        return groups.joined(separator: ",")
+    }
 
-        let audioPatterns = [
-            #"(ba\[[^\]]*\])"#,          // ba[...]
-            #"(bestaudio\[[^\]]*\])"#,   // bestaudio[...]
-            #"(ba)(?![a-z\[])"#,         // ba (不帶其他字符)
-            #"(bestaudio)(?![a-z\[])"#   // bestaudio (不帶其他字符)
-        ]
+    /// 以不位於 `[` 與 `]` 之間的 `separator` 切分字串。
+    nonisolated private func splitOutsideBrackets(_ value: String, separator: Character) -> [String] {
+        var segments: [String] = []
+        var current = ""
+        var bracketDepth = 0
 
-        var modifiedFormat = format
-
-        for pattern in audioPatterns {
-            if let regex = try? NSRegularExpression(pattern: pattern, options: []),
-               let match = regex.firstMatch(in: modifiedFormat, range: NSRange(modifiedFormat.startIndex..., in: modifiedFormat)) {
-
-                let audioRange = Range(match.range(at: 1), in: modifiedFormat)!
-                let audioSelector = String(modifiedFormat[audioRange])
-
-                // 新的音訊選擇器：加入語言過濾，並保留 fallback
-                let newAudioSelector = "\(audioSelector)[language=\(language)]"
-
-                // 加入 fallback：原始格式（如果沒有該語言的音軌就用預設）
-                let formatWithFallback = modifiedFormat.replacingCharacters(in: audioRange, with: newAudioSelector)
-                    + "/" + format
-
-                modifiedFormat = formatWithFallback
-                break
+        for character in value {
+            switch character {
+            case "[":
+                bracketDepth += 1
+                current.append(character)
+            case "]":
+                // 括號不成對的範本不該讓深度變成負數而使其後的分隔字元全部失效
+                bracketDepth = max(0, bracketDepth - 1)
+                current.append(character)
+            case separator where bracketDepth == 0:
+                segments.append(current)
+                current = ""
+            default:
+                current.append(character)
             }
         }
 
-        return modifiedFormat
+        segments.append(current)
+        return segments
     }
 }
 

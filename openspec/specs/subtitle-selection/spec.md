@@ -66,14 +66,14 @@ code:
 
 ### Requirement: 媒體選項偵測優先不帶 cookies
 
-系統取得某個影片的媒體選項時，SHALL 先以不帶 cookies 的 yt-dlp invocation 查詢，使公開影片的使用者上傳字幕不會因為帶上帳號 cookies 而從查詢結果中消失。只有在不帶 cookies 的查詢以非 0 exit code 失敗、且失敗訊息符合既有的「需登入」訊號、且呼叫端確實提供了 cookies 參數時，系統才 SHALL 以帶 cookies 的 invocation 重試一次。單次媒體選項查詢的 yt-dlp invocation 次數 MUST NOT 超過 2 次。
+系統取得某個影片的媒體選項時，SHALL 先以不帶 cookies 的 yt-dlp invocation 查詢，使公開影片的使用者上傳字幕不會因為帶上帳號 cookies 而從查詢結果中消失。只有在不帶 cookies 的查詢以非 0 exit code 失敗、且失敗訊息符合既有的「需登入」訊號、且呼叫端確實提供了 cookies 參數時，系統才 SHALL 以帶 cookies 的 invocation 重試一次。單次媒體選項查詢的 yt-dlp invocation 次數 MUST NOT 超過 2 次。兩次 invocation 的引數都 SHALL 包含指定 player client 的 `--extractor-args` 與其值。
 
 #### Scenario: 有可用 cookies 時第一次查詢仍不帶 cookies
 
 - **GIVEN** 呼叫端提供了非空的 cookies 參數
 - **WHEN** 系統查詢某個影片的媒體選項
 - **THEN** 第一次 yt-dlp invocation 的引數 MUST NOT 包含任何該 cookies 參數的元素
-- **AND** 第一次 yt-dlp invocation SHALL 保留既有的 `-J`、`--skip-download`、`--no-playlist` 三個旗標與目標 url，且不含其他引數
+- **AND** 第一次 yt-dlp invocation SHALL 保留既有的 `-J`、`--skip-download`、`--no-playlist` 三個旗標、指定 player client 的 `--extractor-args` 與其值，以及目標 url，且不含其他引數
 
 ##### Example: 公開影片的字幕軌不因 cookies 消失
 
@@ -96,7 +96,7 @@ code:
 - **GIVEN** 呼叫端提供了非空的 cookies 參數
 - **AND** 不帶 cookies 的第一次 invocation 以非 0 exit code 失敗
 - **WHEN** 失敗訊息符合既有的「需登入」訊號
-- **THEN** 系統 SHALL 執行第二次 invocation，其引數 SHALL 恰為第一次 invocation 的引數加上該 cookies 參數的全部元素，既有的 `-J`、`--skip-download`、`--no-playlist` 與目標 url MUST 全數保留
+- **THEN** 系統 SHALL 執行第二次 invocation，其引數 SHALL 恰為第一次 invocation 的引數加上該 cookies 參數的全部元素，既有的 `-J`、`--skip-download`、`--no-playlist`、指定 player client 的 `--extractor-args` 與其值，以及目標 url MUST 全數保留
 - **AND** 第二次 invocation 的結果 SHALL 作為本次媒體選項查詢的結果
 
 #### Scenario: 重試後仍失敗以第二次的訊息回報
@@ -130,8 +130,8 @@ code:
 - **AND** 系統 SHALL 沿用既有的錯誤回報方式
 
 <!-- @trace
-source: cookieless-subtitle-detection
-updated: 2026-08-21
+source: dubbed-audio-track-selection
+updated: 2026-08-22
 code:
   - Tubify/Services/YTDLPService.swift
   - Tubify/Services/YouTubeMetadataService.swift

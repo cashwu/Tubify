@@ -2,12 +2,13 @@
 id: contract-spec-definition-mismatch
 type: recurring-finding
 status: open
-occurrences: 2
+occurrences: 3
 first_seen: 2026-08-21
 last_seen: 2026-08-21
 links:
   - openspec/changes/cleanup-orphaned-part-files/reviews/propose-r1.md
   - openspec/changes/cleanup-orphaned-part-files/reviews/apply-r6.md
+  - openspec/changes/dubbed-audio-track-selection/reviews/propose-r1.md
 ---
 
 # design Implementation Contract 與 spec 對同一概念的定義不一致
@@ -19,3 +20,4 @@ links:
 - 2026-08-21 — `cleanup-orphaned-part-files` — cash-propose round 1（Reviewer A，confidence 100，Critical）：Contract 規定「讀取 `finalPath` 的 mtime 失敗時直接 return」，spec scenario 卻要求 mtime 讀取失敗時「記錄該失敗並繼續處理其餘候選檔案」。已改為明確區分致命失敗（放棄整輪清理）與非致命失敗（記錄後繼續下一個），spec 拆為兩個 scenario，verdict 為 resolved。
 - 2026-08-21 — `cleanup-orphaned-part-files` — cash-propose round 1（Reviewer A confidence 100 與 Reviewer B 獨立提出，Critical）：spec 定義候選檔案限定為最終輸出路徑的父目錄，Contract 卻列舉傳入的 `outputDirectory` 參數，兩者在使用者自帶 `-o` 時並不相同。已改為列舉目錄由 `finalPath` 的 parent 推導、與 `outputDirectory` 不符時放棄清理，verdict 為 resolved。
 - 2026-08-21 — `cleanup-orphaned-part-files` — cash-apply round 6（Reviewer A，confidence 100，Warning）：delta spec 已把 TOCTOU 窗口中的非目錄項目改為「可能」被刪除並涵蓋 `unlink` 失敗，但 design 的 hardlink 與 Risks 敘述仍保留「會被刪除」的絕對成功保證。已同步限縮為僅在 `unlink` 成功時產生名稱或內容損失，失敗時依單一候選檔非致命規則處理，round 7 verdict 為 resolved。
+- 2026-08-21 — `dubbed-audio-track-selection` — cash-propose round 1（Reviewer A，confidence 85，Warning）：delta spec 的驗收 scenario 以「以 `/` 切開」定義 alternative，Implementation Contract 卻以「不位於 `[` 與 `]` 之間的 `/`」定義同一個概念。含中括號的 format（如 `ba[format_note*=A/B]+bv`）下，完全符合 Contract 的實作會被 spec 字面判定為違反。已把 alternative 的定義寫進 requirement 正文並與 Contract 逐字對齊，相關 scenario 改為引用該定義，round 2 的 Reviewer V 判定 resolved。
