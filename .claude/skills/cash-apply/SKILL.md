@@ -176,6 +176,8 @@ The trigger is guidance only — it MUST NOT block apply from proceeding when th
 
    If `tdd: false` is set, do not apply TDD ordering.
 
+   Regardless of the `tdd` value, when a task will add or modify any test, fetch test-quality instructions by running `"$cash_cli" instructions --skill test-quality` before the first test edit, then follow the returned `instruction`. When no test is added or modified, do not fetch it and do not add a test for form's sake.
+
    If `audit: true` is set, apply sharp-edges discipline throughout implementation:
    - When designing APIs or interfaces, evaluate through 3 adversary lenses (Scoundrel, Lazy Developer, Confused Developer)
    - When adding configuration options, verify defaults are secure and zero/empty values are safe
@@ -205,6 +207,7 @@ The trigger is guidance only — it MUST NOT block apply from proceeding when th
      - is vague ("handle edge cases", "wire it up", "make it work");
      - conflicts with the implementation contract (asks for behavior the contract excludes, or omits behavior the contract requires).
        When this happens, pause. Either update the artifact (design or tasks) so the task names a concrete behavior and verification target, or report the blocker and wait for guidance. Do NOT silently guess against unclear requirements.
+   - **Map the task's evidence fields before editing any source file.** Every pending task's checkbox description MUST carry non-empty `delivery`, `verification`, `regression`, `success`, and `red` fields, and they map onto the canonical discipline as primary target, regression targets, success marker, and failure marker. `verification` names exactly one primary target; `regression` names the related regression targets, or is `N/A` with a reason showing that primary target already covers the full related scope; `success` describes only the marker directly observable from that primary target and MUST NOT mix in regression, publication, or task completion results; `red` is `N/A` with a pure-refactor or remaining-task classification reason when no red phase applies. If any field is missing, holds a placeholder, or — when `tdd: true` — the `red` field contradicts the canonical TDD classification, take the existing unclear-task branch before any production edit: do not guess, do not write production code, and do not call `task done`.
    - Before writing code, re-read and understand the task, relevant spec, Implementation Contract, and actual call flow. A candidate is eligible only when it preserves observable behavior, interface／data shape, failure modes, acceptance criteria, trust-boundary validation, data-loss prevention, security, and accessibility. A pending task that conflicts with or is unclear against the contract MUST enter the existing unclear-task／blocker triage; MUST NOT use YAGNI to mark it complete or silently skip it.
    - Apply this ordered minimal-solution ladder and stop at the first eligible rung. If an earlier rung does not satisfy the contract, exclude it and continue:
      1. `reuse` — use an existing codebase helper, type, module, or established pattern.
@@ -223,7 +226,7 @@ The trigger is guidance only — it MUST NOT block apply from proceeding when th
         - The examples are not a closed input set.
    - Make the code changes required
    - Keep changes minimal and focused
-   - **Verify before marking done** — re-read the task description from the tasks file AND the relevant Implementation Contract content from design.md. For each requirement stated in the task description and each contract item that covers this task's scope, confirm it is addressed by your changes. Before calling `task done`, require verification evidence appropriate to the task: its named test, CLI, analyzer, or manual assertion must pass. If any contract item, task requirement, or verification target is missing or failing, implement/fix it now. Do not mark the task complete until every part of the description is covered and the contract for this task is satisfied.
+   - **Verify before marking done** — re-read the task description from the tasks file AND the relevant Implementation Contract content from design.md. For each requirement stated in the task description and each contract item that covers this task's scope, confirm it is addressed by your changes. Before calling `task done`, require verification evidence appropriate to the task: its named test, CLI, analyzer, or manual assertion must pass. After that primary target passes, run the targets named in the task's `regression` field; when that field is `N/A`, confirm its stated reason still holds. If any contract item, task requirement, or verification target is missing or failing, implement/fix it now. Do not mark the task complete until every part of the description is covered and the contract for this task is satisfied.
    - Mark task complete by running: `"$cash_cli" task done --change "<name>" <task-id>`
      This command marks the checkbox in tasks.md AND records which files were modified for this task.
    - Continue to next task
