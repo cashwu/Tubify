@@ -47,6 +47,7 @@ final class PasteMonitorController {
 
 private final class MainDownloadWindowMarkerView: NSView {
     private weak var observedWindow: NSWindow?
+    private var didClearInitialFocus = false
 
     override func viewDidMoveToWindow() {
         if let observedWindow {
@@ -66,11 +67,24 @@ private final class MainDownloadWindowMarkerView: NSView {
                 name: NSWindow.didBecomeKeyNotification,
                 object: window
             )
+            if window.isKeyWindow {
+                clearInitialFocusIfNeeded()
+            }
         }
     }
 
     @objc private func windowDidBecomeKey() {
         markMainDownloadWindow()
+        clearInitialFocusIfNeeded()
+    }
+
+    /// 首次開窗時 AppKit 會自動聚焦第一個控制項（設定按鈕），只清除這一次，之後的 Tab 導覽不受影響
+    private func clearInitialFocusIfNeeded() {
+        guard !didClearInitialFocus else { return }
+        didClearInitialFocus = true
+        DispatchQueue.main.async { [weak self] in
+            self?.window?.makeFirstResponder(nil)
+        }
     }
 
     private func markMainDownloadWindow() {
