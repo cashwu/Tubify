@@ -79,6 +79,15 @@ enum AppSettingsMigrator {
 enum DownloadConstants {
     /// 啟動每個新下載前的等待秒數（避免被 YouTube 限制）
     static let preStartDelay: Double = 1.0
+
+    /// 首播／直播影片下載後，實際長度低於預期長度的此比例即視為不完整（只錄到串流片段）
+    static let minimumCompleteDurationRatio: Double = 0.9
+
+    /// yt-dlp 回報為首播／直播相關的 live_status
+    static let liveRelatedStatuses: Set<String> = ["is_upcoming", "is_live", "post_live"]
+
+    /// 會讓輸出刻意短於原片的 yt-dlp 選項；指令含這些選項時不做長度檢查
+    static let durationShorteningOptions = ["--download-sections", "--sponsorblock-remove", "--remove-chapters"]
 }
 
 /// Double extension for UserDefaults handling

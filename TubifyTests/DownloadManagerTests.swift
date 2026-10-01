@@ -1089,6 +1089,526 @@ final class DownloadManagerTests: XCTestCase {
         XCTAssertNotEqual(task.status, .scheduled)
     }
 
+    // MARK: - 首播串流中（is_live）測試
+
+    func testRetryLivestreamingTaskStaysLivestreamingWhileStillLive() async {
+        // Arrange：使用者對 .livestreaming 任務按重試，但串流仍在進行
+        let url = "https://www.youtube.com/watch?v=SHboSN92Hrs"
+        let task = createTestTask(url: url, title: "首播影片", status: .livestreaming)
+        manager.tasks = [task]
+        let releaseTimestamp = 1_790_860_500
+        mockMetadataService.videoInfo = VideoInfo(
+            id: "SHboSN92Hrs",
+            title: "首播影片",
+            thumbnail: nil,
+            duration: 600,
+            uploader: "Test",
+            url: url,
+            liveStatus: "is_live",
+            releaseTimestamp: releaseTimestamp
+        )
+
+        // Act
+        manager.retryTask(task)
+        XCTAssertEqual(task.status, .fetchingInfo, "重試應先重新抓 metadata，而非直接排入佇列")
+        let backToLivestreaming = await waitUntil {
+            task.status == .livestreaming
+        }
+
+        // Assert：仍在串流時不可下載，否則只會錄到當下的一小段片段
+        XCTAssertTrue(backToLivestreaming)
+        XCTAssertEqual(
+            task.expectedEndTime,
+            Date(timeIntervalSince1970: TimeInterval(releaseTimestamp + 600))
+        )
+        XCTAssertTrue(mockYTDLPService.downloadedURLs.isEmpty, "串流仍進行中不應開始下載")
+    }
+
+    func testRetryLivestreamingTaskRerunsMetadataAndDownloadsWhenEnded() async {
+        // Arrange：首播已播完（live_status 變成非 is_live）
+        let url = "https://www.youtube.com/watch?v=SHboSN92Hrs"
+        let task = createTestTask(url: url, title: "首播影片", status: .livestreaming)
+        manager.tasks = [task]
+        mockMetadataService.videoInfo = VideoInfo(
+            id: "SHboSN92Hrs",
+            title: "首播影片",
+            thumbnail: nil,
+            duration: 600,
+            uploader: "Test",
+            url: url,
+            liveStatus: "not_live",
+            releaseTimestamp: 1_790_860_500
+        )
+        mockMetadataService.mediaOptions = (subtitles: [], audioTracks: [], formats: [])
+
+        // Act
+        manager.retryTask(task)
+        let didDownload = await waitUntil {
+            self.mockYTDLPService.downloadedURLs.contains(url)
+        }
+
+        // Assert
+        XCTAssertTrue(didDownload, "首播已播完，重試應開始下載完整影片")
+        XCTAssertNotEqual(task.status, .livestreaming)
+    }
+
+    func testConfirmPlaylistSelectionLivePremiereBecomesLivestreaming() async {
+        // Arrange
+        let placeholderTask = createTestTask(
+            url: "https://www.youtube.com/playlist?list=PLtest",
+            title: "載入播放清單中...",
+            status: .fetchingInfo
+        )
+        manager.tasks = [placeholderTask]
+        let url = "https://www.youtube.com/watch?v=live1"
+        let releaseTimestamp = 1_790_860_500
+        mockMetadataService.liveStatusByURL = [url: "is_live"]
+        mockMetadataService.releaseTimestampByURL = [url: releaseTimestamp]
+        // --flat-playlist 不含 duration，須由 fetchMediaOptions 的完整 metadata 補上
+        mockMetadataService.durationByURL = [url: 600]
+
+        let selectedVideos = [
+            VideoInfo(
+                id: "live1",
+                title: "首播影片",
+                thumbnail: nil,
+                duration: nil,
+                uploader: "Test",
+                url: url,
+                liveStatus: nil,
+                releaseTimestamp: nil
+            )
+        ]
+        let request = PlaylistSelectionRequest(
+            playlistTitle: "Test Playlist",
+            videos: selectedVideos,
+            placeholderTaskId: placeholderTask.id,
+            callbackScheme: nil,
+            requestId: nil
+        )
+
+        // Act
+        manager.confirmPlaylistSelection(request: request, selectedVideos: selectedVideos)
+        let becameLivestreaming = await waitUntil {
+            self.manager.tasks.first?.status == .livestreaming
+        }
+
+        // Assert：等背景流程跑完再確認沒有下載
+        XCTAssertTrue(becameLivestreaming)
+        XCTAssertEqual(
+            manager.tasks.first?.expectedEndTime,
+            Date(timeIntervalSince1970: TimeInterval(releaseTimestamp + 600))
+        )
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(manager.tasks.first?.status, .livestreaming)
+        XCTAssertTrue(mockYTDLPService.downloadedURLs.isEmpty)
+    }
+
+    func testRetryLivestreamingTaskKeepsStatusWhenMetadataFetchFails() async {
+        // Arrange：重試時 metadata 抓取失敗（例如網路中斷），無法確認首播是否已播完
+        let url = "https://www.youtube.com/watch?v=SHboSN92Hrs"
+        let task = createTestTask(url: url, title: "首播影片", status: .livestreaming)
+        manager.tasks = [task]
+        mockMetadataService.videoInfoError = NSError(
+            domain: "test",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "network timeout"]
+        )
+
+        // Act
+        manager.retryTask(task)
+        let backToLivestreaming = await waitUntil {
+            task.status == .livestreaming
+        }
+
+        // Assert：維持原狀態與標題，不排入佇列
+        XCTAssertTrue(backToLivestreaming)
+        XCTAssertEqual(task.title, "首播影片")
+        XCTAssertEqual(task.errorMessage, "network timeout")
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertTrue(mockYTDLPService.downloadedURLs.isEmpty, "無法確認首播狀態時不應開始下載")
+    }
+
+    // MARK: - 首播下載長度檢查
+
+    /// 長度檢查中被移到垃圾桶的路徑
+    private var trashedPaths: [String] = []
+
+    /// 建立會回報指定檔案長度的 manager
+    private func makeManager(
+        mediaDuration: TimeInterval?,
+        duringDurationCheck: (@MainActor () async -> Void)? = nil
+    ) -> DownloadManager {
+        trashedPaths = []
+        let manager = DownloadManager(
+            persistenceService: mockPersistence,
+            metadataService: mockMetadataService,
+            ytdlpService: mockYTDLPService,
+            notificationService: mockNotificationService,
+            fileInspector: DownloadedFileInspector(
+                duration: { _ in
+                    await duringDurationCheck?()
+                    return mediaDuration
+                },
+                trash: { [unowned self] path in self.trashedPaths.append(path) }
+            )
+        )
+        manager.tasks = []
+        return manager
+    }
+
+    private func configureAiredPremiereMetadata(url: String) {
+        mockMetadataService.videoInfo = VideoInfo(
+            id: "SHboSN92Hrs",
+            title: "首播影片",
+            thumbnail: nil,
+            duration: 600,
+            uploader: "Test",
+            url: url,
+            liveStatus: "not_live",
+            releaseTimestamp: 1_790_860_500
+        )
+        mockMetadataService.mediaOptions = (subtitles: [], audioTracks: [], formats: [])
+    }
+
+    func testPremiereDownloadShorterThanExpectedIsNotMarkedCompleted() async {
+        // Arrange：預期 600 秒，實際只下載到 48 秒的串流片段
+        let url = "https://www.youtube.com/watch?v=SHboSN92Hrs"
+        manager = makeManager(mediaDuration: 48)
+        let task = createTestTask(url: url, title: "首播影片", status: .livestreaming)
+        manager.tasks = [task]
+        configureAiredPremiereMetadata(url: url)
+
+        // Act
+        manager.retryTask(task)
+        let becamePostLive = await waitUntil {
+            task.status == .postLive
+        }
+
+        // Assert：不可標為完成，也不發完成通知，保留重試入口
+        XCTAssertTrue(becamePostLive, "長度明顯不足應視為不完整")
+        XCTAssertNil(task.outputPath)
+        XCTAssertEqual(trashedPaths, [mockYTDLPService.outputPath], "片段檔應移到垃圾桶，否則重試時 yt-dlp 會略過下載")
+        XCTAssertTrue(mockNotificationService.completedNotifications.isEmpty)
+    }
+
+    func testPremiereDownloadWithFullDurationIsCompleted() async {
+        // Arrange
+        let url = "https://www.youtube.com/watch?v=SHboSN92Hrs"
+        manager = makeManager(mediaDuration: 599.4)
+        let task = createTestTask(url: url, title: "首播影片", status: .livestreaming)
+        manager.tasks = [task]
+        configureAiredPremiereMetadata(url: url)
+
+        // Act
+        manager.retryTask(task)
+        let completed = await waitUntil {
+            task.status == .completed
+        }
+
+        // Assert
+        XCTAssertTrue(completed)
+    }
+
+    func testPremiereDownloadWithUnreadableDurationIsCompleted() async {
+        // Arrange：容器格式無法判讀長度時不阻擋
+        let url = "https://www.youtube.com/watch?v=SHboSN92Hrs"
+        manager = makeManager(mediaDuration: nil)
+        let task = createTestTask(url: url, title: "首播影片", status: .livestreaming)
+        manager.tasks = [task]
+        configureAiredPremiereMetadata(url: url)
+
+        // Act
+        manager.retryTask(task)
+        let completed = await waitUntil {
+            task.status == .completed
+        }
+
+        // Assert
+        XCTAssertTrue(completed)
+    }
+
+    func testPostLiveReplayDownloadShorterThanExpectedIsNotMarkedCompleted() async {
+        // Arrange：post_live 已有可用格式會直接下載，不經過重試；仍須做長度檢查
+        let url = "https://www.youtube.com/watch?v=TR_NgGeXWGc"
+        manager = makeManager(mediaDuration: 30)
+        mockMetadataService.videoInfo = VideoInfo(
+            id: "TR_NgGeXWGc",
+            title: "Post Live Replay",
+            thumbnail: nil,
+            duration: 600,
+            uploader: "Test",
+            url: url,
+            liveStatus: "post_live",
+            releaseTimestamp: nil,
+            formats: [
+                YTDLPFormat(formatID: "137", vcodec: "avc1.640028", acodec: "none", protocolName: "https", ext: "mp4"),
+                YTDLPFormat(formatID: "140", vcodec: "none", acodec: "mp4a.40.2", protocolName: "https", ext: "m4a")
+            ]
+        )
+        mockMetadataService.mediaOptions = (subtitles: [], audioTracks: [], formats: [])
+
+        // Act
+        XCTAssertEqual(manager.addURL(url), .success)
+        let becamePostLive = await waitUntil {
+            self.manager.tasks.first?.status == .postLive
+        }
+
+        // Assert
+        XCTAssertTrue(becamePostLive)
+        XCTAssertTrue(mockYTDLPService.downloadedURLs.contains(url))
+        XCTAssertTrue(mockNotificationService.completedNotifications.isEmpty)
+    }
+
+    func testPremiereDownloadAtDurationThresholdIsCompleted() async {
+        // Arrange：剛好等於門檻（600 秒的 90%）視為完整
+        let url = "https://www.youtube.com/watch?v=SHboSN92Hrs"
+        manager = makeManager(mediaDuration: 540)
+        let task = createTestTask(url: url, title: "首播影片", status: .livestreaming)
+        manager.tasks = [task]
+        configureAiredPremiereMetadata(url: url)
+
+        // Act
+        manager.retryTask(task)
+        let completed = await waitUntil {
+            task.status == .completed
+        }
+
+        // Assert
+        XCTAssertTrue(completed)
+    }
+
+    func testPremiereDownloadWithShorteningCommandSkipsDurationCheck() async {
+        // Arrange：自訂指令刻意只下載部分片段，長度不足是預期結果
+        let url = "https://www.youtube.com/watch?v=SHboSN92Hrs"
+        manager = makeManager(mediaDuration: 48)
+        let defaults = UserDefaults.standard
+        let originalCommand = defaults.object(forKey: AppSettingsKeys.downloadCommand)
+        defer {
+            if let originalCommand {
+                defaults.set(originalCommand, forKey: AppSettingsKeys.downloadCommand)
+            } else {
+                defaults.removeObject(forKey: AppSettingsKeys.downloadCommand)
+            }
+        }
+        manager.downloadCommand += " --download-sections *0:00-0:48"
+        let task = createTestTask(url: url, title: "首播影片", status: .livestreaming)
+        manager.tasks = [task]
+        configureAiredPremiereMetadata(url: url)
+
+        // Act
+        manager.retryTask(task)
+        let completed = await waitUntil {
+            task.status == .completed
+        }
+
+        // Assert
+        XCTAssertTrue(completed)
+    }
+
+    func testShortFileNotProducedByThisDownloadFailsWithoutRemoval() async {
+        // Arrange：yt-dlp 沿用下載目錄中既有的同名檔（其他影片、並行任務，或先前未能清除的片段）
+        let url = "https://www.youtube.com/watch?v=SHboSN92Hrs"
+        manager = makeManager(mediaDuration: 30)
+        mockYTDLPService.didProduceOutputFile = false
+        let task = createTestTask(url: url, title: "首播影片", status: .livestreaming)
+        manager.tasks = [task]
+        configureAiredPremiereMetadata(url: url)
+
+        // Act
+        manager.retryTask(task)
+        let failed = await waitUntil {
+            task.status == .failed
+        }
+
+        // Assert：不可標為完成，也絕不可移除不屬於此次下載的檔案
+        XCTAssertTrue(failed)
+        XCTAssertTrue(trashedPaths.isEmpty)
+        XCTAssertNil(task.outputPath)
+        XCTAssertTrue(mockNotificationService.completedNotifications.isEmpty)
+        XCTAssertEqual(mockNotificationService.failedNotifications.count, 1)
+        XCTAssertTrue(task.errorMessage?.contains(mockYTDLPService.outputPath) == true)
+    }
+
+    func testCompleteFileNotProducedByThisDownloadIsCompleted() async {
+        // Arrange：沿用的既有檔長度足夠（例如先前已完整下載過）
+        let url = "https://www.youtube.com/watch?v=SHboSN92Hrs"
+        manager = makeManager(mediaDuration: 600)
+        mockYTDLPService.didProduceOutputFile = false
+        let task = createTestTask(url: url, title: "首播影片", status: .livestreaming)
+        manager.tasks = [task]
+        configureAiredPremiereMetadata(url: url)
+
+        // Act
+        manager.retryTask(task)
+        let completed = await waitUntil {
+            task.status == .completed
+        }
+
+        // Assert
+        XCTAssertTrue(completed)
+        XCTAssertTrue(trashedPaths.isEmpty)
+    }
+
+    func testPauseAndResumeDuringDurationCheckWaitsForPreviousFlow() async {
+        // Arrange：長度檢查期間暫停後立即恢復
+        let url = "https://www.youtube.com/watch?v=SHboSN92Hrs"
+        let task = createTestTask(url: url, title: "首播影片", status: .livestreaming)
+        var didInterrupt = false
+        var downloadCountWhenCheckResumed: Int?
+        manager = makeManager(mediaDuration: 48) {
+            guard !didInterrupt else { return }
+            didInterrupt = true
+            await self.manager.pauseTask(task)
+            self.manager.resumeTask(task)
+            // 重新下載時 yt-dlp 會沿用第一輪留下的片段檔
+            self.mockYTDLPService.didProduceOutputFile = false
+            // 給佇列時間重新挑選任務；舊流程未結束前不可再次啟動同一任務
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            downloadCountWhenCheckResumed = self.mockYTDLPService.downloadedURLs.count
+        }
+        manager.tasks = [task]
+        configureAiredPremiereMetadata(url: url)
+
+        // Act
+        manager.retryTask(task)
+        let downloadedAgain = await waitUntil(timeout: 5) {
+            self.mockYTDLPService.downloadedURLs.count == 2
+        }
+
+        // Assert：舊流程的檢查結束前只下載過一次；重新下載沿用的片段仍須判為不完整
+        XCTAssertEqual(downloadCountWhenCheckResumed, 1)
+        XCTAssertTrue(downloadedAgain, "舊流程退出後應重新下載")
+        let failed = await waitUntil {
+            task.status == .failed
+        }
+        XCTAssertTrue(failed, "沿用的片段檔不可標為完成")
+        XCTAssertTrue(trashedPaths.isEmpty)
+    }
+
+    func testPremiereDownloadUsesCommandCapturedAtStartForDurationCheck() async {
+        // Arrange：以截短指令開始下載，下載途中指令被改回一般指令
+        let url = "https://www.youtube.com/watch?v=SHboSN92Hrs"
+        manager = makeManager(mediaDuration: 48)
+        let defaults = UserDefaults.standard
+        let originalCommand = defaults.object(forKey: AppSettingsKeys.downloadCommand)
+        defer {
+            if let originalCommand {
+                defaults.set(originalCommand, forKey: AppSettingsKeys.downloadCommand)
+            } else {
+                defaults.removeObject(forKey: AppSettingsKeys.downloadCommand)
+            }
+        }
+        let regularCommand = manager.downloadCommand
+        manager.downloadCommand = regularCommand + " --download-sections *0:00-0:48"
+        mockYTDLPService.beforeReturn = { @MainActor in
+            self.manager.downloadCommand = regularCommand
+        }
+        let task = createTestTask(url: url, title: "首播影片", status: .livestreaming)
+        manager.tasks = [task]
+        configureAiredPremiereMetadata(url: url)
+
+        // Act
+        manager.retryTask(task)
+        let completed = await waitUntil {
+            task.status == .completed
+        }
+
+        // Assert：刻意截短的檔案不可被判為不完整
+        XCTAssertTrue(completed)
+    }
+
+    func testCancelDuringDurationCheckIsNotOverwritten() async {
+        // Arrange：長度檢查期間使用者取消任務
+        let url = "https://www.youtube.com/watch?v=SHboSN92Hrs"
+        let task = createTestTask(url: url, title: "首播影片", status: .livestreaming)
+        manager = makeManager(mediaDuration: 48) {
+            self.manager.cancelTask(task)
+        }
+        manager.tasks = [task]
+        configureAiredPremiereMetadata(url: url)
+
+        // Act
+        manager.retryTask(task)
+        let cancelled = await waitUntil {
+            task.status == .cancelled
+        }
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        // Assert
+        XCTAssertTrue(cancelled)
+        XCTAssertEqual(task.status, .cancelled)
+        XCTAssertNil(task.outputPath)
+        XCTAssertTrue(trashedPaths.isEmpty)
+        XCTAssertTrue(mockNotificationService.completedNotifications.isEmpty)
+    }
+
+    func testConfirmPlaylistSelectionPostLiveReplayShorterThanExpectedIsNotCompleted() async {
+        // Arrange：真實的播放清單流程中 VideoInfo.duration 為 nil，片長只來自 fetchMediaOptions
+        manager = makeManager(mediaDuration: 30)
+        let placeholderTask = createTestTask(
+            url: "https://www.youtube.com/playlist?list=PLtest",
+            title: "載入播放清單中...",
+            status: .fetchingInfo
+        )
+        manager.tasks = [placeholderTask]
+        let url = "https://www.youtube.com/watch?v=postlive1"
+        mockMetadataService.liveStatusByURL = [url: "post_live"]
+        mockMetadataService.durationByURL = [url: 600]
+        mockMetadataService.mediaOptionsByURL = [url: (subtitles: [], audioTracks: [], formats: [
+            YTDLPFormat(formatID: "137", vcodec: "avc1.640028", acodec: "none", protocolName: "https", ext: "mp4"),
+            YTDLPFormat(formatID: "140", vcodec: "none", acodec: "mp4a.40.2", protocolName: "https", ext: "m4a")
+        ])]
+
+        let selectedVideos = [
+            VideoInfo(
+                id: "postlive1",
+                title: "直播回放",
+                thumbnail: nil,
+                duration: nil,
+                uploader: nil,
+                url: url,
+                liveStatus: nil,
+                releaseTimestamp: nil
+            )
+        ]
+        let request = PlaylistSelectionRequest(
+            playlistTitle: "Test Playlist",
+            videos: selectedVideos,
+            placeholderTaskId: placeholderTask.id,
+            callbackScheme: nil,
+            requestId: nil
+        )
+
+        // Act
+        manager.confirmPlaylistSelection(request: request, selectedVideos: selectedVideos)
+        let becamePostLive = await waitUntil {
+            self.mockYTDLPService.downloadedURLs.contains(url) && self.manager.tasks.first?.status == .postLive
+        }
+
+        // Assert
+        XCTAssertTrue(becamePostLive)
+        XCTAssertTrue(mockNotificationService.completedNotifications.isEmpty)
+    }
+
+    func testRegularVideoShorterThanMetadataDurationIsStillCompleted() async {
+        // Arrange：一般影片不做長度檢查（自訂指令可能刻意只下載部分片段）
+        let url = "https://www.youtube.com/watch?v=regular1"
+        manager = makeManager(mediaDuration: 48)
+        let task = createTestTask(url: url, title: "一般影片", status: .pending)
+        task.duration = 600
+        manager.tasks = [task]
+
+        // Act
+        manager.retryTask(task)
+        let completed = await waitUntil {
+            task.status == .completed
+        }
+
+        // Assert
+        XCTAssertTrue(completed)
+    }
+
     // MARK: - DownloadStatus.paused 基本測試
 
     func testPausedStatusDisplayText() {
@@ -1786,6 +2306,7 @@ final class MockYouTubeMetadataService: YouTubeMetadataServiceProtocol {
     var mediaOptionsByURL: [String: (subtitles: [SubtitleTrack], audioTracks: [AudioTrack], formats: [YTDLPFormat])] = [:]
     var liveStatusByURL: [String: String] = [:]
     var releaseTimestampByURL: [String: Int] = [:]
+    var durationByURL: [String: Int] = [:]
     var videoInfoError: Error?
     var mediaOptionsError: Error?
     var playlistInfo: (title: String, videos: [VideoInfo]) = ("", [])
@@ -1819,7 +2340,8 @@ final class MockYouTubeMetadataService: YouTubeMetadataServiceProtocol {
             audioTracks: base.audioTracks,
             formats: base.formats,
             liveStatus: liveStatusByURL[url],
-            releaseTimestamp: releaseTimestampByURL[url]
+            releaseTimestamp: releaseTimestampByURL[url],
+            duration: durationByURL[url]
         )
     }
 
@@ -1842,6 +2364,14 @@ final class MockYTDLPService: YTDLPServiceProtocol {
     private(set) var downloadedCommandTemplates: [String] = []
     private(set) var cancelledTaskIDs: [UUID] = []
     var downloadError: Error?
+    /// 回傳的檔案是否由此次下載產生（false 模擬 yt-dlp 沿用既有同名檔或猜測路徑）
+    var didProduceOutputFile = true
+    /// 下載回傳前執行，用來模擬下載途中發生的事件
+    var beforeReturn: (() async -> Void)?
+
+    func didProduceOutputFile(taskId: UUID) async -> Bool {
+        didProduceOutputFile
+    }
 
     func download(
         taskId: UUID,
@@ -1858,6 +2388,7 @@ final class MockYTDLPService: YTDLPServiceProtocol {
             throw downloadError
         }
         onProgress(1)
+        await beforeReturn?()
         return outputPath
     }
 

@@ -127,13 +127,14 @@ struct YTDLPFormat: Codable, Equatable, CustomStringConvertible {
 }
 
 /// fetchMediaOptions 的回傳：字幕、音軌、格式，以及供播放清單路徑偵測首播狀態的
-/// liveStatus/releaseTimestamp（--flat-playlist 不提供這些欄位）
+/// liveStatus/releaseTimestamp/duration（--flat-playlist 不提供這些欄位）
 struct MediaOptions {
     let subtitles: [SubtitleTrack]
     let audioTracks: [AudioTrack]
     let formats: [YTDLPFormat]
     let liveStatus: String?
     let releaseTimestamp: Int?
+    var duration: Int? = nil  // 影片時長（秒）
 }
 
 protocol YouTubeMetadataServiceProtocol {
@@ -802,7 +803,8 @@ actor YouTubeMetadataService {
                 audioTracks: parseAudioTracks(from: json),
                 formats: parseFormats(from: json),
                 liveStatus: json["live_status"] as? String,
-                releaseTimestamp: json["release_timestamp"] as? Int
+                releaseTimestamp: json["release_timestamp"] as? Int,
+                duration: (json["duration"] as? NSNumber)?.intValue
             ))
         } catch {
             TubifyLogger.ytdlp.error("解析媒體選項失敗: \(error.localizedDescription)")

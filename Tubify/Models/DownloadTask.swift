@@ -53,13 +53,14 @@ class DownloadTask: Identifiable, Codable {
     var callbackScheme: String?  // 下載完成後的回調 Scheme（例如 "whispify"）
     var requestId: String?  // 請求識別碼，回調時原樣帶回給呼叫方
     var expectedEndTime: Date?  // 首播預計播放完成時間（僅適用於 livestreaming 狀態）
+    var wasLive: Bool = false  // 曾為首播／直播（下載完成後需比對長度，避免把串流片段當成完整影片）
 
     enum CodingKeys: String, CodingKey {
         case id, url, title, thumbnailURL, status, progress
         case errorMessage, outputPath, createdAt, completedAt, premiereDate
         case availableSubtitles, subtitleSelection
         case availableAudioTracks, audioSelection
-        case duration, callbackScheme, requestId, expectedEndTime
+        case duration, callbackScheme, requestId, expectedEndTime, wasLive
     }
 
     init(
@@ -125,6 +126,7 @@ class DownloadTask: Identifiable, Codable {
         callbackScheme = try container.decodeIfPresent(String.self, forKey: .callbackScheme)
         requestId = try container.decodeIfPresent(String.self, forKey: .requestId)
         expectedEndTime = try container.decodeIfPresent(Date.self, forKey: .expectedEndTime)
+        wasLive = try container.decodeIfPresent(Bool.self, forKey: .wasLive) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -148,6 +150,7 @@ class DownloadTask: Identifiable, Codable {
         try container.encodeIfPresent(callbackScheme, forKey: .callbackScheme)
         try container.encodeIfPresent(requestId, forKey: .requestId)
         try container.encodeIfPresent(expectedEndTime, forKey: .expectedEndTime)
+        try container.encode(wasLive, forKey: .wasLive)
     }
 }
 

@@ -32,6 +32,20 @@ final class DownloadResultHolder: @unchecked Sendable {
     private var _outputPath: String?
     private var _errorLines: [String] = []
     private var _downloadedFiles: [String] = []
+    private var _didRealDownload = false
+
+    /// yt-dlp 是否回報此次實際下載了檔案（而非沿用下載目錄中既有的同名檔）
+    var didRealDownload: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return _didRealDownload
+    }
+
+    func markRealDownload() {
+        lock.lock()
+        defer { lock.unlock() }
+        _didRealDownload = true
+    }
 
     var outputPath: String? {
         lock.lock()
@@ -168,6 +182,10 @@ protocol YTDLPServiceProtocol {
         onProgress: @escaping ProgressCallback
     ) async throws -> String
 
+    /// 該任務最近一次下載回傳的檔案是否確定由該次下載產生。
+    /// yt-dlp 沿用既有同名檔、或輸出路徑是從下載目錄猜測而來時為 false，此時檔案可能屬於其他任務或其他 App。
+    func didProduceOutputFile(taskId: UUID) async -> Bool
+
     func cancel(taskId: UUID) async
 }
 
@@ -188,6 +206,8 @@ actor YTDLPService {
     private let ytdlpPathProvider: (() async -> String?)?
     private var runningProcesses: [DownloadOperationID: Process] = [:]
     private var activeDownloadOperations: [UUID: DownloadOperationID] = [:]
+    /// 最近一次下載的輸出檔確定由該次下載產生的任務
+    private var producedOutputTaskIDs: Set<UUID> = []
     private var cancelledOperationIDs: Set<DownloadOperationID> = []
 
     init(ytdlpPathProvider: (() async -> String?)? = nil) {
@@ -798,6 +818,9 @@ actor YTDLPService {
         // 使用特殊前綴以便識別
         finalArguments.append("--print")
         finalArguments.append("after_move:FINAL_PATH:%(filepath)s")
+        // 一併輸出此次是否實際下載；同名檔已存在時 yt-dlp 會直接沿用而回報 False
+        finalArguments.append("--print")
+        finalArguments.append("after_move:REAL_DOWNLOAD:%(__real_download)s")
 
         // 加入字幕下載參數（如果有選擇字幕）
         if let selection = subtitleSelection, !selection.selectedLanguages.isEmpty {
@@ -871,6 +894,8 @@ actor YTDLPService {
                 let path = String(line.dropFirst("FINAL_PATH:".count))
                 TubifyLogger.ytdlp.info("從 --print 取得最終路徑: \(path)")
                 resultHolder.setOutputPath(path)
+            } else if line == "REAL_DOWNLOAD:True" {
+                resultHolder.markRealDownload()
             } else if line.contains("[download] Destination:") {
                 let path = line.replacingOccurrences(of: "[download] Destination: ", with: "")
                 resultHolder.addDownloadedFile(path)
@@ -1011,6 +1036,9 @@ actor YTDLPService {
             // 驗證檔案存在
             if FileManager.default.fileExists(atPath: finalPath) {
                 LogFileManager.shared.logDownloadComplete(taskId: taskId, outputPath: finalPath)
+                if resultHolder.didRealDownload {
+                    producedOutputTaskIDs.insert(taskId)
+                }
                 return finalPath
             } else {
                 TubifyLogger.ytdlp.warning("輸出路徑不存在，嘗試尋找替代檔案: \(finalPath)")
@@ -1056,6 +1084,10 @@ actor YTDLPService {
         throw YTDLPError.parseError("無法確定輸出檔案路徑。請確認下載是否成功完成。")
     }
 
+    func didProduceOutputFile(taskId: UUID) -> Bool {
+        producedOutputTaskIDs.contains(taskId)
+    }
+
     /// 取消下載
     func cancel(taskId: UUID) {
         guard let operationID = activeDownloadOperations[taskId] else { return }
@@ -1065,6 +1097,7 @@ actor YTDLPService {
 
     private func beginDownloadOperation(taskId: UUID) -> DownloadOperationID {
         let operationID = UUID()
+        producedOutputTaskIDs.remove(taskId)
         if let previousOperationID = activeDownloadOperations[taskId] {
             cancelOperation(previousOperationID)
         }

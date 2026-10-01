@@ -1789,6 +1789,34 @@ final class YTDLPServiceTests: XCTestCase {
         return (try? FileManager.default.attributesOfItem(atPath: path)) != nil
     }
 
+    private func didProduceOutputFile(marker: String) async throws -> Bool {
+        let fixture = try makeYTDLPFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        try writeCleanupSpec(fixture, [.final("video.mp4", stamp: Self.cleanupFinalStamp)])
+
+        let service = YTDLPService(ytdlpPathProvider: { fixture.executable.path })
+        let taskId = UUID()
+        _ = try await service.download(
+            taskId: taskId,
+            url: "https://youtube.com/watch?v=ownership",
+            commandTemplate: "\(marker) $youtubeUrl",
+            outputDirectory: fixture.directory.path,
+            onProgress: { _ in }
+        )
+        return await service.didProduceOutputFile(taskId: taskId)
+    }
+
+    func testDidProduceOutputFileIsTrueWhenYTDLPReportsRealDownload() async throws {
+        let produced = try await didProduceOutputFile(marker: "CLEANUP_MULTI REPORT_REAL_DOWNLOAD")
+        XCTAssertTrue(produced)
+    }
+
+    func testDidProduceOutputFileIsFalseWhenYTDLPReusesExistingFile() async throws {
+        // 同名檔已存在時 yt-dlp 回報 REAL_DOWNLOAD:False，該檔不一定屬於此任務
+        let produced = try await didProduceOutputFile(marker: "CLEANUP_MULTI")
+        XCTAssertFalse(produced)
+    }
+
     func testCleanupRemovesPartFileLeftByEarlierAttempt() async throws {
         let fixture = try makeYTDLPFixture()
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
@@ -2003,6 +2031,7 @@ final class YTDLPServiceTests: XCTestCase {
         log=\(shellQuote(log.path))
         pid=\(shellQuote(pid.path))
         cleanupspec=\(shellQuote(cleanupSpec.path))
+        allargs="$*"
         dir=\(shellQuote(directory.path))
         echo "$*" >> "$log"
         echo "$$" > "$pid"
@@ -2054,6 +2083,10 @@ final class YTDLPServiceTests: XCTestCase {
             : > "$rel"
             touch -t "$stamp" "$rel"
             printf 'FINAL_PATH:%s\\n' "$PWD/$rel"
+            case "$allargs" in
+              *REPORT_REAL_DOWNLOAD*) printf 'REAL_DOWNLOAD:True\\n' ;;
+              *) printf 'REAL_DOWNLOAD:False\\n' ;;
+            esac
             return 0
           done < "$cleanupspec"
         }

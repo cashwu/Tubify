@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import SwiftUI
 
@@ -49,6 +50,28 @@ struct PlaylistSelectionRequest: Identifiable {
     let requestId: String?
 }
 
+/// 已下載檔案的檢視與清理操作（可注入以供測試使用）
+struct DownloadedFileInspector {
+    /// 媒體檔的實際長度（秒）；無法判讀時回傳 nil
+    var duration: (String) async -> TimeInterval?
+    /// 將檔案移到垃圾桶
+    var trash: (String) throws -> Void
+
+    static let live = DownloadedFileInspector(
+        duration: { path in
+            // AVFoundation 不支援的容器格式回傳 nil
+            guard let duration = try? await AVURLAsset(url: URL(fileURLWithPath: path)).load(.duration),
+                  duration.isNumeric else {
+                return nil
+            }
+            return duration.seconds
+        },
+        trash: { path in
+            try FileManager.default.trashItem(at: URL(fileURLWithPath: path), resultingItemURL: nil)
+        }
+    )
+}
+
 /// 下載管理器
 @Observable
 @MainActor
@@ -88,6 +111,7 @@ class DownloadManager {
     private let metadataService: YouTubeMetadataServiceProtocol
     private let ytdlpService: YTDLPServiceProtocol
     private let notificationService: NotificationServiceProtocol
+    private let fileInspector: DownloadedFileInspector
 
     /// 設定（使用 UserDefaults 直接讀取，避免與 @Observable 衝突）
     var downloadCommand: String {
@@ -120,12 +144,14 @@ class DownloadManager {
         persistenceService: PersistenceServiceProtocol,
         metadataService: YouTubeMetadataServiceProtocol = YouTubeMetadataService.shared,
         ytdlpService: YTDLPServiceProtocol = YTDLPService.shared,
-        notificationService: NotificationServiceProtocol = NotificationService.shared
+        notificationService: NotificationServiceProtocol = NotificationService.shared,
+        fileInspector: DownloadedFileInspector = .live
     ) {
         self.persistenceService = persistenceService
         self.metadataService = metadataService
         self.ytdlpService = ytdlpService
         self.notificationService = notificationService
+        self.fileInspector = fileInspector
 
         // 載入已儲存的任務
         tasks = persistenceService.loadTasks()
@@ -409,7 +435,8 @@ class DownloadManager {
     }
 
     /// 獲取單一影片的元資料
-    private func fetchMetadataForTask(_ task: DownloadTask) async {
+    /// - Parameter statusOnFailure: 重試時傳入任務原本的狀態；metadata 抓取失敗時還原為該狀態而不排入佇列
+    private func fetchMetadataForTask(_ task: DownloadTask, statusOnFailure: DownloadStatus? = nil) async {
         TubifyLogger.download.info("獲取影片元資料: \(task.url)")
 
         // 獲取 cookies 參數（解決 Bot 驗證問題）
@@ -429,6 +456,9 @@ class DownloadManager {
             task.title = videoInfo.title
             task.thumbnailURL = videoInfo.thumbnail
             task.duration = videoInfo.duration
+            if let liveStatus = videoInfo.liveStatus, DownloadConstants.liveRelatedStatuses.contains(liveStatus) {
+                task.wasLive = true
+            }
 
             // 檢查是否為尚未首播（首播排程中）：yt-dlp 以 --skip-download 抓取 metadata 時
             // 會成功回傳 JSON，若不攔截會落入 .pending 被排入佇列，下載時 yt-dlp 卡在 0% 無限等待。
@@ -535,10 +565,15 @@ class DownloadManager {
                 if let premiereDate = PremiereErrorParser.parsePremiereDate(from: errorMessage) {
                     task.premiereDate = premiereDate
                     task.status = .scheduled
+                    task.wasLive = true
                     task.errorMessage = errorMessage
                 } else {
                     task.status = newStatus
                 }
+            } else if let statusOnFailure {
+                // 重試時無法確認首播是否已播完，維持原狀態，避免在串流仍進行時下載到片段
+                task.status = statusOnFailure
+                task.errorMessage = errorMessage
             } else {
                 task.title = "無法獲取標題"
                 task.status = newStatus
@@ -552,6 +587,7 @@ class DownloadManager {
     private func markTaskAsPostLive(_ task: DownloadTask, message: String = "直播回放仍在處理中，請稍後重試。") {
         TubifyLogger.download.info("偵測到直播處理中: \(task.title)")
         task.status = .postLive
+        task.wasLive = true
         task.errorMessage = message
     }
 
@@ -627,6 +663,7 @@ class DownloadManager {
                 title: video.title,
                 thumbnailURL: video.thumbnail,
                 status: .fetchingInfo,
+                duration: video.duration,
                 callbackScheme: request.callbackScheme,
                 requestId: request.requestId
             )
@@ -645,7 +682,13 @@ class DownloadManager {
                 do {
                     let mediaOptions = try await metadataService.fetchMediaOptions(url: task.url, cookiesArguments: cookiesArgs)
 
-                    // --flat-playlist 不含 live_status，改用完整 metadata 回傳的 liveStatus 偵測首播狀態
+                    // --flat-playlist 不含 duration 與 live_status，改用完整 metadata 回傳的值
+                    if let duration = mediaOptions.duration {
+                        task.duration = duration
+                    }
+                    if let liveStatus = mediaOptions.liveStatus, DownloadConstants.liveRelatedStatuses.contains(liveStatus) {
+                        task.wasLive = true
+                    }
 
                     // 尚未首播的影片必須等首播播完才可下載，設為 .scheduled 且不進佇列
                     if mediaOptions.liveStatus == "is_upcoming" {
@@ -653,6 +696,17 @@ class DownloadManager {
                         task.status = .scheduled
                         if let releaseTimestamp = mediaOptions.releaseTimestamp {
                             task.premiereDate = Date(timeIntervalSince1970: TimeInterval(releaseTimestamp))
+                        }
+                        continue
+                    }
+
+                    // 正在首播串流的影片此時下載只會得到片段，設為 .livestreaming 且不進佇列
+                    if mediaOptions.liveStatus == "is_live" {
+                        TubifyLogger.download.info("播放清單中偵測到正在首播串流中: \(task.title)")
+                        task.status = .livestreaming
+                        if let releaseTimestamp = mediaOptions.releaseTimestamp,
+                           let duration = task.duration {
+                            task.expectedEndTime = Date(timeIntervalSince1970: TimeInterval(releaseTimestamp + duration))
                         }
                         continue
                     }
@@ -841,7 +895,10 @@ class DownloadManager {
 
             if availableSlots > 0 && !isAllPaused {
                 // 取得待處理的任務
-                let pendingTasks = tasks.filter { $0.status == .pending }.prefix(availableSlots)
+                // 排除前一次下載流程尚未結束的任務（例如暫停後立即恢復），等舊流程退出後才重新下載
+                let pendingTasks = tasks
+                    .filter { $0.status == .pending && !currentTasks.contains($0.id) }
+                    .prefix(availableSlots)
 
                 TubifyLogger.download.debug("準備啟動 \(pendingTasks.count) 個下載任務")
 
@@ -893,11 +950,14 @@ class DownloadManager {
         task.status = .downloading
         task.progress = 0
 
+        // 下載與完成後的長度檢查共用同一份指令，避免下載途中設定被修改而誤判
+        let commandTemplate = effectiveDownloadCommand(for: task.url)
+
         do {
             let outputPath = try await ytdlpService.download(
                 taskId: task.id,
                 url: task.url,
-                commandTemplate: effectiveDownloadCommand(for: task.url),
+                commandTemplate: commandTemplate,
                 outputDirectory: downloadFolder,
                 subtitleSelection: task.subtitleSelection,
                 audioSelection: task.audioSelection
@@ -905,6 +965,40 @@ class DownloadManager {
                 Task { @MainActor in
                     task?.progress = progress
                 }
+            }
+
+            // 首播／直播影片：比對實際長度，避免把串流片段當成完整影片
+            let isIncomplete = await isIncompleteLiveDownload(task, outputPath: outputPath, commandTemplate: commandTemplate)
+            // 完整性與清理權限分開判定：只有確定由此次下載產生的檔案才可移除
+            let canRemoveOutput = isIncomplete ? await ytdlpService.didProduceOutputFile(taskId: task.id) : false
+
+            // 長度檢查期間任務可能已被取消、暫停或移除，不可覆蓋其狀態
+            guard task.status == .downloading, tasks.contains(where: { $0.id == task.id }) else {
+                persistenceService.saveTasks(tasks)
+                return
+            }
+
+            if isIncomplete && !canRemoveOutput {
+                // yt-dlp 沿用了既有的同名檔（其他影片、其他任務，或先前未能清除的片段），不可移除也不可視為完成
+                TubifyLogger.download.error("輸出檔長度不足且非此次下載產生，保留檔案: \(outputPath)")
+                let errorMsg = "下載資料夾中已有同名檔案，且長度明顯短於預期。請移除或重新命名該檔案後重試：\(outputPath)"
+                task.status = .failed
+                task.errorMessage = errorMsg
+                notificationService.sendDownloadFailedNotification(title: task.title, error: errorMsg)
+                persistenceService.saveTasks(tasks)
+                return
+            }
+
+            if isIncomplete {
+                // 移到垃圾桶，否則重試時 yt-dlp 可能因同名檔案已存在而略過下載
+                do {
+                    try fileInspector.trash(outputPath)
+                } catch {
+                    TubifyLogger.download.error("無法將不完整的檔案移到垃圾桶: \(outputPath)，\(error.localizedDescription)")
+                }
+                markTaskAsPostLive(task, message: "下載到的影片長度明顯短於預期，可能只錄到串流片段，請稍後重試。")
+                persistenceService.saveTasks(tasks)
+                return
             }
 
             task.status = .completed
@@ -957,6 +1051,7 @@ class DownloadManager {
                 markTaskAsPostLive(task)
             } else if let premiereDate = PremiereErrorParser.parsePremiereDate(from: errorMsg) {
                 task.status = .scheduled
+                task.wasLive = true
                 task.premiereDate = premiereDate
                 task.errorMessage = errorMsg
             } else {
@@ -973,6 +1068,28 @@ class DownloadManager {
 
         // 儲存任務
         persistenceService.saveTasks(tasks)
+    }
+
+    /// 首播／直播影片下載後的實際長度是否明顯短於 metadata 的長度；無法判讀長度時視為完整
+    private func isIncompleteLiveDownload(_ task: DownloadTask, outputPath: String, commandTemplate: String) async -> Bool {
+        guard task.wasLive, let expectedDuration = task.duration, expectedDuration > 0 else {
+            return false
+        }
+
+        // 自訂指令刻意截短輸出時，長度不足是預期結果
+        guard !DownloadConstants.durationShorteningOptions.contains(where: commandTemplate.contains) else {
+            return false
+        }
+
+        guard let actualDuration = await fileInspector.duration(outputPath) else {
+            return false
+        }
+
+        let isIncomplete = actualDuration < Double(expectedDuration) * DownloadConstants.minimumCompleteDurationRatio
+        if isIncomplete {
+            TubifyLogger.download.error("下載長度不完整: \(task.title)，預期 \(expectedDuration) 秒，實際 \(Int(actualDuration)) 秒")
+        }
+        return isIncomplete
     }
 
     /// 取消任務
@@ -1003,15 +1120,18 @@ class DownloadManager {
 
     /// 重試任務
     func retryTask(_ task: DownloadTask) {
-        // 首播（.scheduled）與直播處理中（.postLive）需重新抓取 metadata 再判斷：
-        // 若首播已播完會轉為可下載，否則回到 .scheduled，避免直接排入佇列導致 yt-dlp 卡在 0%
-        if task.status == .postLive || task.status == .scheduled {
+        // 首播（.scheduled）、首播串流中（.livestreaming）與直播處理中（.postLive）需重新抓取 metadata 再判斷：
+        // 若首播已播完會轉為可下載，否則回到原狀態，避免直接排入佇列導致 yt-dlp 卡在 0%，
+        // 或在串流仍進行時只錄到當下的一小段片段
+        if task.status == .postLive || task.status == .scheduled || task.status == .livestreaming {
+            let previousStatus = task.status
+            task.wasLive = true
             task.status = .fetchingInfo
             task.progress = 0
             task.errorMessage = nil
             persistenceService.saveTasks(tasks)
             Task {
-                await fetchMetadataForTask(task)
+                await fetchMetadataForTask(task, statusOnFailure: previousStatus)
             }
             return
         }

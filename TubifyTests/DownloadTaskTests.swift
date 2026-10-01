@@ -337,6 +337,30 @@ final class DownloadTaskTests: XCTestCase {
         XCTAssertEqual(task.errorMessage, "Premieres in 30 minutes")
     }
 
+    // MARK: - wasLive 編碼/解碼測試
+
+    func testEncodingAndDecodingWithWasLive() throws {
+        let task = DownloadTask(url: "https://www.youtube.com/watch?v=livestream123", status: .postLive)
+        task.wasLive = true
+
+        let data = try JSONEncoder().encode(task)
+        let decodedTask = try JSONDecoder().decode(DownloadTask.self, from: data)
+
+        XCTAssertTrue(decodedTask.wasLive)
+    }
+
+    func testDecodingWithoutWasLiveDefaultsToFalse() throws {
+        // 舊版持久化資料沒有 wasLive 欄位
+        let data = try JSONEncoder().encode(DownloadTask(url: "https://www.youtube.com/watch?v=abc123"))
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        json.removeValue(forKey: "wasLive")
+        let legacyData = try JSONSerialization.data(withJSONObject: json)
+
+        let decodedTask = try JSONDecoder().decode(DownloadTask.self, from: legacyData)
+
+        XCTAssertFalse(decodedTask.wasLive)
+    }
+
     // MARK: - expectedEndTime 編碼/解碼測試
 
     func testEncodingAndDecodingWithExpectedEndTime() throws {
