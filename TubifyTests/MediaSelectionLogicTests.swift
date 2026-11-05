@@ -147,4 +147,100 @@ final class MediaSelectionLogicTests: XCTestCase {
         XCTAssertEqual(filteredTracks.count, 1)
         XCTAssertFalse(filteredTracks.count > 1)  // 不應顯示音軌選擇
     }
+
+    // MARK: - YouTube 自動字幕
+
+    func testAutomaticTracks_HaveDistinctIDsAndLabels() {
+        let uploaded = SubtitleTrack(languageCode: "en")
+        let translated = SubtitleTrack.automatic(.traditionalChinese, captionKey: "zh-Hant", kind: .translated)
+        let generated = SubtitleTrack.automatic(.english, captionKey: "en", kind: .generated)
+
+        XCTAssertNotEqual(uploaded.id, generated.id)
+        XCTAssertNotEqual(translated.id, generated.id)
+        XCTAssertEqual(translated.displayName, "繁體中文（YouTube 自動翻譯）")
+        XCTAssertEqual(generated.displayName, "英文（YouTube 自動產生）")
+        XCTAssertEqual(uploaded.displayName, uploaded.languageName)
+    }
+
+    /// 同語言、不同來源的自動字幕共用同一個 id，播放清單合併選項時才會只出現一項
+    func testAutomaticTracksFromDifferentSourcesShareID() {
+        XCTAssertEqual(
+            SubtitleTrack.automatic(.traditionalChinese, captionKey: "zh-Hant", kind: .translated).id,
+            SubtitleTrack.automatic(.traditionalChinese, captionKey: "zh-Hant-en", kind: .translated).id
+        )
+        XCTAssertEqual(
+            SubtitleTrack.automatic(.english, captionKey: "en", kind: .generated).id,
+            SubtitleTrack.automatic(.english, captionKey: "en-ja", kind: .translated).id
+        )
+    }
+
+    func testAutomaticCaptionTargetFromKey() {
+        XCTAssertEqual(AutomaticCaptionTarget(captionKey: "zh-Hant"), .traditionalChinese)
+        XCTAssertEqual(AutomaticCaptionTarget(captionKey: "zh-Hant-en"), .traditionalChinese)
+        XCTAssertEqual(AutomaticCaptionTarget(captionKey: "en"), .english)
+        XCTAssertEqual(AutomaticCaptionTarget(captionKey: "en-ja"), .english)
+        XCTAssertNil(AutomaticCaptionTarget(captionKey: "zh-Hans"))
+    }
+
+    func testSubtitleSelectionFromTracks_SplitsUploadedAndAutomatic() throws {
+        let selection = try XCTUnwrap(SubtitleSelection(tracks: [
+            SubtitleTrack(languageCode: "ja"),
+            .automatic(.traditionalChinese, captionKey: "zh-Hant-ja", kind: .translated),
+            .automatic(.english, captionKey: "en", kind: .generated)
+        ]))
+
+        XCTAssertEqual(selection.selectedLanguages, ["ja"])
+        XCTAssertEqual(selection.automaticLanguages, ["zh-Hant-ja", "en"])
+        XCTAssertNil(SubtitleSelection(tracks: []))
+    }
+
+    /// 播放清單合併選擇後，各任務只保留自己擁有的字幕，自動字幕改用該任務自己的 key，且依語言分別判斷
+    func testSubtitleSelectionRestricted_UsesEachTasksOwnTracks() throws {
+        let selection = SubtitleSelection(selectedLanguages: ["en", "zh-Hant"], automaticLanguages: ["zh-Hant-en"])
+
+        let uploadedOnly = try XCTUnwrap(selection.restricted(to: [SubtitleTrack(languageCode: "zh-Hant")]))
+        XCTAssertEqual(uploadedOnly.selectedLanguages, ["zh-Hant"])
+        XCTAssertEqual(uploadedOnly.automaticLanguages, [])
+
+        let automaticOnly = try XCTUnwrap(selection.restricted(to: [
+            .automatic(.traditionalChinese, captionKey: "zh-Hant-ja", kind: .translated),
+            .automatic(.english, captionKey: "en-ja", kind: .translated)
+        ]))
+        XCTAssertEqual(automaticOnly.selectedLanguages, [])
+        XCTAssertEqual(automaticOnly.automaticLanguages, ["zh-Hant-ja"])
+
+        XCTAssertNil(selection.restricted(to: [SubtitleTrack(languageCode: "ja")]))
+    }
+
+    func testSubtitleSelectionRemovingAutomatic_KeepsOtherLanguages() throws {
+        let mixed = SubtitleSelection(selectedLanguages: ["ja"], automaticLanguages: ["zh-Hant-ja", "en"])
+        let remaining = try XCTUnwrap(mixed.removingAutomatic(["en"]))
+
+        XCTAssertEqual(remaining.selectedLanguages, ["ja"])
+        XCTAssertEqual(remaining.automaticLanguages, ["zh-Hant-ja"])
+        XCTAssertNil(SubtitleSelection(selectedLanguages: [], automaticLanguages: ["zh-Hant"]).removingAutomatic(["zh-Hant"]))
+    }
+
+    /// 舊版持久化資料沒有自動字幕欄位，仍須能解碼為上傳字幕
+    func testLegacyPersistedSubtitleDataDecodesAsUploaded() throws {
+        let track = try JSONDecoder().decode(
+            SubtitleTrack.self,
+            from: Data(#"{"languageCode":"en","languageName":"英文"}"#.utf8)
+        )
+        let selection = try JSONDecoder().decode(
+            SubtitleSelection.self,
+            from: Data(#"{"selectedLanguages":["en"]}"#.utf8)
+        )
+
+        XCTAssertFalse(track.isAutomatic)
+        XCTAssertEqual(selection.selectedLanguages, ["en"])
+        XCTAssertEqual(selection.automaticLanguages, [])
+    }
+
+    func testAutomaticTrackRoundTripsThroughCodable() throws {
+        let track = SubtitleTrack.automatic(.english, captionKey: "en", kind: .generated)
+        let decoded = try JSONDecoder().decode(SubtitleTrack.self, from: JSONEncoder().encode(track))
+
+        XCTAssertEqual(decoded, track)
+    }
 }

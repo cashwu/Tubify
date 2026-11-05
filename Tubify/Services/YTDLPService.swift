@@ -302,7 +302,7 @@ actor YTDLPService {
             ? SafariCookiesService.shared.removeSafariCookies(template)
             : template
 
-        return try await executeDownloadFlow(
+        return try await executeDownloadWithSubtitleFallback(
             taskId: taskId,
             url: url,
             firstTemplate: firstTemplate,
@@ -312,6 +312,119 @@ actor YTDLPService {
             onProgress: onProgress,
             operationID: operationID
         )
+    }
+
+    /// 下載影片；自動字幕失敗時依序退回：帶 cookies 重試 → 略過自動字幕。
+    ///
+    /// YouTube 常以 HTTP 429 拒絕匿名的自動翻譯字幕請求（帶登入 cookies 則可通過），
+    /// 而 yt-dlp 抓字幕失敗會中止整支影片。字幕在影片之前下載，因此重跑幾乎不浪費下載量。
+    /// 只有確認為自動字幕的錯誤才會移除字幕；影片本身的錯誤保留字幕重試，最終仍失敗就拋出。
+    func executeDownloadWithSubtitleFallback(
+        taskId: UUID,
+        url: String,
+        firstTemplate: String,
+        cookieTemplateProvider: (() -> String?)?,
+        outputDirectory: String,
+        subtitleSelection: SubtitleSelection?,
+        onProgress: @escaping ProgressCallback,
+        operationID: DownloadOperationID? = nil
+    ) async throws -> String {
+        // 整次下載最多導出一次 cookies；快取是否已建立也代表 cookies 是否已被嘗試過
+        var cachedCookieTemplate: String??
+        let cookieProvider: (() -> String?)? = cookieTemplateProvider.map { provider in
+            {
+                if cachedCookieTemplate == nil {
+                    cachedCookieTemplate = .some(provider())
+                }
+                return cachedCookieTemplate ?? nil
+            }
+        }
+
+        // 所有重跑共用下載開始前的快照，失敗輪次留下的中間檔才會在最後成功時被清理
+        let directorySnapshot = directoryEntryNames(outputDirectory)
+        let runFlow = { [self] (template: String, cookieProvider: (() -> String?)?, selection: SubtitleSelection?) in
+            try await executeDownloadFlow(
+                taskId: taskId,
+                url: url,
+                firstTemplate: template,
+                cookieTemplateProvider: cookieProvider,
+                outputDirectory: outputDirectory,
+                subtitleSelection: selection,
+                onProgress: onProgress,
+                operationID: operationID,
+                directorySnapshot: .some(directorySnapshot)
+            )
+        }
+        let isAutomaticFailure = { (error: YTDLPError, selection: SubtitleSelection?) in
+            !Self.failedAutomaticLanguages(in: error, among: selection?.automaticLanguages ?? []).isEmpty
+        }
+
+        do {
+            return try await runFlow(firstTemplate, cookieProvider, subtitleSelection)
+        } catch let error as YTDLPError where isAutomaticFailure(error, subtitleSelection) {
+            guard let subtitleSelection else { throw error }
+            var lastFailure = error
+
+            // 第一輪已因登入或 403 改帶 cookies 時，字幕失敗就發生在 cookies 指令上，重跑同一條指令無益
+            let firstFlowCookieTemplate = cachedCookieTemplate
+            let firstFlowUsedCookies = firstFlowCookieTemplate != nil
+            if !firstFlowUsedCookies, let cookieTemplate = cookieProvider?() {
+                TubifyLogger.ytdlp.info("自動字幕下載失敗，改帶 Safari cookies 重試: \(url)")
+                do {
+                    return try await runFlow(cookieTemplate, nil, subtitleSelection)
+                } catch let retryError as YTDLPError where isAutomaticFailure(retryError, subtitleSelection) {
+                    TubifyLogger.ytdlp.warning("帶 cookies 重試仍無法下載自動字幕: \(url)")
+                    lastFailure = retryError
+                } catch let retryError as YTDLPError {
+                    if case .cancelled = retryError { throw retryError }
+                    // 字幕在影片之前寫入，此時失敗的是影片本身，不能當成字幕失敗而移除字幕。
+                    // 保留字幕選擇以原流程重跑：yt-dlp 會沿用已存在的字幕檔而不再請求，
+                    // 字幕也才能與影片一起套用 --remove-chapters 等裁切
+                    TubifyLogger.ytdlp.warning("帶 cookies 重試時影片下載失敗，保留字幕以原流程重試: \(retryError.localizedDescription)")
+                    do {
+                        return try await runFlow(firstTemplate, cookieProvider, subtitleSelection)
+                    } catch let rerunError as YTDLPError where isAutomaticFailure(rerunError, subtitleSelection) {
+                        // 字幕檔沒能寫出（cookies 指令在寫字幕前就失敗），只能略過該字幕
+                        lastFailure = rerunError
+                    }
+                }
+            }
+
+            // 影片本身需要 cookies 時直接帶 cookies，省去一次注定失敗的匿名嘗試
+            let fallbackCookieTemplate = firstFlowCookieTemplate ?? nil
+            // 每輪只移除錯誤指名的自動字幕，其餘保留：已寫出的字幕檔會被沿用，才能與影片一起裁切。
+            // 每輪至少移除一個 key，因此最多重跑「自動字幕數量」次
+            var remainingSelection: SubtitleSelection? = subtitleSelection
+            while true {
+                let failedLanguages = Self.failedAutomaticLanguages(
+                    in: lastFailure,
+                    among: remainingSelection?.automaticLanguages ?? []
+                )
+                remainingSelection = remainingSelection?.removingAutomatic(failedLanguages)
+                let skipped = failedLanguages.joined(separator: ", ")
+                TubifyLogger.ytdlp.warning("自動字幕下載失敗，略過 \(skipped) 後重新下載: \(url)")
+                LogFileManager.shared.logDownloadError(
+                    taskId: taskId,
+                    error: "自動字幕下載失敗，略過 \(skipped): \(lastFailure.localizedDescription)"
+                )
+                do {
+                    if let fallbackCookieTemplate {
+                        return try await runFlow(fallbackCookieTemplate, nil, remainingSelection)
+                    }
+                    return try await runFlow(firstTemplate, cookieProvider, remainingSelection)
+                } catch let rerunError as YTDLPError where isAutomaticFailure(rerunError, remainingSelection) {
+                    lastFailure = rerunError
+                }
+            }
+        }
+    }
+
+    /// 錯誤中被 yt-dlp 指名下載失敗的自動字幕 key（`Unable to download video subtitles for '<key>'`）
+    static func failedAutomaticLanguages(in error: YTDLPError, among automaticLanguages: [String]) -> [String] {
+        guard case .executionFailed(let message) = error else { return [] }
+        return automaticLanguages.filter {
+            message.contains("Unable to download video subtitles for '\($0)'")
+        }
     }
 
     /// 執行完整下載流程：可切換 cookies 時，登入錯誤與 video-data 403 都直接改帶 cookies 重試；
@@ -328,13 +441,15 @@ actor YTDLPService {
         sleeper: ((UInt64) async throws -> Void)? = nil,
         cancellationProbe: (() -> Bool)? = nil,
         operationID: DownloadOperationID? = nil,
-        cleanupObserver: ((CleanupOutcome) -> Void)? = nil
+        cleanupObserver: ((CleanupOutcome) -> Void)? = nil,
+        directorySnapshot: Set<String>?? = nil
     ) async throws -> String {
         let flowOperationID = operationID ?? UUID()
 
         // 快照必須在第一個 attempt 之前取得：孤兒中間檔是本次呼叫的某個 attempt 產生的，
         // 一定不在快照中，而下載開始前就存在的第三方 partial 檔一定在。
-        let preexistingEntryNames = directoryEntryNames(outputDirectory)
+        // 同一次下載會重跑多次流程時由呼叫端傳入共用快照，前幾輪留下的中間檔才會被清理。
+        let preexistingEntryNames = directorySnapshot ?? directoryEntryNames(outputDirectory)
         let executeAttempt = attemptExecutor ?? { [self] processedTemplate in
             try await executeDownload(
                 taskId: taskId,
@@ -823,13 +938,22 @@ actor YTDLPService {
         finalArguments.append("after_move:REAL_DOWNLOAD:%(__real_download)s")
 
         // 加入字幕下載參數（如果有選擇字幕）
-        if let selection = subtitleSelection, !selection.selectedLanguages.isEmpty {
-            finalArguments.append("--write-sub")
-            finalArguments.append("--sub-lang")
-            finalArguments.append(selection.selectedLanguages.joined(separator: ","))
-            finalArguments.append("--sub-format")
-            finalArguments.append("srt")
-            TubifyLogger.ytdlp.info("下載字幕: \(selection.selectedLanguages.joined(separator: ", "))")
+        // 自動字幕與影片同一次下載，才能沿用 cookies 等設定，並套用 --sponsorblock-remove 等裁切
+        if let selection = subtitleSelection {
+            let languages = selection.selectedLanguages + selection.automaticLanguages
+            if !selection.selectedLanguages.isEmpty {
+                finalArguments.append("--write-sub")
+            }
+            if !selection.automaticLanguages.isEmpty {
+                finalArguments.append("--write-auto-subs")
+            }
+            if !languages.isEmpty {
+                finalArguments.append("--sub-lang")
+                finalArguments.append(languages.joined(separator: ","))
+                finalArguments.append("--sub-format")
+                finalArguments.append("srt")
+                TubifyLogger.ytdlp.info("下載字幕: \(languages.joined(separator: ", "))")
+            }
         }
 
         LogFileManager.shared.logDownloadStart(url: url, taskId: taskId)

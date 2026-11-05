@@ -547,25 +547,58 @@ actor YouTubeMetadataService {
         }
     }
 
-    /// 從 yt-dlp JSON 輸出解析字幕資訊（只解析用戶上傳的字幕，忽略自動翻譯）
+    /// 從 yt-dlp JSON 輸出解析字幕資訊：用戶上傳的字幕全部列出；automatic_captions（自動字幕）
+    /// 只取繁體中文與英文，且上傳字幕已涵蓋該語言時略過
     private func parseSubtitles(from json: [String: Any]) -> [SubtitleTrack] {
-        // 只取 subtitles（用戶上傳），不取 automatic_captions（自動翻譯）
-        guard let subtitles = json["subtitles"] as? [String: Any], !subtitles.isEmpty else {
-            return []
-        }
-
-        var tracks: [SubtitleTrack] = []
-
-        for (langCode, _) in subtitles {
-            let track = SubtitleTrack(languageCode: langCode)
-            tracks.append(track)
-        }
+        let subtitles = json["subtitles"] as? [String: Any] ?? [:]
+        var tracks = subtitles.keys.map { SubtitleTrack(languageCode: $0) }
 
         // 按語言名稱排序
         tracks.sort { $0.languageName.localizedCompare($1.languageName) == .orderedAscending }
 
-        TubifyLogger.ytdlp.info("找到 \(tracks.count) 個用戶上傳的字幕: \(tracks.map { $0.languageCode }.joined(separator: ", "))")
+        if let automaticCaptions = json["automatic_captions"] as? [String: Any] {
+            let uploadedLanguages = subtitles.keys.sorted()
+            let availableKeys = Set(automaticCaptions.keys)
+            let originalLanguage = json["language"] as? String
+            for target in AutomaticCaptionTarget.allCases
+            where !uploadedLanguages.contains(where: target.isCovered(byUploadedLanguage:)) {
+                if let (captionKey, kind) = Self.preferredAutomaticCaption(
+                    for: target,
+                    availableKeys: availableKeys,
+                    uploadedLanguages: uploadedLanguages,
+                    originalLanguage: originalLanguage
+                ) {
+                    tracks.append(.automatic(target, captionKey: captionKey, kind: kind))
+                }
+            }
+        }
+
+        TubifyLogger.ytdlp.info("找到 \(tracks.count) 個字幕: \(tracks.map(\.languageCode).joined(separator: ", "))")
         return tracks
+    }
+
+    /// 挑選自動字幕的 key，品質由高到低：
+    /// 1. 影片原始語言就是目標語言（有 `<目標>-orig`）：語音辨識字幕本身，不經翻譯
+    /// 2. 上傳字幕的翻譯（`<目標>-<來源語言>`，原始語言的字幕優先）
+    /// 3. 自動產生字幕的翻譯（`<目標>`）
+    private static func preferredAutomaticCaption(
+        for target: AutomaticCaptionTarget,
+        availableKeys: Set<String>,
+        uploadedLanguages: [String],
+        originalLanguage: String?
+    ) -> (captionKey: String, kind: AutomaticCaptionKind)? {
+        let code = target.rawValue
+        if availableKeys.contains("\(code)-orig"), availableKeys.contains(code) {
+            return (code, .generated)
+        }
+        let sourceLanguages = uploadedLanguages.filter { $0 == originalLanguage }
+            + uploadedLanguages.filter { $0 != originalLanguage }
+        if let translatedFromUploaded = sourceLanguages
+            .map({ "\(code)-\($0)" })
+            .first(where: availableKeys.contains) {
+            return (translatedFromUploaded, .translated)
+        }
+        return availableKeys.contains(code) ? (code, .translated) : nil
     }
 
     /// 獲取影片的音軌資訊
@@ -693,7 +726,9 @@ actor YouTubeMetadataService {
         // 使用 --skip-download 避免 yt-dlp 嘗試驗證下載格式導致 403 錯誤
         // 明確指定 player client：yt-dlp 自選的預設 client 只回傳原聲音軌，
         // 配音音軌不會出現在 formats 中
-        let baseArguments = ["-J", "--skip-download", "--no-playlist"] + YTDLPService.youtubeExtractorArguments
+        // --write-auto-subs 才會讓 yt-dlp 列出上傳字幕的翻譯（`zh-Hant-en` 等）；-J 會在寫出字幕前結束，不會實際下載字幕
+        let baseArguments = ["-J", "--skip-download", "--no-playlist", "--write-auto-subs"]
+            + YTDLPService.youtubeExtractorArguments
 
         // 第一次一律不帶 cookies：帶上帳號 cookies 會讓 yt-dlp 改用不回傳 subtitles 的
         // client，公開影片的使用者上傳字幕會因此從查詢結果中消失

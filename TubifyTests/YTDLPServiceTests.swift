@@ -217,6 +217,312 @@ final class YTDLPServiceTests: XCTestCase {
         XCTAssertFalse(invocationLog.contains("--cookies-from-browser"))
     }
 
+    private static let automaticSubtitleSelection = SubtitleSelection(
+        selectedLanguages: ["en"],
+        automaticLanguages: ["zh-Hant-en"]
+    )
+
+    /// 自動翻譯字幕與影片同一次下載，才能共用 cookies 與裁切設定
+    func testAutoTranslatedSubtitlesDownloadInSameInvocationAsVideo() async throws {
+        let fixture = try makeYTDLPFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let service = YTDLPService(ytdlpPathProvider: { fixture.executable.path })
+        _ = try await service.download(
+            taskId: UUID(),
+            url: "https://youtube.com/watch?v=auto-sub-ok",
+            commandTemplate: "NEW $youtubeUrl",
+            outputDirectory: fixture.directory.path,
+            subtitleSelection: Self.automaticSubtitleSelection,
+            onProgress: { _ in }
+        )
+
+        XCTAssertEqual(fixture.invocationCount, 1)
+        let arguments = try XCTUnwrap(fixture.arguments(at: 1))
+        XCTAssertTrue(arguments.contains("--write-sub"))
+        XCTAssertTrue(arguments.contains("--write-auto-subs"))
+        let subLangIndex = try XCTUnwrap(arguments.firstIndex(of: "--sub-lang"))
+        XCTAssertEqual(arguments[subLangIndex + 1], "en,zh-Hant-en")
+    }
+
+    /// 只選自動翻譯字幕時不加 --write-sub
+    func testAutoTranslatedOnlySelectionOmitsUploadedSubtitleFlag() async throws {
+        let fixture = try makeYTDLPFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let service = YTDLPService(ytdlpPathProvider: { fixture.executable.path })
+        _ = try await service.download(
+            taskId: UUID(),
+            url: "https://youtube.com/watch?v=auto-sub-ok",
+            commandTemplate: "NEW $youtubeUrl",
+            outputDirectory: fixture.directory.path,
+            subtitleSelection: SubtitleSelection(selectedLanguages: [], automaticLanguages: ["zh-Hant"]),
+            onProgress: { _ in }
+        )
+
+        let arguments = try XCTUnwrap(fixture.arguments(at: 1))
+        XCTAssertFalse(arguments.contains("--write-sub"))
+        XCTAssertTrue(arguments.contains("--write-auto-subs"))
+        let subLangIndex = try XCTUnwrap(arguments.firstIndex(of: "--sub-lang"))
+        XCTAssertEqual(arguments[subLangIndex + 1], "zh-Hant")
+    }
+
+    /// 自動翻譯字幕被 YouTube 限流（HTTP 429）時，略過自動翻譯字幕重跑，影片照常完成且保留上傳字幕
+    func testAutoTranslatedSubtitleFailureRetriesWithoutAutoTranslatedSubtitles() async throws {
+        let fixture = try makeYTDLPFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let service = YTDLPService(ytdlpPathProvider: { fixture.executable.path })
+        let outputPath = try await service.download(
+            taskId: UUID(),
+            url: "https://youtube.com/watch?v=auto-sub-fail",
+            commandTemplate: "NEW $youtubeUrl",
+            outputDirectory: fixture.directory.path,
+            subtitleSelection: Self.automaticSubtitleSelection,
+            onProgress: { _ in }
+        )
+
+        XCTAssertEqual(
+            URL(fileURLWithPath: outputPath).resolvingSymlinksInPath().path,
+            fixture.newOutput.resolvingSymlinksInPath().path
+        )
+        XCTAssertEqual(fixture.invocationCount, 2)
+        let retryArguments = try XCTUnwrap(fixture.arguments(at: 2))
+        XCTAssertFalse(retryArguments.contains("--write-auto-subs"))
+        let subLangIndex = try XCTUnwrap(retryArguments.firstIndex(of: "--sub-lang"))
+        XCTAssertEqual(retryArguments[subLangIndex + 1], "en")
+    }
+
+    /// 匿名請求被 429 擋下時，帶 cookies 重試並保留自動翻譯字幕
+    func testAutoTranslatedSubtitleFailureRetriesWithCookiesKeepingSubtitles() async throws {
+        let fixture = try makeYTDLPFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let cookieExports = CookieExportCounter()
+        let service = YTDLPService(ytdlpPathProvider: { fixture.executable.path })
+        let outputPath = try await service.executeDownloadWithSubtitleFallback(
+            taskId: UUID(),
+            url: "https://youtube.com/watch?v=auto-sub-needs-cookies",
+            firstTemplate: "NEW $youtubeUrl",
+            cookieTemplateProvider: cookieExports.export,
+            outputDirectory: fixture.directory.path,
+            subtitleSelection: Self.automaticSubtitleSelection,
+            onProgress: { _ in }
+        )
+
+        XCTAssertEqual(
+            URL(fileURLWithPath: outputPath).resolvingSymlinksInPath().path,
+            fixture.newOutput.resolvingSymlinksInPath().path
+        )
+        XCTAssertEqual(fixture.invocationCount, 2)
+        let cookieArguments = try XCTUnwrap(fixture.arguments(at: 2))
+        XCTAssertTrue(cookieArguments.contains("--cookies"))
+        XCTAssertTrue(cookieArguments.contains("--write-auto-subs"))
+        XCTAssertEqual(cookieExports.count, 1)
+    }
+
+    /// 帶 cookies 仍失敗時，才略過自動翻譯字幕，影片照常完成
+    func testAutoTranslatedSubtitleFailureWithCookiesFallsBackToSkippingSubtitles() async throws {
+        let fixture = try makeYTDLPFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let cookieExports = CookieExportCounter()
+        let service = YTDLPService(ytdlpPathProvider: { fixture.executable.path })
+        let outputPath = try await service.executeDownloadWithSubtitleFallback(
+            taskId: UUID(),
+            url: "https://youtube.com/watch?v=auto-sub-fail",
+            firstTemplate: "NEW $youtubeUrl",
+            cookieTemplateProvider: cookieExports.export,
+            outputDirectory: fixture.directory.path,
+            subtitleSelection: Self.automaticSubtitleSelection,
+            onProgress: { _ in }
+        )
+
+        XCTAssertEqual(
+            URL(fileURLWithPath: outputPath).resolvingSymlinksInPath().path,
+            fixture.newOutput.resolvingSymlinksInPath().path
+        )
+        XCTAssertEqual(fixture.invocationCount, 3)
+        XCTAssertTrue(try XCTUnwrap(fixture.arguments(at: 2)).contains("--cookies"))
+        let finalArguments = try XCTUnwrap(fixture.arguments(at: 3))
+        XCTAssertFalse(finalArguments.contains("--cookies"))
+        XCTAssertFalse(finalArguments.contains("--write-auto-subs"))
+        XCTAssertEqual(cookieExports.count, 1)
+    }
+
+    /// 影片本身需要登入時，第一輪已帶 cookies 仍字幕失敗：不重跑同一條 cookies 指令，
+    /// 略過字幕時直接帶 cookies，且整次只導出一次 cookies
+    func testAutoTranslatedSubtitleFailureAfterLoginRetryDoesNotRepeatCookieRun() async throws {
+        let fixture = try makeYTDLPFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let cookieExports = CookieExportCounter()
+        let service = YTDLPService(ytdlpPathProvider: { fixture.executable.path })
+        let outputPath = try await service.executeDownloadWithSubtitleFallback(
+            taskId: UUID(),
+            url: "https://youtube.com/watch?v=auto-sub-login",
+            firstTemplate: "NEW $youtubeUrl",
+            cookieTemplateProvider: cookieExports.export,
+            outputDirectory: fixture.directory.path,
+            subtitleSelection: Self.automaticSubtitleSelection,
+            onProgress: { _ in }
+        )
+
+        XCTAssertEqual(
+            URL(fileURLWithPath: outputPath).resolvingSymlinksInPath().path,
+            fixture.newOutput.resolvingSymlinksInPath().path
+        )
+        XCTAssertEqual(fixture.invocationCount, 3)
+        let finalArguments = try XCTUnwrap(fixture.arguments(at: 3))
+        XCTAssertTrue(finalArguments.contains("--cookies"))
+        XCTAssertFalse(finalArguments.contains("--write-auto-subs"))
+        XCTAssertEqual(cookieExports.count, 1)
+    }
+
+    /// 帶 cookies 取得字幕後影片失敗：不可移除字幕，保留字幕選擇重跑（沿用已寫出的字幕檔），
+    /// 字幕才會與影片一起裁切；前幾輪留下的 partial 也要在成功後清掉
+    func testVideoFailureDuringCookieRetryKeepsSubtitlesAndCleansPartials() async throws {
+        let fixture = try makeYTDLPFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let cookieExports = CookieExportCounter()
+        let service = YTDLPService(ytdlpPathProvider: { fixture.executable.path })
+        _ = try await service.executeDownloadWithSubtitleFallback(
+            taskId: UUID(),
+            url: "https://youtube.com/watch?v=auto-sub-video-fail",
+            firstTemplate: "NEW $youtubeUrl",
+            cookieTemplateProvider: cookieExports.export,
+            outputDirectory: fixture.directory.path,
+            subtitleSelection: Self.automaticSubtitleSelection,
+            onProgress: { _ in }
+        )
+
+        XCTAssertEqual(fixture.invocationCount, 3)
+        let finalArguments = try XCTUnwrap(fixture.arguments(at: 3))
+        XCTAssertFalse(finalArguments.contains("--cookies"))
+        XCTAssertTrue(finalArguments.contains("--write-auto-subs"))
+        let subLangIndex = try XCTUnwrap(finalArguments.firstIndex(of: "--sub-lang"))
+        XCTAssertEqual(finalArguments[subLangIndex + 1], "en,zh-Hant-en")
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: fixture.directory.appendingPathComponent("new.f137.mp4.part").path
+        ))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: fixture.directory.appendingPathComponent("new.zh-Hant-en.srt").path
+        ))
+        XCTAssertEqual(cookieExports.count, 1)
+    }
+
+    /// 影片本身持續失敗時拋出錯誤，不可被當成字幕失敗而吞掉
+    func testPersistentVideoFailureAfterCookieRetryIsThrown() async throws {
+        let fixture = try makeYTDLPFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let service = YTDLPService(ytdlpPathProvider: { fixture.executable.path })
+        do {
+            _ = try await service.executeDownloadWithSubtitleFallback(
+                taskId: UUID(),
+                url: "https://youtube.com/watch?v=auto-sub-video-dead",
+                firstTemplate: "NEW $youtubeUrl",
+                cookieTemplateProvider: CookieExportCounter().export,
+                outputDirectory: fixture.directory.path,
+                subtitleSelection: Self.automaticSubtitleSelection,
+                onProgress: { _ in }
+            )
+            XCTFail("影片持續失敗時應拋出錯誤")
+        } catch let error as YTDLPError {
+            XCTAssertTrue(error.localizedDescription.contains("Connection reset by peer"))
+            XCTAssertEqual(YTDLPService.failedAutomaticLanguages(in: error, among: ["zh-Hant-en"]), [])
+        }
+        XCTAssertEqual(fixture.invocationCount, 3)
+    }
+
+    /// 記錄 cookies 導出次數的測試替身
+    private final class CookieExportCounter {
+        private(set) var count = 0
+
+        func export() -> String? {
+            count += 1
+            return "NEW --cookies fixture-cookies.txt $youtubeUrl"
+        }
+    }
+
+    /// 上傳字幕失敗不屬於自動翻譯字幕的退路，維持原本的失敗行為
+    func testUploadedSubtitleFailureIsNotRetried() async throws {
+        let fixture = try makeYTDLPFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let service = YTDLPService(ytdlpPathProvider: { fixture.executable.path })
+        do {
+            _ = try await service.download(
+                taskId: UUID(),
+                url: "https://youtube.com/watch?v=uploaded-sub-fail",
+                commandTemplate: "NEW $youtubeUrl",
+                outputDirectory: fixture.directory.path,
+                subtitleSelection: Self.automaticSubtitleSelection,
+                onProgress: { _ in }
+            )
+            XCTFail("上傳字幕失敗應拋出錯誤")
+        } catch {
+            XCTAssertEqual(fixture.invocationCount, 1)
+        }
+    }
+
+    func testFailedAutomaticLanguagesMatchesOnlyNamedKeys() {
+        let error = YTDLPError.executionFailed(
+            "ERROR: Unable to download video subtitles for 'zh-Hant-en': HTTP Error 429: Too Many Requests"
+        )
+
+        XCTAssertEqual(YTDLPService.failedAutomaticLanguages(in: error, among: ["zh-Hant-en", "en"]), ["zh-Hant-en"])
+        XCTAssertEqual(YTDLPService.failedAutomaticLanguages(in: error, among: ["zh-Hant", "en"]), [])
+        XCTAssertEqual(YTDLPService.failedAutomaticLanguages(in: .cancelled, among: ["zh-Hant-en"]), [])
+    }
+
+    /// 同時選繁中與英文自動字幕、繁中寫出後英文被 429：只移除英文，繁中保留（沿用已寫出的檔案）
+    /// 才能與影片一起裁切
+    func testPartialAutomaticSubtitleFailureDropsOnlyFailedLanguage() async throws {
+        let fixture = try makeYTDLPFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let service = YTDLPService(ytdlpPathProvider: { fixture.executable.path })
+        _ = try await service.executeDownloadWithSubtitleFallback(
+            taskId: UUID(),
+            url: "https://youtube.com/watch?v=auto-sub-partial",
+            firstTemplate: "NEW $youtubeUrl",
+            cookieTemplateProvider: nil,
+            outputDirectory: fixture.directory.path,
+            subtitleSelection: SubtitleSelection(selectedLanguages: [], automaticLanguages: ["zh-Hant-ja", "en-ja"]),
+            onProgress: { _ in }
+        )
+
+        XCTAssertEqual(fixture.invocationCount, 2)
+        let finalArguments = try XCTUnwrap(fixture.arguments(at: 2))
+        XCTAssertTrue(finalArguments.contains("--write-auto-subs"))
+        let subLangIndex = try XCTUnwrap(finalArguments.firstIndex(of: "--sub-lang"))
+        XCTAssertEqual(finalArguments[subLangIndex + 1], "zh-Hant-ja")
+    }
+
+    /// 兩個自動字幕先後失敗時逐一移除，最後只下載影片
+    func testSequentialAutomaticSubtitleFailuresDropEachLanguage() async throws {
+        let fixture = try makeYTDLPFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let service = YTDLPService(ytdlpPathProvider: { fixture.executable.path })
+        _ = try await service.executeDownloadWithSubtitleFallback(
+            taskId: UUID(),
+            url: "https://youtube.com/watch?v=auto-sub-all-fail",
+            firstTemplate: "NEW $youtubeUrl",
+            cookieTemplateProvider: nil,
+            outputDirectory: fixture.directory.path,
+            subtitleSelection: SubtitleSelection(selectedLanguages: [], automaticLanguages: ["zh-Hant-ja", "en-ja"]),
+            onProgress: { _ in }
+        )
+
+        XCTAssertEqual(fixture.invocationCount, 3)
+        let finalArguments = try XCTUnwrap(fixture.arguments(at: 3))
+        XCTAssertFalse(finalArguments.contains("--write-auto-subs"))
+        XCTAssertFalse(finalArguments.contains("--sub-lang"))
+    }
+
     func testProductionDownloadDrainsStderrAfterProcessTerminationAndRetries() async throws {
         let fixture = try makeYTDLPFixture()
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
@@ -2092,6 +2398,115 @@ final class YTDLPServiceTests: XCTestCase {
         }
 
         case "$*" in
+          *auto-sub-partial*)
+            # 繁中寫出後英文 429；不再要求英文時沿用已寫出的繁中而成功
+            case "$*" in
+              *en-ja*)
+                : > "$dir/new.zh-Hant-ja.srt"
+                printf "ERROR: Unable to download video subtitles for 'en-ja': HTTP Error 429: Too Many Requests\\n" >&2
+                exit 1
+                ;;
+              *)
+                touch \(shellQuote(newOutput.path))
+                printf 'FINAL_PATH:%s\\n' \(shellQuote(newOutput.path))
+                ;;
+            esac
+            ;;
+          *auto-sub-all-fail*)
+            # 依 --sub-lang 順序，第一個仍被要求的自動字幕 429
+            case "$*" in
+              *zh-Hant-ja*)
+                printf "ERROR: Unable to download video subtitles for 'zh-Hant-ja': HTTP Error 429: Too Many Requests\\n" >&2
+                exit 1
+                ;;
+              *en-ja*)
+                printf "ERROR: Unable to download video subtitles for 'en-ja': HTTP Error 429: Too Many Requests\\n" >&2
+                exit 1
+                ;;
+              *)
+                touch \(shellQuote(newOutput.path))
+                printf 'FINAL_PATH:%s\\n' \(shellQuote(newOutput.path))
+                ;;
+            esac
+            ;;
+          *auto-sub-video-fail*)
+            # 帶 cookies：字幕寫出後影片下載失敗並留下 partial；匿名：字幕檔已存在時 yt-dlp 沿用而成功，否則 429
+            case "$*" in
+              *--cookies*)
+                : > "$dir/new.zh-Hant-en.srt"
+                : > "$dir/new.f137.mp4.part"
+                touch -t 202001010000 "$dir/new.f137.mp4.part"
+                printf 'ERROR: [download] Got error: Connection reset by peer\\n' >&2
+                exit 1
+                ;;
+              *--write-auto-subs*)
+                if [ ! -f "$dir/new.zh-Hant-en.srt" ]; then
+                  printf "ERROR: Unable to download video subtitles for 'zh-Hant-en': HTTP Error 429: Too Many Requests\\n" >&2
+                  exit 1
+                fi
+                touch \(shellQuote(newOutput.path))
+                printf 'FINAL_PATH:%s\\n' \(shellQuote(newOutput.path))
+                ;;
+              *)
+                touch \(shellQuote(newOutput.path))
+                printf 'FINAL_PATH:%s\\n' \(shellQuote(newOutput.path))
+                ;;
+            esac
+            ;;
+          *auto-sub-video-dead*)
+            # 帶 cookies：字幕寫出後影片失敗；匿名沿用字幕後影片仍失敗
+            case "$*" in
+              *--cookies*)
+                : > "$dir/new.zh-Hant-en.srt"
+                printf 'ERROR: [download] Got error: Connection reset by peer\\n' >&2
+                exit 1
+                ;;
+              *--write-auto-subs*)
+                if [ ! -f "$dir/new.zh-Hant-en.srt" ]; then
+                  printf "ERROR: Unable to download video subtitles for 'zh-Hant-en': HTTP Error 429: Too Many Requests\\n" >&2
+                  exit 1
+                fi
+                printf 'ERROR: [download] Got error: Connection reset by peer\\n' >&2
+                exit 1
+                ;;
+            esac
+            ;;
+          *auto-sub-login*)
+            case "$*" in
+              *--cookies*--write-auto-subs*)
+                printf "ERROR: Unable to download video subtitles for 'zh-Hant-en': HTTP Error 429: Too Many Requests\\n" >&2
+                exit 1
+                ;;
+              *--cookies*)
+                touch \(shellQuote(newOutput.path))
+                printf 'FINAL_PATH:%s\\n' \(shellQuote(newOutput.path))
+                ;;
+              *)
+                printf 'ERROR: [youtube] video: Sign in to confirm your age\\n' >&2
+                exit 1
+                ;;
+            esac
+            ;;
+          *auto-sub-needs-cookies*--write-auto-subs*)
+            case "$*" in
+              *--cookies*)
+                touch \(shellQuote(newOutput.path))
+                printf 'FINAL_PATH:%s\\n' \(shellQuote(newOutput.path))
+                ;;
+              *)
+                printf "ERROR: Unable to download video subtitles for 'zh-Hant-en': HTTP Error 429: Too Many Requests\\n" >&2
+                exit 1
+                ;;
+            esac
+            ;;
+          *auto-sub-fail*--write-auto-subs*)
+            printf "ERROR: Unable to download video subtitles for 'zh-Hant-en': HTTP Error 429: Too Many Requests\\n" >&2
+            exit 1
+            ;;
+          *uploaded-sub-fail*)
+            printf "ERROR: Unable to download video subtitles for 'en': HTTP Error 429: Too Many Requests\\n" >&2
+            exit 1
+            ;;
           *ACTIVE*)
             touch \(shellQuote(activeMarker.path))
             exec /usr/bin/tail -f /dev/null

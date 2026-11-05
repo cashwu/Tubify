@@ -116,6 +116,7 @@ struct ContentView: View {
     @State private var urlErrorMessage: String?
     @State private var showDeleteAllAlert = false
     @State private var mediaRequests: [MediaSelectionRequest] = []
+    @State private var windowHeight: CGFloat = 0
     @State private var playlistRequests: [PlaylistSelectionRequest] = []
     @State private var videoOrPlaylistRequests: [VideoOrPlaylistChoiceRequest] = []
     @State private var showVideoOrPlaylistAlert = false
@@ -148,6 +149,7 @@ struct ContentView: View {
         }
         .frame(minWidth: 500, minHeight: 400)
         .background(Color(nsColor: .windowBackgroundColor))
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { windowHeight = $0 }
         .background(MainDownloadWindowMarker())
         .overlay {
             // 拖放指示器
@@ -195,7 +197,8 @@ struct ContentView: View {
                 videoTitle: request.videoTitle,
                 videoCount: request.tasks.count,
                 availableSubtitles: request.availableSubtitles,
-                availableAudioTracks: request.availableAudioTracks
+                availableAudioTracks: request.availableAudioTracks,
+                parentWindowHeight: windowHeight
             ) { subtitleSelection, audioSelection in
                 downloadManager.confirmMediaSelection(
                     for: request.tasks,

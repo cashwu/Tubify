@@ -327,7 +327,7 @@ final class YouTubeMetadataServiceTests: XCTestCase {
     /// `YTDLPService.youtubePlayerClientArgumentValue`：測試與被測程式共用同一個值時，
     /// 該值被改動就無法被偵測。
     private static let baseArguments = [
-        "-J", "--skip-download", "--no-playlist",
+        "-J", "--skip-download", "--no-playlist", "--write-auto-subs",
         "--extractor-args", "youtube:player_client=default,web_embedded"
     ]
 
@@ -369,6 +369,92 @@ final class YouTubeMetadataServiceTests: XCTestCase {
         XCTAssertEqual(options.subtitles.map(\.languageCode), ["zh"])
         XCTAssertEqual(options.formats.map(\.formatID), ["137"])
         XCTAssertEqual(fixture.invocationCount, 1)
+    }
+
+    private func mediaOptionsSubtitles(json: String) async throws -> [SubtitleTrack] {
+        let fixture = try makeMetadataFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        try fixture.setCall(1, exitCode: 0, stdout: json)
+
+        let service = YouTubeMetadataService(ytdlpPathProvider: { fixture.executable.path })
+        return try await service.fetchMediaOptions(url: Self.mediaOptionsURL, cookiesArguments: []).subtitles
+    }
+
+    /// 只列出繁體中文與英文的自動字幕；沒有上傳字幕可翻譯時使用自動產生字幕的翻譯
+    func testAutomaticCaptionsOfferOnlyTraditionalChineseAndEnglish() async throws {
+        let subtitles = try await mediaOptionsSubtitles(json: """
+        {"subtitles": {}, "automatic_captions": {"ja-orig": [], "ja": [], "en": [], "zh-Hans": [], "zh-Hant": []}}
+        """)
+
+        XCTAssertEqual(subtitles, [
+            .automatic(.traditionalChinese, captionKey: "zh-Hant", kind: .translated),
+            .automatic(.english, captionKey: "en", kind: .translated)
+        ])
+    }
+
+    /// 只有上傳字幕、沒有自動產生字幕的影片，以上傳字幕的翻譯 key 提供選項
+    func testUploadedSubtitleTranslationIsOfferedWithItsActualKey() async throws {
+        let subtitles = try await mediaOptionsSubtitles(json: """
+        {"subtitles": {"en": []}, "automatic_captions": {"zh-Hans-en": [], "zh-Hant-en": []}}
+        """)
+
+        XCTAssertEqual(subtitles, [
+            SubtitleTrack(languageCode: "en"),
+            .automatic(.traditionalChinese, captionKey: "zh-Hant-en", kind: .translated)
+        ])
+    }
+
+    /// 上傳字幕的翻譯優先於自動產生字幕的翻譯，且以影片原始語言的字幕為來源
+    func testAutomaticKeyPrefersOriginalLanguageUploadedSubtitle() async throws {
+        let subtitles = try await mediaOptionsSubtitles(json: """
+        {
+            "language": "ja",
+            "subtitles": {"en": [], "ja": []},
+            "automatic_captions": {"zh-Hant": [], "zh-Hant-en": [], "zh-Hant-ja": []}
+        }
+        """)
+
+        XCTAssertEqual(subtitles.last, .automatic(.traditionalChinese, captionKey: "zh-Hant-ja", kind: .translated))
+    }
+
+    /// 英文影片沒有上傳英文字幕時，提供語音辨識的英文自動產生字幕，且優先於上傳字幕的翻譯
+    func testEnglishSpeechRecognitionCaptionIsOfferedAsGenerated() async throws {
+        let subtitles = try await mediaOptionsSubtitles(json: """
+        {
+            "language": "en",
+            "subtitles": {"ja": []},
+            "automatic_captions": {"en-orig": [], "en": [], "en-ja": [], "zh-Hant": [], "zh-Hant-ja": []}
+        }
+        """)
+
+        XCTAssertEqual(subtitles, [
+            SubtitleTrack(languageCode: "ja"),
+            .automatic(.traditionalChinese, captionKey: "zh-Hant-ja", kind: .translated),
+            .automatic(.english, captionKey: "en", kind: .generated)
+        ])
+        XCTAssertEqual(subtitles.last?.displayName, "英文（YouTube 自動產生）")
+    }
+
+    /// 已有上傳的英文字幕（含地區變體）時，不再提供 YouTube 的英文自動字幕
+    func testUploadedEnglishSuppressesAutomaticEnglish() async throws {
+        for uploadedCode in ["en", "en-US", "en-GB"] {
+            let subtitles = try await mediaOptionsSubtitles(
+                json: #"{"subtitles": {"\#(uploadedCode)": []}, "automatic_captions": {"en-orig": [], "en": []}}"#
+            )
+
+            XCTAssertEqual(subtitles, [SubtitleTrack(languageCode: uploadedCode)], uploadedCode)
+        }
+    }
+
+    /// 已有上傳的繁體中文字幕時，不再提供自動翻譯版本
+    func testUploadedTraditionalChineseSuppressesAutoTranslatedTrack() async throws {
+        for uploadedCode in ["zh-Hant", "zh-TW", "zh-HK"] {
+            let subtitles = try await mediaOptionsSubtitles(
+                json: #"{"subtitles": {"\#(uploadedCode)": []}, "automatic_captions": {"zh-Hant": []}}"#
+            )
+
+            XCTAssertEqual(subtitles, [SubtitleTrack(languageCode: uploadedCode)], uploadedCode)
+        }
     }
 
     /// 解析結果為空同樣不觸發重試：空結果與「這支影片本來就沒有字幕」在 JSON 上無法區分。

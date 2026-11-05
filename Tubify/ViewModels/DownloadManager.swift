@@ -301,9 +301,10 @@ class DownloadManager {
             guard !remainingTasks.isEmpty else { return nil }
             guard remainingTasks.count != request.tasks.count else { return request }
 
-            let subtitleCodes = Set(remainingTasks.flatMap { $0.availableSubtitles ?? [] }.map(\.languageCode))
+            let remainingSubtitles = remainingTasks.flatMap { $0.availableSubtitles ?? [] }
+            let subtitleIDs = Set(remainingSubtitles.map(\.id))
             let audioCodes = Set(remainingTasks.flatMap { $0.availableAudioTracks ?? [] }.map(\.languageCode))
-            let needsSelection = subtitleCodes.contains(where: SubtitleTrack.isSupportedLanguage)
+            let needsSelection = remainingSubtitles.contains { SubtitleTrack.isSupportedLanguage($0.languageCode) }
                 || audioCodes.filter(AudioTrack.isSupportedLanguage).count > 1
             guard needsSelection else {
                 let newStatus: DownloadStatus = isAllPaused ? .paused : .pending
@@ -317,7 +318,7 @@ class DownloadManager {
             return MediaSelectionRequest(
                 id: request.id,
                 tasks: remainingTasks,
-                availableSubtitles: request.availableSubtitles.filter { subtitleCodes.contains($0.languageCode) },
+                availableSubtitles: request.availableSubtitles.filter { subtitleIDs.contains($0.id) },
                 availableAudioTracks: request.availableAudioTracks.filter { audioCodes.contains($0.languageCode) },
                 videoTitle: request.videoTitle
             )
@@ -729,21 +730,27 @@ class DownloadManager {
             let readyTasks = newTasks.filter {
                 $0.status == .fetchingInfo && activeTaskIDs.contains($0.id)
             }
-            let allSubtitleCodes = Set(readyTasks.flatMap { $0.availableSubtitles ?? [] }.map(\.languageCode))
+            // 以 id 去重：同語言的上傳字幕與自動字幕需各自保留
+            var seenSubtitleIDs: Set<String> = []
+            let allSubtitles = readyTasks.flatMap { $0.availableSubtitles ?? [] }
+                .filter { seenSubtitleIDs.insert($0.id).inserted }
             let allAudioCodes = Set(readyTasks.flatMap { $0.availableAudioTracks ?? [] }.map(\.languageCode))
 
             // 過濾只保留支援的語言
-            let filteredSubtitleCodes = allSubtitleCodes.filter { SubtitleTrack.isSupportedLanguage($0) }
+            let hasSupportedSubtitles = allSubtitles.contains { SubtitleTrack.isSupportedLanguage($0.languageCode) }
             let filteredAudioCodes = allAudioCodes.filter { AudioTrack.isSupportedLanguage($0) }
 
-            if !filteredSubtitleCodes.isEmpty || filteredAudioCodes.count > 1 {
+            if hasSupportedSubtitles || filteredAudioCodes.count > 1 {
                 for task in readyTasks {
                     task.status = .waitingForMediaSelection
                 }
                 persistenceService.saveTasks(tasks)
 
-                let mergedSubtitles = allSubtitleCodes.map { SubtitleTrack(languageCode: $0) }
-                    .sorted { $0.languageName.localizedCompare($1.languageName) == .orderedAscending }
+                // 上傳字幕依名稱排序，自動字幕排在最後
+                let mergedSubtitles = allSubtitles.sorted {
+                    if $0.isAutomatic != $1.isAutomatic { return !$0.isAutomatic }
+                    return $0.languageName.localizedCompare($1.languageName) == .orderedAscending
+                }
                 let mergedAudioTracks = allAudioCodes.map { AudioTrack(languageCode: $0) }
                     .sorted { $0.languageName.localizedCompare($1.languageName) == .orderedAscending }
 
@@ -854,11 +861,7 @@ class DownloadManager {
         let activeTaskIDs = Set(self.tasks.map(\.id))
 
         for task in tasks where activeTaskIDs.contains(task.id) {
-            let availableSubtitleCodes = Set((task.availableSubtitles ?? []).map(\.languageCode))
-            let selectedSubtitleCodes = subtitleSelection?.selectedLanguages.filter(availableSubtitleCodes.contains) ?? []
-            task.subtitleSelection = selectedSubtitleCodes.isEmpty
-                ? nil
-                : SubtitleSelection(selectedLanguages: selectedSubtitleCodes)
+            task.subtitleSelection = subtitleSelection?.restricted(to: task.availableSubtitles ?? [])
 
             let availableAudioCodes = Set((task.availableAudioTracks ?? []).map(\.languageCode))
             if let selectedAudioCode = audioSelection?.selectedLanguage,

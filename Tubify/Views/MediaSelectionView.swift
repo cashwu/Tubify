@@ -10,9 +10,10 @@ struct MediaSelectionView: View {
     let videoCount: Int      // 影片數量（播放清單用）
     let availableSubtitles: [SubtitleTrack]
     let availableAudioTracks: [AudioTrack]
+    let parentWindowHeight: CGFloat  // 主視窗高度，視窗高度依此比例計算
     let onSelect: (SubtitleSelection?, AudioSelection?) -> Void
 
-    @State private var selectedSubtitleLanguages: Set<String> = []
+    @State private var selectedSubtitleIDs: Set<String> = []
     @State private var selectedAudioLanguage: String? = nil  // nil 表示預設音軌
     @Environment(\.dismiss) private var dismiss
 
@@ -31,16 +32,9 @@ struct MediaSelectionView: View {
         !filteredSubtitles.isEmpty || filteredAudioTracks.count > 1
     }
 
-    /// 動態計算視窗高度
+    /// 視窗高度為主視窗的 75%，主視窗過矮時至少 250
     private var windowHeight: CGFloat {
-        var height: CGFloat = 120  // 標題欄 + 影片資訊 + 按鈕區域
-        if !filteredSubtitles.isEmpty {
-            height += CGFloat(40 + filteredSubtitles.count * 28)  // Section header + items
-        }
-        if filteredAudioTracks.count > 1 {
-            height += CGFloat(40 + (filteredAudioTracks.count + 1) * 28)  // Section header + items + 預設選項
-        }
-        return min(max(height, 250), 500)  // 限制在 250-500 之間
+        max(parentWindowHeight * 0.75, 250)
     }
 
     var body: some View {
@@ -79,17 +73,17 @@ struct MediaSelectionView: View {
                     Section {
                         ForEach(filteredSubtitles) { track in
                             Toggle(isOn: Binding(
-                                get: { selectedSubtitleLanguages.contains(track.languageCode) },
+                                get: { selectedSubtitleIDs.contains(track.id) },
                                 set: { isSelected in
                                     if isSelected {
-                                        selectedSubtitleLanguages.insert(track.languageCode)
+                                        selectedSubtitleIDs.insert(track.id)
                                     } else {
-                                        selectedSubtitleLanguages.remove(track.languageCode)
+                                        selectedSubtitleIDs.remove(track.id)
                                     }
                                 }
                             )) {
                                 HStack(spacing: 4) {
-                                    Text(track.languageName)
+                                    Text(track.displayName)
                                     Text("(\(track.languageCode))")
                                         .foregroundStyle(.tertiary)
                                         .font(.caption)
@@ -102,7 +96,7 @@ struct MediaSelectionView: View {
                             Text("字幕（可多選）")
                             Spacer()
                             Button("全部取消") {
-                                clearSelectedSubtitles(&selectedSubtitleLanguages)
+                                clearSelectedSubtitles(&selectedSubtitleIDs)
                             }
                             .buttonStyle(.borderless)
                             .font(.callout)
@@ -145,8 +139,8 @@ struct MediaSelectionView: View {
                 Spacer()
 
                 Button("下載") {
-                    let subtitleSelection = selectedSubtitleLanguages.isEmpty ? nil : SubtitleSelection(
-                        selectedLanguages: Array(selectedSubtitleLanguages)
+                    let subtitleSelection = SubtitleSelection(
+                        tracks: filteredSubtitles.filter { selectedSubtitleIDs.contains($0.id) }
                     )
                     let audioSelection = AudioSelection(selectedLanguage: selectedAudioLanguage)
                     onSelect(subtitleSelection, audioSelection)
@@ -159,8 +153,8 @@ struct MediaSelectionView: View {
         }
         .frame(width: 350, height: windowHeight)
         .onAppear {
-            // 預設選擇所有過濾後的字幕
-            selectedSubtitleLanguages = Set(filteredSubtitles.map { $0.languageCode })
+            // 預設選擇所有過濾後的上傳字幕；自動字幕需由使用者主動勾選
+            selectedSubtitleIDs = Set(filteredSubtitles.filter { !$0.isAutomatic }.map(\.id))
             // 音軌預設為「預設音軌」（nil）
             selectedAudioLanguage = nil
         }
@@ -172,14 +166,15 @@ struct MediaSelectionView: View {
         videoTitle: "測試影片標題 - 有多種音軌和字幕的影片",
         videoCount: 1,
         availableSubtitles: [
-            SubtitleTrack(languageCode: "zh-TW"),
             SubtitleTrack(languageCode: "en"),
-            SubtitleTrack(languageCode: "ja")
+            SubtitleTrack(languageCode: "ja"),
+            .automatic(.traditionalChinese, captionKey: "zh-Hant-en", kind: .translated)
         ],
         availableAudioTracks: [
             AudioTrack(languageCode: "ja"),
             AudioTrack(languageCode: "en")
         ],
+        parentWindowHeight: 600,
         onSelect: { _, _ in }
     )
 }
@@ -193,6 +188,7 @@ struct MediaSelectionView: View {
             SubtitleTrack(languageCode: "en")
         ],
         availableAudioTracks: [],
+        parentWindowHeight: 600,
         onSelect: { _, _ in }
     )
 }
@@ -207,6 +203,7 @@ struct MediaSelectionView: View {
             AudioTrack(languageCode: "en"),
             AudioTrack(languageCode: "zh")
         ],
+        parentWindowHeight: 600,
         onSelect: { _, _ in }
     )
 }
@@ -222,6 +219,7 @@ struct MediaSelectionView: View {
         availableAudioTracks: [
             AudioTrack(languageCode: "ja")
         ],
+        parentWindowHeight: 600,
         onSelect: { _, _ in }
     )
 }
