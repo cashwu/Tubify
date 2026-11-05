@@ -321,5 +321,5 @@
 
 **規格**：[subtitle-selection](specs/subtitle-selection.md)（新增 4 個 requirement、修改 2 個）、[download-ui-workflows](specs/download-ui-workflows.md)（新增視窗高度）。
 
-**驗證**：commit 附帶新增測試（`SubtitleInfo` 模型、`parseSubtitles` 的 key 挑選、下載引數與各 fallback 分支），但提交時**尚未執行**測試，也尚未經 `code-reviewer`／`code-simplifier` 審查。
+**驗證**：commit 附帶新增測試（`SubtitleInfo` 模型、`parseSubtitles` 的 key 挑選、下載引數與各 fallback 分支）。2026-11-05 執行完整 `xcodebuild test`，385 個測試、0 failures。尚未以真實影片驗證實際遇到 HTTP 429 時的退路，也尚未經 `code-reviewer`／`code-simplifier` 審查。
 
