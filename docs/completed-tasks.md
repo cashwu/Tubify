@@ -302,3 +302,24 @@
 - 5.9 實際以 `zh-Hant` 取代 `ja` 驗證（兩者經過同一條程式路徑）；輸出檔以 `399+140-12` 的 format id 屬性證明為 `zh-Hant`，而非 `ffprobe` 標籤。
 - **已知限制（使用者決定不處理）**：輸出檔的音訊串流語言標籤為 `und`，因下載指令未帶 `--embed-metadata`；使用者表示實際不會對同一支影片下載多種語言。
 - **已知 flake（使用者決定接受）**：`DownloadManagerTests.testRecoveryStartsInterruptedAndPendingDownloadsOnlyOnce()` 偶發 test host crash，會讓 `./Scripts/package-app.sh` 的測試關卡間歇性擋下打包；無法穩定重現，與本 change 無因果關係。遇到時可確認失敗項目後以 `--skip-tests` 重跑。
+
+---
+
+## 後續變更（未經 OpenSpec 流程）
+
+以下功能是在 OpenSpec／Cash 流程移除後直接開發並 commit，沒有 proposal、design 與 task 清單；規格已由實作與測試反推，補進對應的 `docs/specs/`。
+
+### YouTube 自動字幕（commit `63d9f63`，版本 1.2.0）
+
+**動機**：只有上傳字幕可選，沒有上傳字幕的影片拿不到繁體中文或英文字幕。
+
+**做了什麼**
+
+- 媒體選項查詢加上 `--write-auto-subs`，從 `automatic_captions` 提供繁體中文與英文的自動字幕選項（上傳字幕已涵蓋該語言時不提供）。
+- 選擇視窗標示來源（自動翻譯／自動產生）、預設不勾選；視窗高度改為主視窗的 75%（至少 250）。
+- 字幕與影片同一次下載；自動字幕被 YouTube 限流（HTTP 429）時，依序退回：帶 cookies 重試 → 逐一略過失敗的自動字幕。
+
+**規格**：[subtitle-selection](specs/subtitle-selection.md)（新增 4 個 requirement、修改 2 個）、[download-ui-workflows](specs/download-ui-workflows.md)（新增視窗高度）。
+
+**驗證**：commit 附帶新增測試（`SubtitleInfo` 模型、`parseSubtitles` 的 key 挑選、下載引數與各 fallback 分支），但提交時**尚未執行**測試，也尚未經 `code-reviewer`／`code-simplifier` 審查。
+

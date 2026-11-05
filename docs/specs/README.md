@@ -18,7 +18,7 @@
 
 | 規格 | 內容 |
 | ---- | ---- |
-| [subtitle-selection](subtitle-selection.md) | 字幕預設全選與「全部取消」；媒體選項查詢優先不帶 cookies，僅在「需登入」時帶 cookies 重試一次 |
+| [subtitle-selection](subtitle-selection.md) | 上傳字幕預設全選與「全部取消」；YouTube 自動字幕（繁中、英文）的偵測、呈現、下載與失敗退路；媒體選項查詢優先不帶 cookies，僅在「需登入」時帶 cookies 重試一次 |
 | [audio-track-selection](audio-track-selection.md) | 以指定 player client 偵測配音音軌；選定語言時下載沿用同一組 client；語言限制套用到每個 format alternative，不得靜默改用其他語言 |
 
 ### 可靠性與直播回放
@@ -32,10 +32,10 @@
 
 | 規格 | 內容 |
 | ---- | ---- |
-| [download-ui-workflows](download-ui-workflows.md) | 情境感知貼上、重啟後任務恢復、可操作的錯誤、完成導向、單一原生 Settings、可存取性與設定輸入回饋 |
+| [download-ui-workflows](download-ui-workflows.md) | 情境感知貼上、重啟後任務恢復、可操作的錯誤、完成導向、單一原生 Settings、可存取性與設定輸入回饋、媒體選擇視窗高度 |
 
 ## 閱讀慣例
 
 - `SHALL`／`MUST` 為必須滿足；`MUST NOT` 為明確禁止。
-- 規格正文保留原撰寫語言（部分英文、部分繁體中文），未改寫內容。
+- 規格正文保留原撰寫語言（部分英文、部分繁體中文）。OpenSpec 時期的內容未改寫；之後新增的 requirement（例如 YouTube 自動字幕）會在該規格的「來源 change」註明。
 - 每份規格末尾的「對應程式碼」列出實作與測試所在檔案，可作為進入點。

@@ -196,9 +196,26 @@ The settings interface SHALL visibly identify an empty download command or a com
 - **WHEN** the configured download folder is a valid local path containing spaces and the user opens the folder picker
 - **THEN** the picker starts at that local directory
 
+---
+
+### Requirement: Media selection window sizing
+
+The media selection window height SHALL be 75% of the main window height, and MUST NOT be less than 250 points, so that the list of subtitle and audio options scales with the main window instead of a content-based estimate.
+
+#### Scenario: Window scales with the main window
+
+- **WHEN** the media selection window is presented while the main window is 600 points high
+- **THEN** the media selection window height SHALL be 450 points
+
+#### Scenario: Main window is very short
+
+- **WHEN** 75% of the main window height is less than 250 points
+- **THEN** the media selection window height SHALL be 250 points
+
 ## 來源 change
 
 - 2026-07-13-improve-download-ui-workflows（詳見 [completed-tasks.md](../completed-tasks.md)）
+- 媒體選擇視窗高度（commit `63d9f63`，未經 OpenSpec 流程，需求由實作反推整理）
 
 ## 對應程式碼
 
