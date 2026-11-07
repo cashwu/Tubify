@@ -21,6 +21,10 @@ final class DownloadManagerTests: XCTestCase {
     var mockYTDLPService: MockYTDLPService!
     var mockNotificationService: MockNotificationService!
 
+    /// 每個測試獨立的 UserDefaults suite，避免讀到或寫入使用者真實的下載指令、資料夾與偏好設定
+    var defaults: UserDefaults!
+    var defaultsSuiteName: String!
+
     // MARK: - Setup & Teardown
 
     override func setUp() async throws {
@@ -32,11 +36,14 @@ final class DownloadManagerTests: XCTestCase {
         mockMetadataService = MockYouTubeMetadataService()
         mockYTDLPService = MockYTDLPService()
         mockNotificationService = MockNotificationService()
+        defaultsSuiteName = "DownloadManagerTests.\(UUID().uuidString)"
+        defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsSuiteName))
         manager = DownloadManager(
             persistenceService: mockPersistence,
             metadataService: mockMetadataService,
             ytdlpService: mockYTDLPService,
-            notificationService: mockNotificationService
+            notificationService: mockNotificationService,
+            defaults: defaults
         )
 
         // 確保任務列表為空
@@ -50,6 +57,9 @@ final class DownloadManagerTests: XCTestCase {
         mockMetadataService = nil
         mockYTDLPService = nil
         mockNotificationService = nil
+        defaults.removePersistentDomain(forName: defaultsSuiteName)
+        defaults = nil
+        defaultsSuiteName = nil
         try await super.tearDown()
     }
 
@@ -96,7 +106,8 @@ final class DownloadManagerTests: XCTestCase {
             persistenceService: mockPersistence,
             metadataService: mockMetadataService,
             ytdlpService: mockYTDLPService,
-            notificationService: mockNotificationService
+            notificationService: mockNotificationService,
+            defaults: defaults
         )
     }
 
@@ -859,20 +870,25 @@ final class DownloadManagerTests: XCTestCase {
         XCTAssertEqual(mockYTDLPService.downloadedCommandTemplates.first, AppSettingsDefaults.genericDownloadCommand)
     }
 
+    // MARK: - Settings storage
+
+    /// 設定必須讀寫注入的 UserDefaults，而不是 `UserDefaults.standard`；
+    /// 否則測試會沿用使用者真實的下載指令與資料夾，修改設定時也會覆寫使用者的偏好。
+    func testSettingsAreReadFromAndWrittenToInjectedDefaults() {
+        let command = "yt-dlp --injected-defaults \"$youtubeUrl\""
+        defaults.set(command, forKey: AppSettingsKeys.downloadCommand)
+        defaults.set("/tmp/injected-folder", forKey: AppSettingsKeys.downloadFolder)
+
+        XCTAssertEqual(manager.downloadCommand, command)
+        XCTAssertEqual(manager.downloadFolder, "/tmp/injected-folder")
+
+        manager.maxConcurrentDownloads = 3
+        XCTAssertEqual(defaults.integer(forKey: AppSettingsKeys.maxConcurrentDownloads), 3)
+    }
+
     // MARK: - Completed task retention
 
     func testCompletedTaskRemainsWhenAutoRemovePreferenceIsMissing() async {
-        let defaults = UserDefaults.standard
-        let originalPreference = defaults.object(forKey: AppSettingsKeys.autoRemoveCompleted)
-        defaults.removeObject(forKey: AppSettingsKeys.autoRemoveCompleted)
-        defer {
-            if let originalPreference {
-                defaults.set(originalPreference, forKey: AppSettingsKeys.autoRemoveCompleted)
-            } else {
-                defaults.removeObject(forKey: AppSettingsKeys.autoRemoveCompleted)
-            }
-        }
-
         let task = createTestTask(url: "https://example.com/keep-completed", status: .pending)
         manager.tasks = [task]
 
@@ -886,16 +902,7 @@ final class DownloadManagerTests: XCTestCase {
     }
 
     func testCompletedTaskIsRemovedWhenAutoRemovePreferenceIsExplicitlyEnabled() async {
-        let defaults = UserDefaults.standard
-        let originalPreference = defaults.object(forKey: AppSettingsKeys.autoRemoveCompleted)
         defaults.set(true, forKey: AppSettingsKeys.autoRemoveCompleted)
-        defer {
-            if let originalPreference {
-                defaults.set(originalPreference, forKey: AppSettingsKeys.autoRemoveCompleted)
-            } else {
-                defaults.removeObject(forKey: AppSettingsKeys.autoRemoveCompleted)
-            }
-        }
 
         let task = createTestTask(url: "https://example.com/remove-completed", status: .pending)
         manager.tasks = [task]
@@ -1251,7 +1258,8 @@ final class DownloadManagerTests: XCTestCase {
                     return mediaDuration
                 },
                 trash: { [unowned self] path in self.trashedPaths.append(path) }
-            )
+            ),
+            defaults: defaults
         )
         manager.tasks = []
         return manager
@@ -1382,15 +1390,6 @@ final class DownloadManagerTests: XCTestCase {
         // Arrange：自訂指令刻意只下載部分片段，長度不足是預期結果
         let url = "https://www.youtube.com/watch?v=SHboSN92Hrs"
         manager = makeManager(mediaDuration: 48)
-        let defaults = UserDefaults.standard
-        let originalCommand = defaults.object(forKey: AppSettingsKeys.downloadCommand)
-        defer {
-            if let originalCommand {
-                defaults.set(originalCommand, forKey: AppSettingsKeys.downloadCommand)
-            } else {
-                defaults.removeObject(forKey: AppSettingsKeys.downloadCommand)
-            }
-        }
         manager.downloadCommand += " --download-sections *0:00-0:48"
         let task = createTestTask(url: url, title: "首播影片", status: .livestreaming)
         manager.tasks = [task]
@@ -1490,15 +1489,6 @@ final class DownloadManagerTests: XCTestCase {
         // Arrange：以截短指令開始下載，下載途中指令被改回一般指令
         let url = "https://www.youtube.com/watch?v=SHboSN92Hrs"
         manager = makeManager(mediaDuration: 48)
-        let defaults = UserDefaults.standard
-        let originalCommand = defaults.object(forKey: AppSettingsKeys.downloadCommand)
-        defer {
-            if let originalCommand {
-                defaults.set(originalCommand, forKey: AppSettingsKeys.downloadCommand)
-            } else {
-                defaults.removeObject(forKey: AppSettingsKeys.downloadCommand)
-            }
-        }
         let regularCommand = manager.downloadCommand
         manager.downloadCommand = regularCommand + " --download-sections *0:00-0:48"
         mockYTDLPService.beforeReturn = { @MainActor in

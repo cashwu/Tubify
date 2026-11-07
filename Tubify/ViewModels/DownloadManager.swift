@@ -112,24 +112,25 @@ class DownloadManager {
     private let ytdlpService: YTDLPServiceProtocol
     private let notificationService: NotificationServiceProtocol
     private let fileInspector: DownloadedFileInspector
+    private let defaults: UserDefaults
 
     /// 設定（使用 UserDefaults 直接讀取，避免與 @Observable 衝突）
     var downloadCommand: String {
-        get { UserDefaults.standard.string(forKey: AppSettingsKeys.downloadCommand) ?? AppSettingsDefaults.downloadCommand }
-        set { UserDefaults.standard.set(newValue, forKey: AppSettingsKeys.downloadCommand) }
+        get { defaults.string(forKey: AppSettingsKeys.downloadCommand) ?? AppSettingsDefaults.downloadCommand }
+        set { defaults.set(newValue, forKey: AppSettingsKeys.downloadCommand) }
     }
 
     var downloadFolder: String {
-        get { UserDefaults.standard.string(forKey: AppSettingsKeys.downloadFolder) ?? AppSettingsDefaults.downloadFolder }
-        set { UserDefaults.standard.set(newValue, forKey: AppSettingsKeys.downloadFolder) }
+        get { defaults.string(forKey: AppSettingsKeys.downloadFolder) ?? AppSettingsDefaults.downloadFolder }
+        set { defaults.set(newValue, forKey: AppSettingsKeys.downloadFolder) }
     }
 
     var maxConcurrentDownloads: Int {
         get {
-            let value = UserDefaults.standard.integer(forKey: AppSettingsKeys.maxConcurrentDownloads).nonZeroOrDefault(AppSettingsDefaults.maxConcurrentDownloads)
+            let value = defaults.integer(forKey: AppSettingsKeys.maxConcurrentDownloads).nonZeroOrDefault(AppSettingsDefaults.maxConcurrentDownloads)
             return min(max(value, 1), 5) // 限制在 1-5 之間
         }
-        set { UserDefaults.standard.set(min(max(newValue, 1), 5), forKey: AppSettingsKeys.maxConcurrentDownloads) }
+        set { defaults.set(min(max(newValue, 1), 5), forKey: AppSettingsKeys.maxConcurrentDownloads) }
     }
 
     private var downloadTask: Task<Void, Never>?
@@ -145,13 +146,15 @@ class DownloadManager {
         metadataService: YouTubeMetadataServiceProtocol = YouTubeMetadataService.shared,
         ytdlpService: YTDLPServiceProtocol = YTDLPService.shared,
         notificationService: NotificationServiceProtocol = NotificationService.shared,
-        fileInspector: DownloadedFileInspector = .live
+        fileInspector: DownloadedFileInspector = .live,
+        defaults: UserDefaults = .standard
     ) {
         self.persistenceService = persistenceService
         self.metadataService = metadataService
         self.ytdlpService = ytdlpService
         self.notificationService = notificationService
         self.fileInspector = fileInspector
+        self.defaults = defaults
 
         // 載入已儲存的任務
         tasks = persistenceService.loadTasks()
@@ -1035,7 +1038,7 @@ class DownloadManager {
             }
 
             // 檢查是否自動移除已完成的任務
-            let autoRemove = UserDefaults.standard.object(forKey: AppSettingsKeys.autoRemoveCompleted) as? Bool
+            let autoRemove = defaults.object(forKey: AppSettingsKeys.autoRemoveCompleted) as? Bool
                 ?? AppSettingsDefaults.autoRemoveCompleted
             if autoRemove {
                 tasks.removeAll { $0.id == task.id }
