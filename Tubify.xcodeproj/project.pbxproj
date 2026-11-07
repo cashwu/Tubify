@@ -16,17 +16,21 @@
 		25F7A1662ED3A48695BB3824 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 345AA1EE74AF5EFA1829B291 /* SettingsView.swift */; };
 		29B9CC7FA4716ADB4DDC07FC /* DownloadManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF8E5EE3B06A43221DB8548C /* DownloadManagerTests.swift */; };
 		302FC791A9344E168FF1756E /* MediaSelectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B676ADA0EB9B7F96852F9374 /* MediaSelectionView.swift */; };
+		47B2B492F1B02E18042839A3 /* OutputFileRenamerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3C5B8DF4E4704B3F2A453A1 /* OutputFileRenamerTests.swift */; };
 		58E56430F2A6F068D80E708E /* AudioInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95EB8E1D04C9847CCBE69B95 /* AudioInfo.swift */; };
 		6026FD36B163A042D4985A11 /* SettingsViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8804D4AFE4EBFD0BF540C6E0 /* SettingsViewTests.swift */; };
 		6160F89C21556B3D4731DDBD /* YouTubeMetadataService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E3CBC495E00CB65FBBB39DC /* YouTubeMetadataService.swift */; };
 		65CB75E79E8A5D2A50D70F41 /* PermissionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD110BD56C1F54E7333B92DA /* PermissionService.swift */; };
 		6790BCD17B7213C97791EFCA /* SubtitleInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B2A898BF5A0F2983A497786 /* SubtitleInfo.swift */; };
+		6F6C5A8FE9C06E4ABFC4C401 /* DownloadManagerRenameTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91C90CF086DA3D6A0C83FD95 /* DownloadManagerRenameTests.swift */; };
 		74417089AD46AB141DDD3AF5 /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B1861C7487DDFADC5E6A40B /* AppSettings.swift */; };
+		77B4857FAE12E5B9A8CBC6C4 /* CallbackServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FA4A464E22488144DBBCA24 /* CallbackServiceTests.swift */; };
 		77F48A65E13C25E4269ABF0E /* YTDLPService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 644BFB8F58A30DF3B66C8E4E /* YTDLPService.swift */; };
 		7D6050C4FEF00EC383AB99C2 /* MockPersistenceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F5D1928F199BC6BD239CB1E /* MockPersistenceService.swift */; };
 		888A4ADB770C69D94B881679 /* SafariCookiesService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 729614B0A0CFED38AEA1A4CA /* SafariCookiesService.swift */; };
 		8BA95BA87A60E31C7644B309 /* YTDLPServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 551DBCC97D37881B53AA3F66 /* YTDLPServiceTests.swift */; };
 		902E79E3B4284B909393FB2C /* DownloadTask.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A9847C5AD0C41FEB8563FC3 /* DownloadTask.swift */; };
+		91122A7CFCA766A31169AA22 /* OutputFileRenamer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50883FB54D0D60BE149CA04E /* OutputFileRenamer.swift */; };
 		94F2DB927CAD21242C8680BF /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44C08970ACCDAA7691461E10 /* ContentView.swift */; };
 		96781B6921245C33C992D231 /* URLValidationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27FA3E7C8810E2DD3D783593 /* URLValidationTests.swift */; };
 		9A4CE3C24FEEB704BC7315FD /* NotificationServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0F3728CD543BD6CD7188E19 /* NotificationServiceTests.swift */; };
@@ -41,6 +45,7 @@
 		CC246A727479479C93980741 /* DownloadItemViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 411225744169CAAFB4BBAF0C /* DownloadItemViewTests.swift */; };
 		D120F27E7595BCEC57337F31 /* PermissionServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3564750F2D199C0388554BB3 /* PermissionServiceTests.swift */; };
 		D348C0FAAA322EADA614BA14 /* Logger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C5FE8EA69573F2FB899C4F1 /* Logger.swift */; };
+		DD783E4D5576C387ACED44AD /* RenameTitleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C23196ED9E98BBF2EA8C6FC6 /* RenameTitleView.swift */; };
 		F61858EB27504BD2A4CE20FE /* AppSettingsMigratorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8DE242B44A607E63BDF6507 /* AppSettingsMigratorTests.swift */; };
 		F6AF5AD1C0457F8D5C560E40 /* EmptyStateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90FDB53F7F4996C674F7E7E2 /* EmptyStateView.swift */; };
 		FC58597FD186D9CF84D07939 /* PersistenceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92B5992FEF733EEB5117091F /* PersistenceService.swift */; };
@@ -67,6 +72,7 @@
 		411225744169CAAFB4BBAF0C /* DownloadItemViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadItemViewTests.swift; sourceTree = "<group>"; };
 		44C08970ACCDAA7691461E10 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		4C5FE8EA69573F2FB899C4F1 /* Logger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Logger.swift; sourceTree = "<group>"; };
+		50883FB54D0D60BE149CA04E /* OutputFileRenamer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutputFileRenamer.swift; sourceTree = "<group>"; };
 		551DBCC97D37881B53AA3F66 /* YTDLPServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YTDLPServiceTests.swift; sourceTree = "<group>"; };
 		5B2A898BF5A0F2983A497786 /* SubtitleInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubtitleInfo.swift; sourceTree = "<group>"; };
 		5CE3678D81D2BB12E28508F8 /* PlaylistSelectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistSelectionView.swift; sourceTree = "<group>"; };
@@ -79,11 +85,13 @@
 		732715B64D7A7403221660A1 /* MediaSelectionLogicTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaSelectionLogicTests.swift; sourceTree = "<group>"; };
 		7B1861C7487DDFADC5E6A40B /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettings.swift; sourceTree = "<group>"; };
 		7DAE150F1AF830DF89DE33B2 /* PremiereErrorParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PremiereErrorParserTests.swift; sourceTree = "<group>"; };
+		7FA4A464E22488144DBBCA24 /* CallbackServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallbackServiceTests.swift; sourceTree = "<group>"; };
 		80285D6CF9B0E6021ACC8991 /* TubifyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TubifyTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		8804D4AFE4EBFD0BF540C6E0 /* SettingsViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsViewTests.swift; sourceTree = "<group>"; };
 		8A9847C5AD0C41FEB8563FC3 /* DownloadTask.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadTask.swift; sourceTree = "<group>"; };
 		8C99522A3C5241F5B0BB160A /* DownloadTaskTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadTaskTests.swift; sourceTree = "<group>"; };
 		90FDB53F7F4996C674F7E7E2 /* EmptyStateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmptyStateView.swift; sourceTree = "<group>"; };
+		91C90CF086DA3D6A0C83FD95 /* DownloadManagerRenameTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadManagerRenameTests.swift; sourceTree = "<group>"; };
 		92B5992FEF733EEB5117091F /* PersistenceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceService.swift; sourceTree = "<group>"; };
 		92F4011B6FFCBC1F7193FDD3 /* DownloadItemView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadItemView.swift; sourceTree = "<group>"; };
 		95EB8E1D04C9847CCBE69B95 /* AudioInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioInfo.swift; sourceTree = "<group>"; };
@@ -92,6 +100,8 @@
 		B676ADA0EB9B7F96852F9374 /* MediaSelectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaSelectionView.swift; sourceTree = "<group>"; };
 		BD110BD56C1F54E7333B92DA /* PermissionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionService.swift; sourceTree = "<group>"; };
 		C02D7B542177244A7F91DF25 /* CallbackService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallbackService.swift; sourceTree = "<group>"; };
+		C23196ED9E98BBF2EA8C6FC6 /* RenameTitleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RenameTitleView.swift; sourceTree = "<group>"; };
+		E3C5B8DF4E4704B3F2A453A1 /* OutputFileRenamerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutputFileRenamerTests.swift; sourceTree = "<group>"; };
 		E899875AB33A3557093ED50B /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
 		E8DE242B44A607E63BDF6507 /* AppSettingsMigratorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettingsMigratorTests.swift; sourceTree = "<group>"; };
 		EF8E5EE3B06A43221DB8548C /* DownloadManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadManagerTests.swift; sourceTree = "<group>"; };
@@ -138,6 +148,7 @@
 				90FDB53F7F4996C674F7E7E2 /* EmptyStateView.swift */,
 				B676ADA0EB9B7F96852F9374 /* MediaSelectionView.swift */,
 				5CE3678D81D2BB12E28508F8 /* PlaylistSelectionView.swift */,
+				C23196ED9E98BBF2EA8C6FC6 /* RenameTitleView.swift */,
 				345AA1EE74AF5EFA1829B291 /* SettingsView.swift */,
 				DA08B7DD769F6C1E83D77AA9 /* Components */,
 			);
@@ -148,6 +159,7 @@
 			isa = PBXGroup;
 			children = (
 				4C5FE8EA69573F2FB899C4F1 /* Logger.swift */,
+				50883FB54D0D60BE149CA04E /* OutputFileRenamer.swift */,
 				72AD088C85DB93491D3D0928 /* PremiereErrorParser.swift */,
 			);
 			path = Utilities;
@@ -206,12 +218,15 @@
 			isa = PBXGroup;
 			children = (
 				E8DE242B44A607E63BDF6507 /* AppSettingsMigratorTests.swift */,
+				7FA4A464E22488144DBBCA24 /* CallbackServiceTests.swift */,
 				00FAA0EE7D4C1B1E7F54B29A /* ContentViewTests.swift */,
 				411225744169CAAFB4BBAF0C /* DownloadItemViewTests.swift */,
+				91C90CF086DA3D6A0C83FD95 /* DownloadManagerRenameTests.swift */,
 				EF8E5EE3B06A43221DB8548C /* DownloadManagerTests.swift */,
 				8C99522A3C5241F5B0BB160A /* DownloadTaskTests.swift */,
 				732715B64D7A7403221660A1 /* MediaSelectionLogicTests.swift */,
 				B0F3728CD543BD6CD7188E19 /* NotificationServiceTests.swift */,
+				E3C5B8DF4E4704B3F2A453A1 /* OutputFileRenamerTests.swift */,
 				3564750F2D199C0388554BB3 /* PermissionServiceTests.swift */,
 				FCBAFABCA54AC6AD0E4431F8 /* PlaylistSelectionViewTests.swift */,
 				7DAE150F1AF830DF89DE33B2 /* PremiereErrorParserTests.swift */,
@@ -317,13 +332,16 @@
 			buildActionMask = 2147483647;
 			files = (
 				F61858EB27504BD2A4CE20FE /* AppSettingsMigratorTests.swift in Sources */,
+				77B4857FAE12E5B9A8CBC6C4 /* CallbackServiceTests.swift in Sources */,
 				A41DD352078FDDD35B93E832 /* ContentViewTests.swift in Sources */,
 				CC246A727479479C93980741 /* DownloadItemViewTests.swift in Sources */,
+				6F6C5A8FE9C06E4ABFC4C401 /* DownloadManagerRenameTests.swift in Sources */,
 				29B9CC7FA4716ADB4DDC07FC /* DownloadManagerTests.swift in Sources */,
 				A5133C8B045F8477AD986E02 /* DownloadTaskTests.swift in Sources */,
 				0E3B1647A716BDABE62E5C9C /* MediaSelectionLogicTests.swift in Sources */,
 				7D6050C4FEF00EC383AB99C2 /* MockPersistenceService.swift in Sources */,
 				9A4CE3C24FEEB704BC7315FD /* NotificationServiceTests.swift in Sources */,
+				47B2B492F1B02E18042839A3 /* OutputFileRenamerTests.swift in Sources */,
 				D120F27E7595BCEC57337F31 /* PermissionServiceTests.swift in Sources */,
 				C05A317C4B5EF8FEA66EF522 /* PlaylistSelectionViewTests.swift in Sources */,
 				07691B56D9D1D64B3EBD9CB6 /* PremiereErrorParserTests.swift in Sources */,
@@ -349,10 +367,12 @@
 				D348C0FAAA322EADA614BA14 /* Logger.swift in Sources */,
 				302FC791A9344E168FF1756E /* MediaSelectionView.swift in Sources */,
 				C71926994535505153FC4AEF /* NotificationService.swift in Sources */,
+				91122A7CFCA766A31169AA22 /* OutputFileRenamer.swift in Sources */,
 				65CB75E79E8A5D2A50D70F41 /* PermissionService.swift in Sources */,
 				FC58597FD186D9CF84D07939 /* PersistenceService.swift in Sources */,
 				9ABF100CDCCC97AA83007A6E /* PlaylistSelectionView.swift in Sources */,
 				BCD604B18AFED60EAE3CF48C /* PremiereErrorParser.swift in Sources */,
+				DD783E4D5576C387ACED44AD /* RenameTitleView.swift in Sources */,
 				888A4ADB770C69D94B881679 /* SafariCookiesService.swift in Sources */,
 				25F7A1662ED3A48695BB3824 /* SettingsView.swift in Sources */,
 				6790BCD17B7213C97791EFCA /* SubtitleInfo.swift in Sources */,

@@ -408,4 +408,84 @@ final class DownloadTaskTests: XCTestCase {
         XCTAssertEqual(task.status, .livestreaming)
         XCTAssertNotNil(task.expectedEndTime)
     }
+
+    // MARK: - 自訂名稱（rename-download-title）
+
+    func testDisplayTitleUsesCustomTitleWhenPresent() {
+        let task = DownloadTask(url: "https://www.youtube.com/watch?v=abc123", title: "原始標題 | 大耳朵 TV")
+        task.customTitle = "Macbook 觸控屏"
+
+        XCTAssertEqual(task.displayTitle, "Macbook 觸控屏")
+        XCTAssertEqual(task.title, "原始標題 | 大耳朵 TV", "元資料標題與自訂名稱分開保存")
+    }
+
+    func testDisplayTitleFallsBackToMetadataTitle() {
+        let task = DownloadTask(url: "https://www.youtube.com/watch?v=abc123", title: "原始標題")
+
+        XCTAssertEqual(task.displayTitle, "原始標題")
+    }
+
+    func testEncodingAndDecodingKeepsCustomTitleAndOutputOwnership() throws {
+        let task = DownloadTask(url: "https://www.youtube.com/watch?v=abc123", title: "原始標題")
+        task.customTitle = "自訂"
+        task.ownsOutputFile = false
+
+        let data = try JSONEncoder().encode(task)
+        let decodedTask = try JSONDecoder().decode(DownloadTask.self, from: data)
+
+        XCTAssertEqual(decodedTask.customTitle, "自訂")
+        XCTAssertEqual(decodedTask.displayTitle, "自訂")
+        XCTAssertEqual(decodedTask.ownsOutputFile, false)
+        XCTAssertFalse(decodedTask.isOutputFileOwned)
+    }
+
+    func testDecodingLegacyDataWithoutRenameFieldsTreatsOutputAsOwned() throws {
+        // 舊版存檔沒有 customTitle 與 ownsOutputFile；沒有來源記錄的檔案視為屬於本任務（R10、R12）
+        let task = DownloadTask(url: "https://www.youtube.com/watch?v=abc123", title: "原始標題", status: .completed, outputPath: "/tmp/a.mp4")
+        task.customTitle = "會被移除"
+        task.ownsOutputFile = false
+        let data = try JSONEncoder().encode(task)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        json.removeValue(forKey: "customTitle")
+        json.removeValue(forKey: "ownsOutputFile")
+        let legacyData = try JSONSerialization.data(withJSONObject: json)
+
+        let decodedTask = try JSONDecoder().decode(DownloadTask.self, from: legacyData)
+
+        XCTAssertNil(decodedTask.customTitle)
+        XCTAssertEqual(decodedTask.displayTitle, "原始標題")
+        XCTAssertNil(decodedTask.ownsOutputFile)
+        XCTAssertTrue(decodedTask.isOutputFileOwned)
+    }
+
+    func testRenameCandidateTrimsWhitespace() {
+        let task = DownloadTask(url: "https://www.youtube.com/watch?v=abc123", title: "原始標題")
+
+        XCTAssertEqual(task.renameCandidate(from: "  新名稱 \n"), "新名稱")
+    }
+
+    func testRenameCandidateRejectsBlankInput() {
+        let task = DownloadTask(url: "https://www.youtube.com/watch?v=abc123", title: "原始標題")
+
+        XCTAssertNil(task.renameCandidate(from: " \t "))
+        XCTAssertNil(task.renameCandidate(from: ""))
+    }
+
+    func testRenameCandidateTreatsCurrentDisplayTitleAsUnchanged() {
+        let task = DownloadTask(url: "https://www.youtube.com/watch?v=abc123", title: "原始標題")
+        task.customTitle = "自訂"
+
+        XCTAssertNil(task.renameCandidate(from: " 自訂 "))
+        XCTAssertEqual(task.renameCandidate(from: "原始標題"), "原始標題", "與目前顯示名稱比較，而不是與元資料標題比較")
+    }
+
+    func testPlaylistPlaceholderIsNotRenamable() {
+        let placeholder = DownloadTask(url: "https://www.youtube.com/playlist?list=PL1", title: DownloadTask.playlistPlaceholderTitle, status: .fetchingInfo)
+        let failedPlaylist = DownloadTask(url: "https://www.youtube.com/playlist?list=PL1", title: "播放清單（無法獲取詳細資訊）", status: .pending)
+        let video = DownloadTask(url: "https://www.youtube.com/watch?v=abc123", status: .fetchingInfo)
+
+        XCTAssertFalse(placeholder.isRenamable)
+        XCTAssertTrue(failedPlaylist.isRenamable, "展開失敗後已轉為可下載的一般任務")
+        XCTAssertTrue(video.isRenamable)
+    }
 }

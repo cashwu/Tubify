@@ -115,6 +115,9 @@ struct SubtitleSelection: Codable {
     let selectedLanguages: [String]   // 選擇的上傳字幕語言代碼
     let automaticLanguages: [String]  // 選擇的 YouTube 自動字幕 key（yt-dlp automatic_captions）
 
+    /// 上傳字幕與自動字幕的語言 key，即傳給 yt-dlp `--sub-lang` 的值，也是字幕檔名中的語言部分
+    var allLanguages: [String] { selectedLanguages + automaticLanguages }
+
     init(selectedLanguages: [String], automaticLanguages: [String] = []) {
         self.selectedLanguages = selectedLanguages
         self.automaticLanguages = automaticLanguages

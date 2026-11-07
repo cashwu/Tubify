@@ -9,12 +9,22 @@ struct DownloadItemView: View {
     let onShowInFinder: () -> Void
     let onPause: () -> Void
     let onResume: () -> Void
+    /// 確認改名後呼叫；已完成任務改檔失敗時回傳 .failed 並顯示錯誤提示
+    let onRename: (String) -> TaskRenameResult
 
     @State private var isHovering = false
     @State private var showDeleteAlert = false
     @State private var showErrorDetails = false
+    @State private var showRenameSheet = false
+    /// 改名失敗的訊息先暫存，等改名視窗關閉後再顯示，避免 sheet 與 alert 同時呈現
+    @State private var pendingRenameError: String?
+    @State private var renameErrorMessage: String?
 
     private static let errorFallbackSummary = String(localized: "無法取得錯誤詳細資訊")
+
+    private func presentRename() {
+        showRenameSheet = true
+    }
 
     /// 複製 URL 到剪貼簿
     private func copyURL() {
@@ -87,10 +97,7 @@ struct DownloadItemView: View {
             // 資訊
             VStack(alignment: .leading, spacing: 4) {
                 // 標題
-                Text(task.title)
-                    .font(.headline)
-                    .lineLimit(2)
-                    .foregroundStyle(.primary)
+                titleView
 
                 // URL
                 Text(task.url)
@@ -146,7 +153,31 @@ struct DownloadItemView: View {
         } message: {
             Text(errorDetails)
         }
+        .sheet(isPresented: $showRenameSheet, onDismiss: {
+            renameErrorMessage = pendingRenameError
+            pendingRenameError = nil
+        }) {
+            RenameTitleView(currentName: task.displayTitle) { name in
+                if case .failed(let message) = onRename(name) {
+                    pendingRenameError = message
+                }
+            }
+        }
+        .alert("無法重新命名", isPresented: Binding(
+            get: { renameErrorMessage != nil },
+            set: { if !$0 { renameErrorMessage = nil } }
+        )) {
+            Button("確定", role: .cancel) {}
+        } message: {
+            Text(renameErrorMessage ?? "")
+        }
         .contextMenu {
+            if task.isRenamable {
+                Button(action: presentRename) {
+                    Label("重新命名…", systemImage: "pencil")
+                }
+            }
+
             Button {
                 copyURL()
             } label: {
@@ -158,6 +189,35 @@ struct DownloadItemView: View {
             } label: {
                 Label("在瀏覽器中打開", systemImage: "safari")
             }
+        }
+    }
+
+    // MARK: - 標題
+
+    /// 雙擊、或以 Tab 聚焦後按 Enter 開啟改名視窗（R1）；播放清單佔位任務不提供改名入口
+    @ViewBuilder
+    private var titleView: some View {
+        let title = Text(task.displayTitle)
+            .font(.headline)
+            .lineLimit(2)
+            .foregroundStyle(.primary)
+
+        if task.isRenamable {
+            title
+                .focusable()
+                .onKeyPress(.return) {
+                    presentRename()
+                    return .handled
+                }
+                .onTapGesture(count: 2, perform: presentRename)
+                .help("雙擊以重新命名")
+                .accessibilityLabel(task.displayTitle)
+                .accessibilityHint("重新命名")
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction(.default, presentRename)
+                .accessibilityAction(named: "重新命名", presentRename)
+        } else {
+            title
         }
     }
 
@@ -367,7 +427,8 @@ struct DownloadItemView: View {
             onRetry: {},
             onShowInFinder: {},
             onPause: {},
-            onResume: {}
+            onResume: {},
+            onRename: { _ in .unchanged }
         )
 
         Divider()
@@ -382,7 +443,8 @@ struct DownloadItemView: View {
             onRetry: {},
             onShowInFinder: {},
             onPause: {},
-            onResume: {}
+            onResume: {},
+            onRename: { _ in .unchanged }
         )
 
         Divider()
@@ -397,7 +459,8 @@ struct DownloadItemView: View {
             onRetry: {},
             onShowInFinder: {},
             onPause: {},
-            onResume: {}
+            onResume: {},
+            onRename: { _ in .unchanged }
         )
 
         Divider()
@@ -412,7 +475,8 @@ struct DownloadItemView: View {
             onRetry: {},
             onShowInFinder: {},
             onPause: {},
-            onResume: {}
+            onResume: {},
+            onRename: { _ in .unchanged }
         )
     }
     .padding()

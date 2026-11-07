@@ -54,6 +54,13 @@ class DownloadTask: Identifiable, Codable {
     var requestId: String?  // 請求識別碼，回調時原樣帶回給呼叫方
     var expectedEndTime: Date?  // 首播預計播放完成時間（僅適用於 livestreaming 狀態）
     var wasLive: Bool = false  // 曾為首播／直播（下載完成後需比對長度，避免把串流片段當成完整影片）
+    /// 使用者自訂的名稱；有值時清單優先顯示，下載完成後也用它命名檔案。
+    /// 與元資料標題（title）分開保存，元資料抓取只寫 title，因此不會覆蓋使用者的名稱（R5）
+    var customTitle: String?
+    /// outputPath 指向的檔案是否屬於本任務（實際下載產生或複製出來的）。
+    /// false 表示 yt-dlp 沿用了既有的同名檔，改名時只能複製、不能動原檔（R10）。
+    /// nil 為 App 更新前完成、沒有來源記錄的舊任務，視為屬於本任務（R12）
+    var ownsOutputFile: Bool?
 
     enum CodingKeys: String, CodingKey {
         case id, url, title, thumbnailURL, status, progress
@@ -61,6 +68,25 @@ class DownloadTask: Identifiable, Codable {
         case availableSubtitles, subtitleSelection
         case availableAudioTracks, audioSelection
         case duration, callbackScheme, requestId, expectedEndTime, wasLive
+        case customTitle, ownsOutputFile
+    }
+
+    /// 播放清單展開前的佔位任務標題；復原流程靠它判斷要重新展開播放清單
+    static let playlistPlaceholderTitle = "載入播放清單中..."
+
+    /// 清單顯示的名稱
+    var displayTitle: String { customTitle ?? title }
+
+    var isOutputFileOwned: Bool { ownsOutputFile ?? true }
+
+    /// 播放清單佔位任務展開後會被個別影片任務取代，改名沒有意義（R1）
+    var isRenamable: Bool { title != Self.playlistPlaceholderTitle }
+
+    /// 把改名視窗的輸入整理成新名稱；空白或與目前顯示名稱相同時回傳 nil，代表沒有變更（R3）
+    func renameCandidate(from input: String) -> String? {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != displayTitle else { return nil }
+        return trimmed
     }
 
     init(
@@ -127,6 +153,8 @@ class DownloadTask: Identifiable, Codable {
         requestId = try container.decodeIfPresent(String.self, forKey: .requestId)
         expectedEndTime = try container.decodeIfPresent(Date.self, forKey: .expectedEndTime)
         wasLive = try container.decodeIfPresent(Bool.self, forKey: .wasLive) ?? false
+        customTitle = try container.decodeIfPresent(String.self, forKey: .customTitle)
+        ownsOutputFile = try container.decodeIfPresent(Bool.self, forKey: .ownsOutputFile)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -151,6 +179,8 @@ class DownloadTask: Identifiable, Codable {
         try container.encodeIfPresent(requestId, forKey: .requestId)
         try container.encodeIfPresent(expectedEndTime, forKey: .expectedEndTime)
         try container.encode(wasLive, forKey: .wasLive)
+        try container.encodeIfPresent(customTitle, forKey: .customTitle)
+        try container.encodeIfPresent(ownsOutputFile, forKey: .ownsOutputFile)
     }
 }
 

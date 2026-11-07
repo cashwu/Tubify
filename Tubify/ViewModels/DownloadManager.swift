@@ -32,6 +32,13 @@ struct MediaSelectionRequest: Identifiable {
     }
 }
 
+/// 任務改名的結果
+enum TaskRenameResult: Equatable {
+    case unchanged
+    case renamed
+    case failed(String)
+}
+
 /// 影片或播放清單選擇請求
 struct VideoOrPlaylistChoiceRequest: Identifiable {
     let id = UUID()
@@ -208,7 +215,7 @@ class DownloadManager {
     }
 
     private func recoverFetchingInfoTask(_ task: DownloadTask) {
-        if task.title == "載入播放清單中...",
+        if task.title == DownloadTask.playlistPlaceholderTitle,
            isValidYouTubeURL(task.url),
            YouTubeMetadataService.isPlaylistSync(url: task.url) {
             Task {
@@ -243,7 +250,7 @@ class DownloadManager {
             tasks: [task],
             availableSubtitles: subtitles,
             availableAudioTracks: audioTracks,
-            videoTitle: task.title
+            videoTitle: task.displayTitle
         ))
     }
 
@@ -389,7 +396,7 @@ class DownloadManager {
 
         if isPlaylist {
             // 播放清單：先建立佔位任務，然後異步展開
-            let task = DownloadTask(url: urlString, title: "載入播放清單中...")
+            let task = DownloadTask(url: urlString, title: DownloadTask.playlistPlaceholderTitle)
             task.status = .fetchingInfo
             task.callbackScheme = callbackScheme
             task.requestId = requestId
@@ -543,7 +550,7 @@ class DownloadManager {
                     tasks: [task],
                     availableSubtitles: resolvedMediaOptions.subtitles,
                     availableAudioTracks: resolvedMediaOptions.audioTracks,
-                    videoTitle: task.title
+                    videoTitle: task.displayTitle
                 )
                 registerMediaRequest(request)
                 return
@@ -602,7 +609,7 @@ class DownloadManager {
         } else {
             task.status = .failed
             task.errorMessage = errorMessage
-            notificationService.sendDownloadFailedNotification(title: task.title, error: errorMessage)
+            notificationService.sendDownloadFailedNotification(title: task.displayTitle, error: errorMessage)
         }
     }
 
@@ -835,7 +842,7 @@ class DownloadManager {
 
     /// 以播放清單模式新增 URL（跳過混合 URL 檢測）
     private func addURLAsPlaylist(_ urlString: String, callbackScheme: String?, requestId: String?) {
-        let task = DownloadTask(url: urlString, title: "載入播放清單中...")
+        let task = DownloadTask(url: urlString, title: DownloadTask.playlistPlaceholderTitle)
         task.status = .fetchingInfo
         task.callbackScheme = callbackScheme
         task.requestId = requestId
@@ -976,7 +983,8 @@ class DownloadManager {
             // 首播／直播影片：比對實際長度，避免把串流片段當成完整影片
             let isIncomplete = await isIncompleteLiveDownload(task, outputPath: outputPath, commandTemplate: commandTemplate)
             // 完整性與清理權限分開判定：只有確定由此次下載產生的檔案才可移除
-            let canRemoveOutput = isIncomplete ? await ytdlpService.didProduceOutputFile(taskId: task.id) : false
+            let producedOutput = await ytdlpService.didProduceOutputFile(taskId: task.id)
+            let canRemoveOutput = isIncomplete && producedOutput
 
             // 長度檢查期間任務可能已被取消、暫停或移除，不可覆蓋其狀態
             guard task.status == .downloading, tasks.contains(where: { $0.id == task.id }) else {
@@ -990,7 +998,7 @@ class DownloadManager {
                 let errorMsg = "下載資料夾中已有同名檔案，且長度明顯短於預期。請移除或重新命名該檔案後重試：\(outputPath)"
                 task.status = .failed
                 task.errorMessage = errorMsg
-                notificationService.sendDownloadFailedNotification(title: task.title, error: errorMsg)
+                notificationService.sendDownloadFailedNotification(title: task.displayTitle, error: errorMsg)
                 persistenceService.saveTasks(tasks)
                 return
             }
@@ -1007,23 +1015,40 @@ class DownloadManager {
                 return
             }
 
-            task.status = .completed
-            task.progress = 1.0
-            task.outputPath = outputPath
-            task.completedAt = Date()
+            // 如果標題獲取失敗，從 yt-dlp 的檔案名稱提取標題（只寫元資料標題，不覆蓋自訂名稱）
+            let downloadedFileName = URL(fileURLWithPath: outputPath).deletingPathExtension().lastPathComponent
+            if task.title == "無法獲取標題" || task.title.isEmpty, !downloadedFileName.isEmpty {
+                task.title = downloadedFileName
+            }
 
-            // 如果標題獲取失敗，從檔案名稱提取標題
-            if task.title == "無法獲取標題" || task.title.isEmpty {
-                let fileName = URL(fileURLWithPath: outputPath).deletingPathExtension().lastPathComponent
-                if !fileName.isEmpty {
-                    task.title = fileName
+            // 有自訂名稱時，在送出通知與 callback 之前把最終檔案改名（R7）
+            var finalPath = outputPath
+            var ownsFinalFile = producedOutput
+            if let customTitle = task.customTitle {
+                do {
+                    (finalPath, ownsFinalFile) = try renameOutputFiles(
+                        at: outputPath,
+                        owned: producedOutput,
+                        to: customTitle,
+                        subtitleSelection: task.subtitleSelection
+                    )
+                } catch {
+                    // R11：任務仍然完成並使用 yt-dlp 的原始檔，清單改顯示實際檔名，避免名稱與檔案不符
+                    TubifyLogger.download.error("下載完成後改名失敗，保留原始檔案: \(outputPath)，\(error.localizedDescription)")
+                    task.customTitle = downloadedFileName
                 }
             }
 
+            task.status = .completed
+            task.progress = 1.0
+            task.outputPath = finalPath
+            task.ownsOutputFile = ownsFinalFile
+            task.completedAt = Date()
+
             // 發送通知
             notificationService.sendDownloadCompleteNotification(
-                title: task.title,
-                outputPath: outputPath
+                title: task.displayTitle,
+                outputPath: finalPath
             )
 
             // 觸發回調（如果有設定）
@@ -1032,7 +1057,7 @@ class DownloadManager {
                     await CallbackService.shared.triggerCallback(
                         scheme: callbackScheme,
                         task: task,
-                        filePath: outputPath
+                        filePath: finalPath
                     )
                 }
             }
@@ -1066,7 +1091,7 @@ class DownloadManager {
 
                 // 發送失敗通知
                 notificationService.sendDownloadFailedNotification(
-                    title: task.title,
+                    title: task.displayTitle,
                     error: errorMsg
                 )
             }
@@ -1266,6 +1291,62 @@ class DownloadManager {
         return patterns.contains { pattern in
             urlString.range(of: pattern, options: .regularExpression) != nil
         }
+    }
+
+    /// 重新命名任務（R3、R7、R12）。
+    /// 未完成的任務只更新名稱，不中斷下載，等下載完成時才改檔名；已完成的任務立即改磁碟上的檔案，
+    /// 失敗時名稱、檔案與 outputPath 都維持原狀。不重新送出通知或 callback。
+    ///
+    /// 檔案操作刻意在 MainActor 上同步執行：同一資料夾內改名是即時的，APFS 上的複製是 clone；
+    /// 若改成非同步，改名途中任務可能再被改名或完成，最終檔名與清單名稱會不一致。
+    func renameTask(_ task: DownloadTask, to input: String) -> TaskRenameResult {
+        guard task.isRenamable, let newName = task.renameCandidate(from: input) else {
+            return .unchanged
+        }
+
+        guard task.status == .completed else {
+            task.customTitle = newName
+            persistenceService.saveTasks(tasks)
+            return .renamed
+        }
+
+        guard let outputPath = task.outputPath else {
+            return .failed(OutputFileRenamer.RenameError.sourceMissing(task.displayTitle).localizedDescription)
+        }
+
+        do {
+            let (newPath, ownsNewFile) = try renameOutputFiles(
+                at: outputPath,
+                owned: task.isOutputFileOwned,
+                to: newName,
+                subtitleSelection: task.subtitleSelection
+            )
+            task.customTitle = newName
+            task.outputPath = newPath
+            task.ownsOutputFile = ownsNewFile
+            persistenceService.saveTasks(tasks)
+            return .renamed
+        } catch {
+            TubifyLogger.download.error("已完成任務改名失敗: \(outputPath)，\(error.localizedDescription)")
+            return .failed(error.localizedDescription)
+        }
+    }
+
+    /// 影片與任務所選語言的字幕一起改名；檔案不屬於本任務時改用複製（R8、R10、R12）。
+    /// 回傳新路徑與它是否屬於本任務：複製出的新檔屬於本任務；新名稱就是原檔名時沒有複製，維持原本的記錄
+    private func renameOutputFiles(
+        at outputPath: String,
+        owned: Bool,
+        to name: String,
+        subtitleSelection: SubtitleSelection?
+    ) throws -> (path: String, owned: Bool) {
+        let newPath = try OutputFileRenamer.apply(
+            videoPath: outputPath,
+            newName: name,
+            subtitleLanguages: subtitleSelection?.allLanguages ?? [],
+            mode: owned ? .move : .copy
+        )
+        return (newPath, newPath == outputPath ? owned : true)
     }
 
     /// 在 Finder 中顯示檔案

@@ -13,6 +13,7 @@
 | 2026-08-21 | [cleanup-orphaned-part-files](2026-08-21-cleanup-orphaned-part-files.md) | [download-reliability](../specs/download-reliability.md) |
 | 2026-08-21 | [cookieless-subtitle-detection](2026-08-21-cookieless-subtitle-detection.md) | [subtitle-selection](../specs/subtitle-selection.md) |
 | 2026-08-22 | [dubbed-audio-track-selection](2026-08-22-dubbed-audio-track-selection.md) | [audio-track-selection](../specs/audio-track-selection.md) |
+| 2026-11-07 | [rename-download-title](2026-11-07-rename-download-title.md) | [download-ui-workflows](../specs/download-ui-workflows.md) |
 
 `add-clear-all-subtitles` 範圍很小，沒有撰寫獨立的 design。
 

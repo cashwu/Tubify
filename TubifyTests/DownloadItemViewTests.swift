@@ -41,4 +41,15 @@ final class DownloadItemViewTests: XCTestCase {
         XCTAssertEqual(summary.count, 160)
         XCTAssertEqual(summary, String(repeating: familyEmoji, count: 159) + "…")
     }
+
+    // MARK: - 改名視窗（rename-download-title R3）
+
+    func testRenameCanBeConfirmedWithNonBlankInput() {
+        XCTAssertTrue(RenameTitleView.canConfirm(" 新名稱 "))
+    }
+
+    func testRenameCannotBeConfirmedWithBlankInput() {
+        XCTAssertFalse(RenameTitleView.canConfirm(""))
+        XCTAssertFalse(RenameTitleView.canConfirm(" \t\n "))
+    }
 }

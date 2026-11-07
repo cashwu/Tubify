@@ -433,6 +433,9 @@ struct ContentView: View {
                             },
                             onResume: {
                                 downloadManager.resumeTask(task)
+                            },
+                            onRename: { name in
+                                downloadManager.renameTask(task, to: name)
                             }
                         )
 

@@ -32,7 +32,7 @@
 
 | 規格 | 內容 |
 | ---- | ---- |
-| [download-ui-workflows](download-ui-workflows.md) | 情境感知貼上、重啟後任務恢復、可操作的錯誤、完成導向、單一原生 Settings、可存取性與設定輸入回饋、媒體選擇視窗高度 |
+| [download-ui-workflows](download-ui-workflows.md) | 情境感知貼上、重啟後任務恢復、可操作的錯誤、完成導向、單一原生 Settings、可存取性與設定輸入回饋、媒體選擇視窗高度、下載項目改名（顯示名稱與檔名、同名編號、沿用檔複製） |
 
 ## 閱讀慣例
 

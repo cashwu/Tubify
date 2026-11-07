@@ -17,7 +17,21 @@ actor CallbackService {
         task: DownloadTask,
         filePath: String
     ) async {
-        // 建構回調 URL
+        guard let callbackURL = Self.makeCallbackURL(scheme: scheme, task: task, filePath: filePath) else {
+            TubifyLogger.general.error("無法建構回調 URL")
+            return
+        }
+
+        TubifyLogger.general.info("觸發回調: \(callbackURL.absoluteString)")
+
+        // 在主執行緒開啟 URL；開啟失敗時外部 App 不會收到回調，這裡沒有其他退路，因此不使用回傳值
+        _ = await MainActor.run {
+            NSWorkspace.shared.open(callbackURL)
+        }
+    }
+
+    /// 建構回調 URL；與開啟 URL 分開，測試才能在不啟動外部 App 的情況下驗證參數
+    static func makeCallbackURL(scheme: String, task: DownloadTask, filePath: String) -> URL? {
         var components = URLComponents()
         components.scheme = scheme
         components.host = "import"
@@ -38,11 +52,12 @@ actor CallbackService {
             value: filePath
         ))
 
-        // 選填: 標題
-        if !task.title.isEmpty && task.title != "載入中..." && task.title != "無法獲取標題" {
+        // 選填: 標題。使用清單顯示的名稱：改名後 file 已是自訂名稱的檔案，title 要和它一致
+        let title = task.displayTitle
+        if !title.isEmpty && title != "載入中..." && title != "無法獲取標題" {
             queryItems.append(URLQueryItem(
                 name: "title",
-                value: task.title
+                value: title
             ))
         }
 
@@ -63,18 +78,7 @@ actor CallbackService {
         }
 
         components.queryItems = queryItems
-
-        guard let callbackURL = components.url else {
-            TubifyLogger.general.error("無法建構回調 URL")
-            return
-        }
-
-        TubifyLogger.general.info("觸發回調: \(callbackURL.absoluteString)")
-
-        // 在主執行緒開啟 URL
-        await MainActor.run {
-            NSWorkspace.shared.open(callbackURL)
-        }
+        return components.url
     }
 
     /// 檢查目標 App 是否已安裝

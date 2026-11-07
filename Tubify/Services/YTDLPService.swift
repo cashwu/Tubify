@@ -940,7 +940,7 @@ actor YTDLPService {
         // 加入字幕下載參數（如果有選擇字幕）
         // 自動字幕與影片同一次下載，才能沿用 cookies 等設定，並套用 --sponsorblock-remove 等裁切
         if let selection = subtitleSelection {
-            let languages = selection.selectedLanguages + selection.automaticLanguages
+            let languages = selection.allLanguages
             if !selection.selectedLanguages.isEmpty {
                 finalArguments.append("--write-sub")
             }

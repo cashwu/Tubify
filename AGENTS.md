@@ -72,7 +72,8 @@ xcodebuild test -project Tubify.xcodeproj -scheme Tubify -destination 'platform=
 2. 透過 `YouTubeMetadataService` 獲取元資料（播放清單會展開為個別影片）
 3. 任務加入佇列，由 `DownloadManager.processQueue()` 處理（可設定並行數量）
 4. `YTDLPService.download()` 啟動 yt-dlp 程序，從 stdout 解析進度
-5. 狀態與進度更新透過 `@Observable` 綁定反映至 UI
+5. 下載完成時，若任務有使用者自訂名稱（`DownloadTask.customTitle`），`OutputFileRenamer` 會把影片與所選字幕改成該名稱，再送出完成通知與 callback
+6. 狀態與進度更新透過 `@Observable` 綁定反映至 UI
 
 ## 檔案位置
 
