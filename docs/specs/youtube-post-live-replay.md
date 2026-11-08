@@ -2,7 +2,7 @@
 
 ## Purpose
 
-定義 `live_status = post_live` 的回放在「可下載」「暫態處理中」「失敗」之間的任務狀態，以及手動重試行為。
+定義 `live_status = post_live` 的回放在「可下載」「暫態處理中」「失敗」之間的任務狀態、手動重試行為，以及首播倒數錯誤的排程判定。
 
 ## Requirements
 
@@ -89,6 +89,28 @@ The system SHALL allow a user to retry a `postLive` task and SHALL re-run metada
 - **WHEN** the user retries after yt-dlp metadata includes format `137+140`
 - **THEN** the task SHALL proceed as a normal downloadable video
 
+---
+
+### Requirement: Upcoming premiere extractor errors keep the task scheduled
+
+The system SHALL treat YouTube upcoming-premiere extractor errors as a scheduled premiere, both when fetching metadata and when downloading, instead of queueing the task or failing it. YouTube shows `Premieres in X minutes` during the countdown and switches to `Premiere will begin shortly` in the last minutes; both are upcoming-premiere errors.
+
+#### Scenario: metadata or download receives an upcoming-premiere error
+
+- **WHEN** yt-dlp returns an error containing `Premieres in` or `Premiere will begin` for a YouTube task, including per-video media option lookups after playlist selection
+- **THEN** the system SHALL mark the task as `scheduled` and SHALL NOT enqueue it for download
+- **THEN** the system SHALL set `premiereDate` from the countdown when present, and leave it empty otherwise (UI shows「尚未首播」)
+- **THEN** the system SHALL NOT send a generic failed download notification
+
+##### Example: upcoming-premiere error classification
+
+| yt-dlp error | Expected task status | `premiereDate` |
+| ----- | ----- | ----- |
+| `ERROR: [youtube] sV7cOFFZsPk: Premieres in 81 minutes` | `scheduled` | now + 81 minutes |
+| `ERROR: [youtube] nGxDfmaRlB0: Premiere will begin shortly` | `scheduled` | empty |
+
+若「Premiere will begin shortly」未被辨識，任務會被當成一般影片排入下載；首播開始後 yt-dlp 改錄即時串流，ffmpeg 不輸出進度，任務停在 0%。
+
 ## 來源 change
 
 - 2026-06-11-fix-post-live-replay-downloads（詳見 [completed-tasks.md](../completed-tasks.md)）
@@ -98,9 +120,11 @@ The system SHALL allow a user to retry a `postLive` task and SHALL re-run metada
 - `Tubify/Services/NotificationService.swift`
 - `Tubify/Services/YTDLPService.swift`
 - `Tubify/Services/YouTubeMetadataService.swift`
+- `Tubify/Utilities/PremiereErrorParser.swift`
 - `Tubify/ViewModels/DownloadManager.swift`
 - `Tubify/Views/DownloadItemView.swift`
 - `TubifyTests/ContentViewTests.swift`
 - `TubifyTests/DownloadManagerTests.swift`
+- `TubifyTests/PremiereErrorParserTests.swift`
 - `TubifyTests/YTDLPServiceTests.swift`
 - `TubifyTests/YouTubeMetadataServiceTests.swift`

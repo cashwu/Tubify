@@ -572,15 +572,9 @@ class DownloadManager {
                     task.title = "無法獲取標題"
                 }
 
-                // 解析首播時間
-                if let premiereDate = PremiereErrorParser.parsePremiereDate(from: errorMessage) {
-                    task.premiereDate = premiereDate
-                    task.status = .scheduled
-                    task.wasLive = true
-                    task.errorMessage = errorMessage
-                } else {
-                    task.status = newStatus
-                }
+                // 首播尚未開始時一律不排入佇列：首播開始後 yt-dlp 會改錄即時串流，進度停在 0%。
+                // 「Premiere will begin shortly」沒有倒數時間，premiereDate 維持 nil（UI 顯示「尚未首播」）
+                markTaskAsScheduledPremiere(task, errorMessage: errorMessage)
             } else if let statusOnFailure {
                 // 重試時無法確認首播是否已播完，維持原狀態，避免在串流仍進行時下載到片段
                 task.status = statusOnFailure
@@ -595,6 +589,13 @@ class DownloadManager {
         startDownloadQueue()
     }
 
+    private func markTaskAsScheduledPremiere(_ task: DownloadTask, errorMessage: String) {
+        task.status = .scheduled
+        task.wasLive = true
+        task.premiereDate = PremiereErrorParser.parsePremiereDate(from: errorMessage)
+        task.errorMessage = errorMessage
+    }
+
     private func markTaskAsPostLive(_ task: DownloadTask, message: String = "直播回放仍在處理中，請稍後重試。") {
         TubifyLogger.download.info("偵測到直播處理中: \(task.title)")
         task.status = .postLive
@@ -606,6 +607,9 @@ class DownloadManager {
         let errorMessage = error.localizedDescription
         if YTDLPErrorClassification.classify(errorMessage) == .endedLive {
             markTaskAsPostLive(task)
+        } else if PremiereErrorParser.isPremiereError(errorMessage) {
+            // 播放清單逐支查媒體選項時，首播倒數中的影片會以錯誤而非 is_upcoming 回報
+            markTaskAsScheduledPremiere(task, errorMessage: errorMessage)
         } else {
             task.status = .failed
             task.errorMessage = errorMessage
@@ -729,7 +733,7 @@ class DownloadManager {
                     task.availableSubtitles = mediaOptions.subtitles
                     task.availableAudioTracks = mediaOptions.audioTracks
                 } catch {
-                    // metadata 抓取失敗：分類錯誤（直播已結束 → .postLive，其餘 → .failed）
+                    // metadata 抓取失敗：分類錯誤（直播已結束 → .postLive，首播倒數 → .scheduled，其餘 → .failed）
                     // 原本依賴 --flat-playlist 永遠為 nil 的 pair.video.liveStatus，實際從不觸發
                     handlePostLiveFormatLookupError(error, for: task)
                 }
@@ -1080,11 +1084,8 @@ class DownloadManager {
             // 檢查是否為首播影片
             if YTDLPErrorClassification.classify(errorMsg) == .endedLive {
                 markTaskAsPostLive(task)
-            } else if let premiereDate = PremiereErrorParser.parsePremiereDate(from: errorMsg) {
-                task.status = .scheduled
-                task.wasLive = true
-                task.premiereDate = premiereDate
-                task.errorMessage = errorMsg
+            } else if PremiereErrorParser.isPremiereError(errorMsg) {
+                markTaskAsScheduledPremiere(task, errorMessage: errorMsg)
             } else {
                 task.status = .failed
                 task.errorMessage = errorMsg

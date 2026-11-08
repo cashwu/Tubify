@@ -26,7 +26,7 @@
 | 規格 | 內容 |
 | ---- | ---- |
 | [download-reliability](download-reliability.md) | video-data HTTP 403 的有界完整 process 重試（2／5／10 秒）、取消與 cookies contract、重試後的孤兒中間檔清理 |
-| [youtube-post-live-replay](youtube-post-live-replay.md) | `post_live` 回放的可下載判定、`This live event has ended.` 視為暫態、手動重試 |
+| [youtube-post-live-replay](youtube-post-live-replay.md) | `post_live` 回放的可下載判定、`This live event has ended.` 視為暫態、手動重試；首播倒數錯誤（`Premieres in`、`Premiere will begin`）視為尚未首播 |
 
 ### 介面
 

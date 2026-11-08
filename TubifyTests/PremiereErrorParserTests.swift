@@ -18,6 +18,16 @@ final class PremiereErrorParserTests: XCTestCase {
         XCTAssertFalse(PremiereErrorParser.isPremiereError(""))
     }
 
+    /// 首播開始前幾分鐘 YouTube 的 playability reason 會從「Premieres in X minutes」換成
+    /// 「Premiere will begin shortly」；認不出來時任務會被當成一般影片排入下載，
+    /// 首播開始後 yt-dlp 就改錄即時串流、進度停在 0%。字串取自實際 log。
+    func testIsPremiereError_WithPremiereBeginningShortly() {
+        let error = "ERROR: [youtube] nGxDfmaRlB0: Premiere will begin shortly"
+
+        XCTAssertTrue(PremiereErrorParser.isPremiereError(error))
+        XCTAssertNil(PremiereErrorParser.parsePremiereDate(from: error), "沒有倒數時間，無法推算首播時刻")
+    }
+
     // MARK: - parsePremiereDate 測試 - 分鐘
 
     func testParsePremiereDate_WithMinutes() {

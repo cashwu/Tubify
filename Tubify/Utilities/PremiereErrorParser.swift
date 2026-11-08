@@ -35,7 +35,10 @@ enum PremiereErrorParser {
     /// 檢查錯誤訊息是否為首播錯誤
     /// - Parameter error: 錯誤訊息
     /// - Returns: 是否為首播錯誤
+    /// 訊息直接取自 YouTube 的 playability reason（yt-dlp 原樣轉出）：
+    /// 倒數期間是「Premieres in X minutes」，開始前最後幾分鐘換成「Premiere will begin shortly」。
+    /// 後者沒有倒數時間，`parsePremiereDate` 會回傳 nil。
     static func isPremiereError(_ error: String) -> Bool {
-        return error.contains("Premieres in")
+        return error.contains("Premieres in") || error.contains("Premiere will begin")
     }
 }

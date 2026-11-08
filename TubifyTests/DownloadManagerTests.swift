@@ -1067,6 +1067,52 @@ final class DownloadManagerTests: XCTestCase {
         XCTAssertTrue(mockYTDLPService.downloadedURLs.isEmpty)
     }
 
+    func testConfirmPlaylistSelectionPremiereBeginningShortlyBecomesScheduled() async {
+        // Arrange：播放清單逐支查媒體選項時，首播即將開始的影片會讓 yt-dlp 回錯誤而非 is_upcoming
+        let placeholderTask = createTestTask(
+            url: "https://www.youtube.com/playlist?list=PLtest",
+            title: "載入播放清單中...",
+            status: .fetchingInfo
+        )
+        manager.tasks = [placeholderTask]
+        let url = "https://www.youtube.com/watch?v=nGxDfmaRlB0"
+        mockMetadataService.mediaOptionsError = MetadataError.fetchFailed(
+            "ERROR: [youtube] nGxDfmaRlB0: Premiere will begin shortly"
+        )
+        let selectedVideos = [
+            VideoInfo(
+                id: "nGxDfmaRlB0",
+                title: "首播影片",
+                thumbnail: nil,
+                duration: nil,
+                uploader: "Test",
+                url: url,
+                liveStatus: nil,
+                releaseTimestamp: nil
+            )
+        ]
+        let request = PlaylistSelectionRequest(
+            playlistTitle: "Test Playlist",
+            videos: selectedVideos,
+            placeholderTaskId: placeholderTask.id,
+            callbackScheme: nil,
+            requestId: nil
+        )
+
+        // Act
+        manager.confirmPlaylistSelection(request: request, selectedVideos: selectedVideos)
+        let becameScheduled = await waitUntil {
+            self.manager.tasks.first?.status == .scheduled
+        }
+
+        // Assert：視為尚未首播，不是失敗，也不進佇列
+        XCTAssertTrue(becameScheduled, "首播即將開始應設為 .scheduled")
+        XCTAssertNil(manager.tasks.first?.premiereDate)
+        XCTAssertTrue(mockNotificationService.failedNotifications.isEmpty)
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertTrue(mockYTDLPService.downloadedURLs.isEmpty)
+    }
+
     func testRetryScheduledPremiereRerunsMetadataAndDownloadsWhenAired() async {
         // Arrange：使用者對 .scheduled 任務按重試，此時首播已播完（live_status 變成非 is_upcoming）
         let url = "https://www.youtube.com/watch?v=LkLLx7Krovk"
@@ -1234,6 +1280,54 @@ final class DownloadManagerTests: XCTestCase {
         XCTAssertEqual(task.errorMessage, "network timeout")
         try? await Task.sleep(nanoseconds: 100_000_000)
         XCTAssertTrue(mockYTDLPService.downloadedURLs.isEmpty, "無法確認首播狀態時不應開始下載")
+    }
+
+    func testAddURLPremiereBeginningShortlyBecomesScheduledWithoutDownload() async {
+        // Arrange：首播前幾分鐘 yt-dlp 查 metadata 會失敗，錯誤訊息不含倒數時間
+        let url = "https://www.youtube.com/watch?v=nGxDfmaRlB0"
+        mockMetadataService.videoInfoError = MetadataError.fetchFailed(
+            "ERROR: [youtube] nGxDfmaRlB0: Premiere will begin shortly"
+        )
+
+        // Act
+        XCTAssertEqual(manager.addURL(url), .success)
+        let becameScheduled = await waitUntil {
+            self.manager.tasks.first?.status == .scheduled
+        }
+
+        // Assert：視為尚未首播，不進佇列；若被排入下載，首播開始後會錄到進度停在 0% 的即時串流
+        XCTAssertTrue(becameScheduled, "首播即將開始應設為 .scheduled")
+        let task = manager.tasks.first
+        XCTAssertNil(task?.premiereDate)
+        XCTAssertEqual(task?.wasLive, true)
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(manager.tasks.first?.status, .scheduled)
+        XCTAssertTrue(mockYTDLPService.downloadedURLs.isEmpty, "首播即將開始時不應開始下載")
+    }
+
+    func testDownloadPremiereBeginningShortlyErrorBecomesScheduledWithoutFailedNotification() async {
+        // Arrange：metadata 階段已判為可下載，下載時首播進入倒數最後階段
+        let task = createTestTask(
+            url: "https://www.youtube.com/watch?v=nGxDfmaRlB0",
+            title: "首播影片",
+            status: .pending
+        )
+        manager.tasks = [task]
+        mockYTDLPService.downloadError = YTDLPError.executionFailed(
+            "ERROR: [youtube] nGxDfmaRlB0: Premiere will begin shortly"
+        )
+
+        // Act
+        manager.startDownloadQueue()
+        let becameScheduled = await waitUntil {
+            task.status == .scheduled
+        }
+
+        // Assert：轉為尚未首播讓使用者之後重試，而不是失敗
+        XCTAssertTrue(becameScheduled)
+        XCTAssertNil(task.premiereDate)
+        XCTAssertTrue(task.wasLive)
+        XCTAssertTrue(mockNotificationService.failedNotifications.isEmpty)
     }
 
     // MARK: - 首播下載長度檢查
