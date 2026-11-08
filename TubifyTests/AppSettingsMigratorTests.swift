@@ -69,6 +69,35 @@ final class AppSettingsMigratorTests: XCTestCase {
         )
     }
 
+    /// VP9 裝在 mp4 裡時 macOS 的 Quick Look／QuickTime 無法解碼，Finder 只剩通用圖示。
+    /// 只限定 ext=mp4 時 yt-dlp 會選到 YouTube 的 VP9 格式（例如 Premium 1080p 的 616，
+    /// vcodec 為 `vp09...`；DASH 的 VP9 則是 `vp9`），因此優先的 alternative 都要排除 vp 開頭的編碼。
+    /// 最後保留不限定編碼的退路：只剩 VP9 可選時寧可下載也不要失敗（見 7 月格式損壞事件）。
+    /// 證據邊界：只檢查選擇器字串，實際挑選結果曾以 `yt-dlp --print` 對真實影片手動驗證。
+    func testDefaultCommandPrefersNonVP9AndKeepsUnrestrictedFallback() throws {
+        let command = AppSettingsDefaults.downloadCommand
+        let formatRange = try XCTUnwrap(command.range(of: #"-f "([^"]+)""#, options: .regularExpression))
+        let format = String(command[formatRange].dropFirst(4).dropLast())
+        let alternatives = format.split(separator: "/").map(String.init)
+
+        XCTAssertGreaterThanOrEqual(alternatives.count, 3)
+        for alternative in alternatives.dropLast(2) {
+            for part in alternative.split(separator: "+") where part.hasPrefix("bv") {
+                XCTAssertTrue(part.contains("[vcodec!^=vp]"), "優先的影片格式應排除 VP9：\(part)")
+            }
+        }
+        XCTAssertEqual(Array(alternatives.suffix(2)), ["bv*+ba", "b"], "最後應保留不限定編碼的退路")
+    }
+
+    /// 第 2 版預設（會選到 VP9）未經自訂時要升級，否則已打開過設定頁的使用者拿不到修正
+    func testVersion2DefaultCommandIsMigrated() {
+        let version2 = "yt-dlp -f \"bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/b\" --merge-output-format mp4 --cookies-from-browser safari \"$youtubeUrl\""
+        XCTAssertEqual(
+            AppSettingsMigrator.migratedDownloadCommand(storedCommand: version2, storedVersion: 2),
+            AppSettingsDefaults.downloadCommand
+        )
+    }
+
     // MARK: - UserDefaults 實際寫入測試
 
     private func makeIsolatedDefaults() throws -> (UserDefaults, String) {

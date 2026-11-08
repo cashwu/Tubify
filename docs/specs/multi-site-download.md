@@ -106,7 +106,27 @@ The generic download command SHALL be a fixed application constant. The system S
 | backend executable | present | present (same) |
 | browser-cookies argument | present | present (same) |
 | URL placeholder | present | present (same) |
-| format-selection argument | YouTube-optimized (AVC/m4a) | generic (e.g. `bv*+ba/b`) — the only difference |
+| format-selection argument | YouTube-optimized (mp4/m4a, non-VP9 first) | generic (e.g. `bv*+ba/b`) — the only difference |
+
+---
+
+### Requirement: Default YouTube format prefers codecs macOS can preview
+
+The default YouTube download command SHALL prefer non-VP9 video formats, because VP9 video in an mp4 container cannot be decoded by macOS Quick Look or QuickTime (Finder shows only a generic icon). Every alternative before the final fallback SHALL exclude video codecs starting with `vp` (`vp09...` for HLS, `vp9` for DASH), so AV1 and H.264 remain available as backups for each other. The selector SHALL end with the unrestricted fallback `bv*+ba/b`, so a video that only offers VP9 still downloads instead of failing.
+
+An unmodified previous default command stored in user settings SHALL be migrated to the current default; a customized command SHALL be preserved.
+
+#### Scenario: Best mp4 format is VP9
+
+- **WHEN** a YouTube video's highest-bitrate mp4 format is VP9 (for example the Premium 1080p HLS format `616`, `vp09.00.40.08`) and AV1 or H.264 formats also exist
+- **THEN** the download selects the best non-VP9 video format instead
+
+##### Example: format selection (verified manually with `yt-dlp --print`, 2026-11-08)
+
+| Video | Previous default selected | Current default selects |
+| ----- | ----- | ----- |
+| `ooAlwKl2GWI` | `616+140-3` (VP9 1080p, no Finder preview) | `399+140-3` (AV1 1080p) |
+| `aqz-KE-bpKQ` (4K) | — | `401+258` (AV1 2160p) |
 
 ---
 
@@ -129,4 +149,5 @@ User-facing copy that previously referred specifically to YouTube SHALL be prese
 - `Tubify/ViewModels/DownloadManager.swift`
 - `Tubify/Views/ContentView.swift`
 - `Tubify/Views/EmptyStateView.swift`
+- `TubifyTests/AppSettingsMigratorTests.swift`
 - `TubifyTests/DownloadManagerTests.swift`

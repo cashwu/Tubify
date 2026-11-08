@@ -10,7 +10,7 @@
 
 | 規格 | 內容 |
 | ---- | ---- |
-| [multi-site-download](multi-site-download.md) | 接受任何格式正確的 URL；YouTube 與非 YouTube 的下載指令分流；YouTube 專屬處理（播放清單、提示、縮圖）只套用於 YouTube；通用指令為固定常數 |
+| [multi-site-download](multi-site-download.md) | 接受任何格式正確的 URL；YouTube 與非 YouTube 的下載指令分流；YouTube 專屬處理（播放清單、提示、縮圖）只套用於 YouTube；通用指令為固定常數；YouTube 預設格式優先避開 macOS 無法預覽的 VP9 |
 | [playlist-or-video-prompt](playlist-or-video-prompt.md) | URL 同時含 `v=` 與 `list=` 時，詢問下載單支影片或整個播放清單 |
 | [playlist-selection](playlist-selection.md) | 播放清單展開後的選集視窗：預設全選、全選／取消、數量顯示、確認後接續媒體選擇 |
 

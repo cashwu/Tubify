@@ -16,10 +16,13 @@ enum AppSettingsDefaults {
     // （連線在固定 byte offset 被切斷、Range 續傳無效），而 yt-dlp 的 "/" 回退只在
     // 格式「不存在」時生效，對「格式存在但下載失敗」無效。放寬編碼可讓 av01/vp9
     // 的同解析度串流成為可選項，避免被單一損壞格式卡死。
-    static let downloadCommand = "yt-dlp -f \"bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/b\" --merge-output-format mp4 --cookies-from-browser safari \"$youtubeUrl\""
+    // 優先的 alternative 排除 vp 開頭的編碼（HLS 為 `vp09...`、DASH 為 `vp9`）：VP9 裝在 mp4 裡時
+    // macOS 的 Quick Look／QuickTime 無法解碼，Finder 沒有縮圖也無法播放。AV1 與 H.264 仍互為備援；
+    // 最後的 `bv*+ba/b` 不限編碼，只剩 VP9 可選時寧可下載也不要失敗。
+    static let downloadCommand = "yt-dlp -f \"bv*[ext=mp4][vcodec!^=vp]+ba[ext=m4a]/bv*[vcodec!^=vp]+ba/bv*+ba/b\" --merge-output-format mp4 --cookies-from-browser safari \"$youtubeUrl\""
 
     /// 目前 downloadCommand 預設值的版本。每次調整上面的預設指令就 +1。
-    static let downloadCommandVersion = 2
+    static let downloadCommandVersion = 3
 
     /// 歷來用過的預設下載指令。
     ///
@@ -29,7 +32,8 @@ enum AppSettingsDefaults {
     /// 任何自訂內容一律保留。
     static let legacyDownloadCommands: [String] = [
         "yt-dlp -f mp4 --cookies-from-browser safari \"$youtubeUrl\"",
-        "yt-dlp -f \"bv[ext=mp4][vcodec^=avc]+ba[ext=m4a]/b[ext=mp4][vcodec^=avc]\" --cookies-from-browser safari \"$youtubeUrl\""
+        "yt-dlp -f \"bv[ext=mp4][vcodec^=avc]+ba[ext=m4a]/b[ext=mp4][vcodec^=avc]\" --cookies-from-browser safari \"$youtubeUrl\"",
+        "yt-dlp -f \"bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/b\" --merge-output-format mp4 --cookies-from-browser safari \"$youtubeUrl\""
     ]
     // 非 YouTube 網址使用的通用下載指令（固定常數，不可由使用者編輯）。
     // 結構與 downloadCommand 相同，僅 -f 格式選擇器改為通用值，以涵蓋 yt-dlp 支援的其他網站。
