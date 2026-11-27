@@ -361,6 +361,28 @@ final class DownloadTaskTests: XCTestCase {
         XCTAssertFalse(decodedTask.wasLive)
     }
 
+    func testEncodingAndDecodingWithNeedsMediaOptionsLookup() throws {
+        // 驗證目的：App 重開後重試字幕清單失敗的任務，仍須先重查媒體選項而非直接下載
+        let task = DownloadTask(url: "https://www.youtube.com/watch?v=lookup123", status: .failed)
+        task.needsMediaOptionsLookup = true
+
+        let data = try JSONEncoder().encode(task)
+        let decodedTask = try JSONDecoder().decode(DownloadTask.self, from: data)
+
+        XCTAssertTrue(decodedTask.needsMediaOptionsLookup)
+    }
+
+    func testDecodingWithoutNeedsMediaOptionsLookupDefaultsToFalse() throws {
+        let data = try JSONEncoder().encode(DownloadTask(url: "https://www.youtube.com/watch?v=abc123"))
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        json.removeValue(forKey: "needsMediaOptionsLookup")
+        let legacyData = try JSONSerialization.data(withJSONObject: json)
+
+        let decodedTask = try JSONDecoder().decode(DownloadTask.self, from: legacyData)
+
+        XCTAssertFalse(decodedTask.needsMediaOptionsLookup)
+    }
+
     // MARK: - expectedEndTime 編碼/解碼測試
 
     func testEncodingAndDecodingWithExpectedEndTime() throws {

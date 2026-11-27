@@ -120,6 +120,8 @@ class DownloadManager {
     private let notificationService: NotificationServiceProtocol
     private let fileInspector: DownloadedFileInspector
     private let defaults: UserDefaults
+    private let metadataRetryDelay: Duration
+    private let metadataFailureLogger: (String) -> Void
 
     /// 設定（使用 UserDefaults 直接讀取，避免與 @Observable 衝突）
     var downloadCommand: String {
@@ -154,7 +156,12 @@ class DownloadManager {
         ytdlpService: YTDLPServiceProtocol = YTDLPService.shared,
         notificationService: NotificationServiceProtocol = NotificationService.shared,
         fileInspector: DownloadedFileInspector = .live,
-        defaults: UserDefaults = .standard
+        defaults: UserDefaults = .standard,
+        metadataRetryDelay: Duration = .seconds(2),
+        metadataFailureLogger: @escaping (String) -> Void = { message in
+            // 同步檔案 I/O 不放在 MainActor 上
+            DispatchQueue.global(qos: .utility).async { LogFileManager.shared.writeToFile(message, level: "ERROR") }
+        }
     ) {
         self.persistenceService = persistenceService
         self.metadataService = metadataService
@@ -162,6 +169,8 @@ class DownloadManager {
         self.notificationService = notificationService
         self.fileInspector = fileInspector
         self.defaults = defaults
+        self.metadataRetryDelay = metadataRetryDelay
+        self.metadataFailureLogger = metadataFailureLogger
 
         // 載入已儲存的任務
         tasks = persistenceService.loadTasks()
@@ -460,9 +469,14 @@ class DownloadManager {
 
         // 決定新任務的狀態：如果全部暫停中，新任務也設為暫停
         let newStatus: DownloadStatus = isAllPaused ? .paused : .pending
+        // 區分「影片資訊就失敗」與「只有媒體選項失敗」：後者已有可信的標題，不可退回「無法獲取標題」
+        var didFetchVideoInfo = false
 
         do {
-            let videoInfo = try await metadataService.fetchVideoInfo(url: task.url, cookiesArguments: cookiesArgs)
+            let videoInfo = try await fetchRetryingTransientFailure(stage: "影片資訊", task: task) {
+                try await self.metadataService.fetchVideoInfo(url: task.url, cookiesArguments: cookiesArgs)
+            }
+            didFetchVideoInfo = true
             TubifyLogger.download.info("成功獲取影片資訊: \(videoInfo.title)")
             task.title = videoInfo.title
             task.thumbnailURL = videoInfo.thumbnail
@@ -531,8 +545,11 @@ class DownloadManager {
             if let mediaOptions {
                 resolvedMediaOptions = mediaOptions
             } else {
-                resolvedMediaOptions = try await metadataService.fetchMediaOptions(url: task.url, cookiesArguments: cookiesArgs)
+                resolvedMediaOptions = try await fetchRetryingTransientFailure(stage: "媒體選項", task: task) {
+                    try await self.metadataService.fetchMediaOptions(url: task.url, cookiesArguments: cookiesArgs)
+                }
             }
+            task.needsMediaOptionsLookup = false
 
             // 過濾只保留支援的語言
             let filteredSubtitles = resolvedMediaOptions.subtitles.filter { SubtitleTrack.isSupportedLanguage($0.languageCode) }
@@ -559,7 +576,7 @@ class DownloadManager {
             }
         } catch {
             let errorMessage = error.localizedDescription
-            TubifyLogger.download.error("獲取影片資訊失敗: \(errorMessage)")
+            TubifyLogger.download.error("獲取影片資訊失敗: \(errorMessage, privacy: .public)")
 
             // 檢查是否為首播影片
             if PremiereErrorParser.isPremiereError(errorMessage) {
@@ -575,6 +592,12 @@ class DownloadManager {
                 // 首播尚未開始時一律不排入佇列：首播開始後 yt-dlp 會改錄即時串流，進度停在 0%。
                 // 「Premiere will begin shortly」沒有倒數時間，premiereDate 維持 nil（UI 顯示「尚未首播」）
                 markTaskAsScheduledPremiere(task, errorMessage: errorMessage)
+            } else if statusOnFailure == nil, didFetchVideoInfo || task.needsMediaOptionsLookup {
+                // 標題可信（本次已取得，或先前已取得、這次是重查字幕清單）時不排入下載：
+                // 直接下載會在使用者不知情下略過字幕與音軌選擇。首播類重試維持下方還原原狀態的行為
+                task.status = .failed
+                task.errorMessage = "無法取得字幕與音軌清單：\(errorMessage)"
+                task.needsMediaOptionsLookup = true
             } else if let statusOnFailure {
                 // 重試時無法確認首播是否已播完，維持原狀態，避免在串流仍進行時下載到片段
                 task.status = statusOnFailure
@@ -587,6 +610,48 @@ class DownloadManager {
 
         persistenceService.saveTasks(tasks)
         startDownloadQueue()
+    }
+
+    /// 重設任務並重新查詢元資料。呼叫端負責持久化。
+    private func restartMetadataFetch(_ task: DownloadTask, statusOnFailure: DownloadStatus? = nil) {
+        task.status = .fetchingInfo
+        task.progress = 0
+        task.errorMessage = nil
+        Task {
+            await fetchMetadataForTask(task, statusOnFailure: statusOnFailure)
+        }
+    }
+
+    /// 元資料查詢遇到暫時性失敗時，等待後重試一次。
+    ///
+    /// 走 DNS 改寫的 proxy（例如 NextDNS 擋 YouTube 廣告）時，查詢偶爾會失敗、下一次又成功。
+    /// 以下失敗不重試：首播（錯誤本身就是答案）、需登入（媒體選項查詢已自行帶 cookies 重試過，
+    /// 再重試會讓 cookies 多用一次）、找不到 yt-dlp。每次失敗都寫入檔案日誌，因為 os_log 會把錯誤內容遮成 <private>。
+    private func fetchRetryingTransientFailure<T>(
+        stage: String,
+        task: DownloadTask,
+        _ operation: () async throws -> T
+    ) async throws -> T {
+        let maxAttempts = 2
+        for attempt in 1...maxAttempts {
+            do {
+                return try await operation()
+            } catch {
+                metadataFailureLogger(
+                    "元資料查詢失敗 - TaskID: \(task.id.uuidString), 階段: \(stage), 第 \(attempt)/\(maxAttempts) 次, URL: \(task.url), Error: \(error.localizedDescription)"
+                )
+                guard attempt < maxAttempts, Self.isRetryableMetadataError(error) else { throw error }
+                try? await Task.sleep(for: metadataRetryDelay)
+            }
+        }
+        preconditionFailure("迴圈在最後一次嘗試必定 return 或 throw")
+    }
+
+    private static func isRetryableMetadataError(_ error: Error) -> Bool {
+        if case MetadataError.ytdlpNotFound = error { return false }
+        let message = error.localizedDescription
+        return !PremiereErrorParser.isPremiereError(message)
+            && !YTDLPService.indicatesLoginRequired(message: message)
     }
 
     private func markTaskAsScheduledPremiere(_ task: DownloadTask, errorMessage: String) {
@@ -1158,13 +1223,15 @@ class DownloadManager {
         if task.status == .postLive || task.status == .scheduled || task.status == .livestreaming {
             let previousStatus = task.status
             task.wasLive = true
-            task.status = .fetchingInfo
-            task.progress = 0
-            task.errorMessage = nil
+            restartMetadataFetch(task, statusOnFailure: previousStatus)
             persistenceService.saveTasks(tasks)
-            Task {
-                await fetchMetadataForTask(task, statusOnFailure: previousStatus)
-            }
+            return
+        }
+
+        // 字幕清單查詢失敗的任務要先重查，直接排入下載會在使用者不知情下略過字幕與音軌選擇
+        if task.requiresMetadataRefetchOnRetry {
+            restartMetadataFetch(task)
+            persistenceService.saveTasks(tasks)
             return
         }
 
@@ -1221,6 +1288,10 @@ class DownloadManager {
 
         // 將所有暫停和失敗的任務設為等待中
         for task in tasks where task.status == .paused || task.status == .failed {
+            if task.requiresMetadataRefetchOnRetry {
+                restartMetadataFetch(task)
+                continue
+            }
             task.status = .pending
             task.progress = 0
             task.errorMessage = nil

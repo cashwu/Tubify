@@ -2,7 +2,7 @@
 
 ## Purpose
 
-媒體下載 HTTP 403 的有界完整 process 重試、取消與 cookies contract，以及重試後的孤兒中間檔清理。
+媒體下載 HTTP 403 的有界完整 process 重試、取消與 cookies contract、重試後的孤兒中間檔清理，以及單一影片元資料查詢的暫時性失敗處理。
 
 ## Requirements
 
@@ -268,6 +268,43 @@ POSIX `unlink` 對目錄以 `EPERM` 失敗且目錄完好，且與該目錄是�
 - **WHEN** 系統記錄該次刪除
 - **THEN** 日誌 SHALL 包含 task ID 與被刪除的檔名
 
+### Requirement: 單一影片元資料查詢的暫時性失敗
+
+加入單一影片（含重開 App 後恢復的查詢）時，系統會先查影片資訊、再查媒體選項（字幕與音軌）。任一查詢失敗時，系統 SHALL 在固定等待 2 秒後重新執行同一查詢一次；失敗訊息符合首播訊號、符合既有的「需登入」訊號，或錯誤為找不到 yt-dlp 時 MUST NOT 重試。需登入不重試的原因：媒體選項查詢本身已依 `subtitle-selection` 帶 cookies 重試過，再重試會讓 cookies 多用一次。每次查詢失敗（含會重試的那次）系統 SHALL 寫入檔案日誌，內容包含 task ID、查詢階段（影片資訊或媒體選項）、第幾次、URL 與完整錯誤訊息，因為 os_log 會把錯誤內容遮成 `<private>`。
+
+重試後仍失敗時：
+
+- 影片資訊失敗：系統 SHALL 維持既有退路，將標題設為「無法獲取標題」並排入下載（完成時再以檔名補標題）。
+- 影片資訊成功、媒體選項失敗：系統 SHALL 保留取得的標題，將任務設為失敗，錯誤訊息以「無法取得字幕與音軌清單：」開頭，並標記任務需重查媒體選項（持久化，舊資料視為不需要）。系統 MUST NOT 排入下載，避免在使用者不知情下略過字幕與音軌選擇。
+
+使用者重試（單一重試或「繼續全部」）標記為需重查媒體選項的失敗任務，或 App 重開後恢復重查途中被中斷的此類任務時，系統 SHALL 重新查詢影片資訊與媒體選項，MUST NOT 直接排入下載；重查仍失敗時任務 SHALL 維持失敗與原標題，且 MUST NOT 被當成直播處理。首播類任務（尚未首播、首播串流中、直播處理中）重試時查詢失敗的既有行為（還原原狀態）不變。
+
+#### Scenario: 暫時性失敗重試後顯示字幕選擇
+
+- **GIVEN** 影片資訊或媒體選項的第一次查詢失敗，第二次成功且有可選字幕
+- **WHEN** 使用者加入該影片
+- **THEN** 任務 SHALL 顯示正確標題並進入等待媒體選擇，MUST NOT 開始下載
+
+#### Scenario: 媒體選項持續失敗
+
+- **GIVEN** 影片資訊成功，媒體選項兩次查詢都失敗
+- **WHEN** 系統處理失敗
+- **THEN** 任務 SHALL 為失敗、保留標題、標記需重查媒體選項，且 MUST NOT 開始下載
+
+#### Scenario: 需登入或首播失敗不重試
+
+- **GIVEN** 查詢失敗訊息符合需登入或首播訊號
+- **WHEN** 系統處理失敗
+- **THEN** 系統 MUST NOT 重新執行該查詢
+
+#### Scenario: 重試字幕清單失敗的任務
+
+- **GIVEN** 任務因媒體選項失敗而被標記需重查
+- **WHEN** 使用者重試且媒體選項查詢成功
+- **THEN** 任務 SHALL 進入等待媒體選擇並清除需重查標記，MUST NOT 直接開始下載
+
+證據邊界：測試以 mock 模擬失敗訊息，不能證明真實網路或 DNS proxy 下的失敗訊息內容；播放清單逐支查詢媒體選項的路徑，以及直播剛結束（`post_live`）時查詢可用格式的路徑，各有既有的錯誤處理，不在本 requirement 範圍。
+
 ## 來源 change
 
 - 2026-08-02-retry-transient-download-403、2026-08-21-cleanup-orphaned-part-files（詳見 [completed-tasks.md](../completed-tasks.md)）
@@ -275,4 +312,8 @@ POSIX `unlink` 對目錄以 `EPERM` 失敗且目錄完好，且與該目錄是�
 ## 對應程式碼
 
 - `Tubify/Services/YTDLPService.swift`
+- `Tubify/ViewModels/DownloadManager.swift`
+- `Tubify/Models/DownloadTask.swift`
 - `TubifyTests/YTDLPServiceTests.swift`
+- `TubifyTests/DownloadManagerTests.swift`
+- `TubifyTests/DownloadTaskTests.swift`

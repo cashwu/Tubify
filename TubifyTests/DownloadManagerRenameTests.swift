@@ -47,7 +47,9 @@ final class DownloadManagerRenameTests: XCTestCase {
             metadataService: mockMetadataService,
             ytdlpService: mockYTDLPService,
             notificationService: mockNotificationService,
-            defaults: defaults
+            defaults: defaults,
+            metadataRetryDelay: .zero,
+            metadataFailureLogger: { _ in }
         )
     }
 

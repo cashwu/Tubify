@@ -45,7 +45,7 @@ The system SHALL continue to select all supported uploaded subtitle languages wh
 
 ### Requirement: 媒體選項偵測優先不帶 cookies
 
-系統取得某個影片的媒體選項時，SHALL 先以不帶 cookies 的 yt-dlp invocation 查詢，使公開影片的使用者上傳字幕不會因為帶上帳號 cookies 而從查詢結果中消失。只有在不帶 cookies 的查詢以非 0 exit code 失敗、且失敗訊息符合既有的「需登入」訊號、且呼叫端確實提供了 cookies 參數時，系統才 SHALL 以帶 cookies 的 invocation 重試一次。單次媒體選項查詢的 yt-dlp invocation 次數 MUST NOT 超過 2 次。兩次 invocation 的引數都 SHALL 包含指定 player client 的 `--extractor-args` 與其值。
+系統取得某個影片的媒體選項時，SHALL 先以不帶 cookies 的 yt-dlp invocation 查詢，使公開影片的使用者上傳字幕不會因為帶上帳號 cookies 而從查詢結果中消失。只有在不帶 cookies 的查詢以非 0 exit code 失敗、且失敗訊息符合既有的「需登入」訊號、且呼叫端確實提供了 cookies 參數時，系統才 SHALL 以帶 cookies 的 invocation 重試一次。單次媒體選項查詢的 yt-dlp invocation 次數 MUST NOT 超過 2 次。單一影片加入流程遇到暫時性失敗時，`DownloadManager` 可能把整個查詢重跑一次（見 `download-reliability`「單一影片元資料查詢的暫時性失敗」），這個上限以每次查詢分別計算；需登入的失敗不會被重跑。兩次 invocation 的引數都 SHALL 包含指定 player client 的 `--extractor-args` 與其值。
 
 #### Scenario: 有可用 cookies 時第一次查詢仍不帶 cookies
 

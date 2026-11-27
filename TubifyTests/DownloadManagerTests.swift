@@ -20,6 +20,8 @@ final class DownloadManagerTests: XCTestCase {
     var mockMetadataService: MockYouTubeMetadataService!
     var mockYTDLPService: MockYTDLPService!
     var mockNotificationService: MockNotificationService!
+    /// DownloadManager 寫給檔案日誌的元資料失敗紀錄；改由測試攔截，不寫入真實的 ~/Library/Logs/Tubify/
+    var metadataLogMessages: [String] = []
 
     /// 每個測試獨立的 UserDefaults suite，避免讀到或寫入使用者真實的下載指令、資料夾與偏好設定
     var defaults: UserDefaults!
@@ -36,6 +38,7 @@ final class DownloadManagerTests: XCTestCase {
         mockMetadataService = MockYouTubeMetadataService()
         mockYTDLPService = MockYTDLPService()
         mockNotificationService = MockNotificationService()
+        metadataLogMessages = []
         defaultsSuiteName = "DownloadManagerTests.\(UUID().uuidString)"
         defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsSuiteName))
         manager = DownloadManager(
@@ -43,7 +46,9 @@ final class DownloadManagerTests: XCTestCase {
             metadataService: mockMetadataService,
             ytdlpService: mockYTDLPService,
             notificationService: mockNotificationService,
-            defaults: defaults
+            defaults: defaults,
+            metadataRetryDelay: .zero,
+            metadataFailureLogger: { [unowned self] in self.metadataLogMessages.append($0) }
         )
 
         // 確保任務列表為空
@@ -107,7 +112,9 @@ final class DownloadManagerTests: XCTestCase {
             metadataService: mockMetadataService,
             ytdlpService: mockYTDLPService,
             notificationService: mockNotificationService,
-            defaults: defaults
+            defaults: defaults,
+            metadataRetryDelay: .zero,
+            metadataFailureLogger: { [unowned self] in self.metadataLogMessages.append($0) }
         )
     }
 
@@ -1353,7 +1360,9 @@ final class DownloadManagerTests: XCTestCase {
                 },
                 trash: { [unowned self] path in self.trashedPaths.append(path) }
             ),
-            defaults: defaults
+            defaults: defaults,
+            metadataRetryDelay: .zero,
+            metadataFailureLogger: { [unowned self] in self.metadataLogMessages.append($0) }
         )
         manager.tasks = []
         return manager
@@ -2382,6 +2391,220 @@ final class DownloadManagerTests: XCTestCase {
         XCTAssertEqual(receivedRequest?.playlistTitle, "Test Playlist", "播放清單標題應該正確")
         XCTAssertEqual(receivedRequest?.videos.count, 1, "影片數量應該正確")
     }
+
+    // MARK: - 元資料查詢的暫時性失敗
+
+    private func stubVideoInfo(url: String, title: String = "Real Title") {
+        mockMetadataService.videoInfo = VideoInfo(
+            id: "transient",
+            title: title,
+            thumbnail: nil,
+            duration: 60,
+            uploader: "Test",
+            url: url,
+            liveStatus: nil,
+            releaseTimestamp: nil
+        )
+    }
+
+    /// 讓媒體選項查詢回傳可選字幕，並回傳記錄媒體選擇請求次數的計數器
+    private func stubSelectableMediaOptions() -> () -> Int {
+        mockMetadataService.mediaOptions = (subtitles: [SubtitleTrack(languageCode: "en")], audioTracks: [], formats: [])
+        var mediaRequests = 0
+        manager.onMediaSelectionNeeded = { _ in mediaRequests += 1 }
+        manager.resumePersistedTasksAfterUIActivation(sessionID: UUID())
+        return { mediaRequests }
+    }
+
+    /// 等待非同步流程有機會誤排下載後，確認沒有開始下載
+    private func assertNoDownloadStarted(file: StaticString = #filePath, line: UInt = #line) async {
+        try? await Task.sleep(for: .milliseconds(100))
+        XCTAssertTrue(mockYTDLPService.downloadedURLs.isEmpty, file: file, line: line)
+    }
+
+    private func transientError(_ message: String = "Connection reset by peer") -> Error {
+        MetadataError.fetchFailed("ERROR: [youtube] abc123: Unable to download API page: \(message)")
+    }
+
+    func testTransientVideoInfoFailureIsRetriedOnceThenShowsMediaSelection() async {
+        // 案例設計：第一次查影片資訊失敗、第二次成功；修正前會直接寫入「無法獲取標題」並略過字幕視窗
+        let url = "https://www.youtube.com/watch?v=retryinfo01"
+        stubVideoInfo(url: url)
+        mockMetadataService.videoInfoErrorQueue = [transientError()]
+        let mediaRequests = stubSelectableMediaOptions()
+
+        XCTAssertEqual(manager.addURL(url), .success)
+        let waiting = await waitUntil { self.manager.tasks.first?.status == .waitingForMediaSelection }
+
+        XCTAssertTrue(waiting)
+        XCTAssertEqual(mockMetadataService.fetchedVideoURLs, [url, url])
+        XCTAssertEqual(manager.tasks.first?.title, "Real Title")
+        XCTAssertEqual(mediaRequests(), 1)
+        XCTAssertTrue(mockYTDLPService.downloadedURLs.isEmpty)
+    }
+
+    func testTransientMediaOptionsFailureIsRetriedOnceThenShowsMediaSelection() async {
+        let url = "https://www.youtube.com/watch?v=retryopts01"
+        stubVideoInfo(url: url)
+        mockMetadataService.mediaOptionsErrorQueue = [transientError()]
+        let mediaRequests = stubSelectableMediaOptions()
+
+        XCTAssertEqual(manager.addURL(url), .success)
+        let waiting = await waitUntil { self.manager.tasks.first?.status == .waitingForMediaSelection }
+
+        XCTAssertTrue(waiting)
+        XCTAssertEqual(mockMetadataService.mediaOptionsAttemptCount, 2)
+        XCTAssertEqual(mediaRequests(), 1)
+        XCTAssertTrue(mockYTDLPService.downloadedURLs.isEmpty)
+    }
+
+    func testPersistentMediaOptionsFailureKeepsTitleAndFailsWithoutDownloading() async {
+        // 驗證目的：已取得標題時不得覆寫成「無法獲取標題」，也不得在沒讓使用者選字幕的情況下直接下載
+        let url = "https://www.youtube.com/watch?v=failopts001"
+        stubVideoInfo(url: url)
+        mockMetadataService.mediaOptionsError = transientError()
+
+        XCTAssertEqual(manager.addURL(url), .success)
+        let failed = await waitUntil { self.manager.tasks.first?.status == .failed }
+
+        XCTAssertTrue(failed)
+        let task = manager.tasks.first
+        XCTAssertEqual(task?.title, "Real Title")
+        XCTAssertEqual(task?.needsMediaOptionsLookup, true)
+        XCTAssertTrue(task?.errorMessage?.hasPrefix("無法取得字幕與音軌清單") == true, task?.errorMessage ?? "nil")
+        XCTAssertTrue(task?.errorMessage?.contains("Connection reset by peer") == true)
+        XCTAssertEqual(mockMetadataService.mediaOptionsAttemptCount, 2)
+        await assertNoDownloadStarted()
+    }
+
+    func testPersistentVideoInfoFailureIsRetriedOnceThenFallsBackToDownload() async {
+        // 影片資訊兩次都失敗時維持既有退路：以「無法獲取標題」排入下載，完成時再以檔名補標題
+        let url = "https://www.youtube.com/watch?v=failinfo001"
+        mockMetadataService.videoInfoError = transientError()
+
+        XCTAssertEqual(manager.addURL(url), .success)
+        let downloaded = await waitUntil { self.mockYTDLPService.downloadedURLs == [url] }
+
+        XCTAssertTrue(downloaded)
+        XCTAssertEqual(mockMetadataService.fetchedVideoURLs, [url, url])
+    }
+
+    func testLoginRequiredMediaOptionsFailureIsNotRetriedByManager() async {
+        // 需登入的失敗已由媒體選項查詢自己帶 cookies 重試過一次；manager 再重試會讓 cookies 被多用一次
+        let url = "https://www.youtube.com/watch?v=loginopts01"
+        stubVideoInfo(url: url)
+        mockMetadataService.mediaOptionsError = MetadataError.fetchFailed(
+            "ERROR: [youtube] loginopts01: Sign in to confirm your age. This video may be inappropriate for some users."
+        )
+
+        XCTAssertEqual(manager.addURL(url), .success)
+        let failed = await waitUntil { self.manager.tasks.first?.status == .failed }
+
+        XCTAssertTrue(failed)
+        XCTAssertEqual(mockMetadataService.mediaOptionsAttemptCount, 1)
+    }
+
+    func testPremiereVideoInfoFailureIsNotRetried() async {
+        let url = "https://www.youtube.com/watch?v=premiere001"
+        mockMetadataService.videoInfoError = MetadataError.fetchFailed(
+            "ERROR: [youtube] premiere001: Premiere will begin shortly"
+        )
+
+        XCTAssertEqual(manager.addURL(url), .success)
+        let scheduled = await waitUntil { self.manager.tasks.first?.status == .scheduled }
+
+        XCTAssertTrue(scheduled)
+        XCTAssertEqual(mockMetadataService.fetchedVideoURLs, [url])
+    }
+
+    func testMetadataFailuresAreWrittenToFileLogWithURLAndErrorMessage() async {
+        // 驗證目的：os_log 會把錯誤內容遮成 <private>，檔案日誌是事後唯一能看到失敗原因的地方
+        let url = "https://www.youtube.com/watch?v=logopts0001"
+        stubVideoInfo(url: url)
+        mockMetadataService.mediaOptionsError = transientError("timed out")
+
+        XCTAssertEqual(manager.addURL(url), .success)
+        _ = await waitUntil { self.manager.tasks.first?.status == .failed }
+
+        XCTAssertEqual(metadataLogMessages.count, 2, metadataLogMessages.joined(separator: "\n"))
+        for message in metadataLogMessages {
+            XCTAssertTrue(message.contains(url), message)
+            XCTAssertTrue(message.contains("timed out"), message)
+            XCTAssertTrue(message.contains("媒體選項"), message)
+        }
+    }
+
+    func testRetryAfterMediaOptionsFailureRefetchesAndShowsMediaSelection() async {
+        // 驗證目的：一般失敗任務重試會直接排入下載；字幕清單失敗的任務必須先重查媒體選項
+        let url = "https://www.youtube.com/watch?v=retryfail01"
+        let task = createTestTask(url: url, title: "Real Title", status: .failed)
+        task.errorMessage = "無法取得字幕與音軌清單：timed out"
+        task.needsMediaOptionsLookup = true
+        manager.tasks = [task]
+        stubVideoInfo(url: url)
+        let mediaRequests = stubSelectableMediaOptions()
+
+        manager.retryTask(task)
+        let waiting = await waitUntil { task.status == .waitingForMediaSelection }
+
+        XCTAssertTrue(waiting)
+        XCTAssertFalse(task.needsMediaOptionsLookup)
+        XCTAssertFalse(task.wasLive, "字幕清單重查不代表任務曾為直播")
+        XCTAssertEqual(mediaRequests(), 1)
+        XCTAssertTrue(mockYTDLPService.downloadedURLs.isEmpty)
+    }
+
+    func testRetryAfterMediaOptionsFailureStaysFailedWhenLookupFailsAgain() async {
+        let url = "https://www.youtube.com/watch?v=retryfail02"
+        let task = createTestTask(url: url, title: "Real Title", status: .failed)
+        task.needsMediaOptionsLookup = true
+        manager.tasks = [task]
+        mockMetadataService.videoInfoError = transientError()
+
+        manager.retryTask(task)
+        let failedAgain = await waitUntil {
+            task.status == .failed && self.mockMetadataService.fetchedVideoURLs.count == 2
+        }
+
+        XCTAssertTrue(failedAgain)
+        XCTAssertEqual(task.title, "Real Title")
+        XCTAssertTrue(task.needsMediaOptionsLookup)
+        await assertNoDownloadStarted()
+    }
+
+    func testResumeAllRefetchesMediaOptionsForFlaggedFailedTask() async {
+        // 驗證目的：「繼續全部」是 retryTask 以外另一條把失敗任務轉回等待中的路徑，同樣不得略過字幕選擇
+        let url = "https://www.youtube.com/watch?v=resumeall01"
+        let flagged = createTestTask(url: url, title: "Real Title", status: .failed)
+        flagged.needsMediaOptionsLookup = true
+        let paused = createTestTask(url: "https://www.youtube.com/watch?v=pausedtask1", status: .paused)
+        manager.tasks = [flagged, paused]
+        stubVideoInfo(url: url)
+        _ = stubSelectableMediaOptions()
+
+        manager.resumeAll()
+        let waiting = await waitUntil { flagged.status == .waitingForMediaSelection }
+
+        XCTAssertTrue(waiting)
+        XCTAssertEqual(mockMetadataService.fetchedVideoURLs, [url])
+        XCTAssertFalse(mockYTDLPService.downloadedURLs.contains(url))
+    }
+
+    func testRecoveredFlaggedTaskKeepsTitleAndFailsWhenVideoInfoFails() async {
+        // 案例設計：重試字幕清單失敗的任務時 App 中途結束，重開後任務停在 .fetchingInfo 且仍帶旗標
+        let url = "https://www.youtube.com/watch?v=recovflag01"
+        let task = createTestTask(url: url, title: "Real Title", status: .fetchingInfo)
+        task.needsMediaOptionsLookup = true
+        manager = makeManager(with: [task])
+        mockMetadataService.videoInfoError = transientError()
+
+        manager.resumePersistedTasksAfterUIActivation(sessionID: UUID())
+        let failed = await waitUntil { task.status == .failed }
+
+        XCTAssertTrue(failed)
+        XCTAssertEqual(task.title, "Real Title")
+        await assertNoDownloadStarted()
+    }
 }
 
 final class MockYouTubeMetadataService: YouTubeMetadataServiceProtocol {
@@ -2393,6 +2616,10 @@ final class MockYouTubeMetadataService: YouTubeMetadataServiceProtocol {
     var durationByURL: [String: Int] = [:]
     var videoInfoError: Error?
     var mediaOptionsError: Error?
+    /// 依序在前幾次呼叫拋出的錯誤；用完後改用 videoInfoError／mediaOptionsError，用來模擬暫時性失敗
+    var videoInfoErrorQueue: [Error] = []
+    var mediaOptionsErrorQueue: [Error] = []
+    private(set) var mediaOptionsAttemptCount = 0
     var playlistInfo: (title: String, videos: [VideoInfo]) = ("", [])
     var fetchDelayNanoseconds: UInt64 = 0
     private(set) var fetchedVideoURLs: [String] = []
@@ -2404,6 +2631,9 @@ final class MockYouTubeMetadataService: YouTubeMetadataServiceProtocol {
         if fetchDelayNanoseconds > 0 {
             try? await Task.sleep(nanoseconds: fetchDelayNanoseconds)
         }
+        if !videoInfoErrorQueue.isEmpty {
+            throw videoInfoErrorQueue.removeFirst()
+        }
         if let videoInfoError {
             throw videoInfoError
         }
@@ -2413,6 +2643,10 @@ final class MockYouTubeMetadataService: YouTubeMetadataServiceProtocol {
     func fetchMediaOptions(url: String, cookiesArguments: [String]) async throws -> MediaOptions {
         if fetchDelayNanoseconds > 0 {
             try? await Task.sleep(nanoseconds: fetchDelayNanoseconds)
+        }
+        mediaOptionsAttemptCount += 1
+        if !mediaOptionsErrorQueue.isEmpty {
+            throw mediaOptionsErrorQueue.removeFirst()
         }
         if let mediaOptionsError {
             throw mediaOptionsError

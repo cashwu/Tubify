@@ -61,6 +61,10 @@ class DownloadTask: Identifiable, Codable {
     /// false 表示 yt-dlp 沿用了既有的同名檔，改名時只能複製、不能動原檔（R10）。
     /// nil 為 App 更新前完成、沒有來源記錄的舊任務，視為屬於本任務（R12）
     var ownsOutputFile: Bool?
+    /// 已取得影片資訊、但字幕與音軌清單查詢失敗而被標成失敗的任務。
+    /// 重試時必須重新查詢媒體選項，否則會直接排入下載、略過字幕選擇
+    var needsMediaOptionsLookup: Bool = false
+    var requiresMetadataRefetchOnRetry: Bool { status == .failed && needsMediaOptionsLookup }
 
     enum CodingKeys: String, CodingKey {
         case id, url, title, thumbnailURL, status, progress
@@ -68,7 +72,7 @@ class DownloadTask: Identifiable, Codable {
         case availableSubtitles, subtitleSelection
         case availableAudioTracks, audioSelection
         case duration, callbackScheme, requestId, expectedEndTime, wasLive
-        case customTitle, ownsOutputFile
+        case customTitle, ownsOutputFile, needsMediaOptionsLookup
     }
 
     /// 播放清單展開前的佔位任務標題；復原流程靠它判斷要重新展開播放清單
@@ -155,6 +159,7 @@ class DownloadTask: Identifiable, Codable {
         wasLive = try container.decodeIfPresent(Bool.self, forKey: .wasLive) ?? false
         customTitle = try container.decodeIfPresent(String.self, forKey: .customTitle)
         ownsOutputFile = try container.decodeIfPresent(Bool.self, forKey: .ownsOutputFile)
+        needsMediaOptionsLookup = try container.decodeIfPresent(Bool.self, forKey: .needsMediaOptionsLookup) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -181,6 +186,7 @@ class DownloadTask: Identifiable, Codable {
         try container.encode(wasLive, forKey: .wasLive)
         try container.encodeIfPresent(customTitle, forKey: .customTitle)
         try container.encodeIfPresent(ownsOutputFile, forKey: .ownsOutputFile)
+        try container.encode(needsMediaOptionsLookup, forKey: .needsMediaOptionsLookup)
     }
 }
 
