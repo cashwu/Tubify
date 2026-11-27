@@ -371,6 +371,95 @@ final class YouTubeMetadataServiceTests: XCTestCase {
         XCTAssertEqual(fixture.invocationCount, 1)
     }
 
+    // MARK: - 影片資訊查詢的 cookies
+
+    private static let videoInfoBaseArguments = ["-J", "--skip-download", "--no-playlist"]
+    private static let videoInfoJSON = #"{"id": "abc123", "title": "影片標題", "webpage_url": "https://www.youtube.com/watch?v=abc123"}"#
+
+    /// 驗證目的：帶帳號 cookies 時 YouTube 可能只回傳 SABR 串流，yt-dlp 只剩圖片格式而讓 -J 失敗；
+    /// 公開影片不帶 cookies 就查得到，因此第一次一律不帶
+    func testFirstVideoInfoInvocationOmitsCookies() async throws {
+        let fixture = try makeMetadataFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        try fixture.setCall(1, exitCode: 0, stdout: Self.videoInfoJSON)
+
+        let service = YouTubeMetadataService(ytdlpPathProvider: { fixture.executable.path })
+        let info = try await service.fetchVideoInfo(url: Self.mediaOptionsURL, cookiesArguments: Self.cookiesArguments)
+
+        XCTAssertEqual(info.title, "影片標題")
+        XCTAssertEqual(fixture.invocationCount, 1)
+        XCTAssertEqual(fixture.arguments(at: 1), Self.videoInfoBaseArguments + [Self.mediaOptionsURL])
+    }
+
+    func testLoginRequiredVideoInfoFailureRetriesOnceWithCookies() async throws {
+        let fixture = try makeMetadataFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        try fixture.setCall(1, exitCode: 1, stderr: "ERROR: [youtube] abc123: Sign in to confirm your age")
+        try fixture.setCall(2, exitCode: 0, stdout: Self.videoInfoJSON)
+
+        let service = YouTubeMetadataService(ytdlpPathProvider: { fixture.executable.path })
+        let info = try await service.fetchVideoInfo(url: Self.mediaOptionsURL, cookiesArguments: Self.cookiesArguments)
+
+        XCTAssertEqual(info.title, "影片標題")
+        XCTAssertEqual(fixture.invocationCount, 2)
+        XCTAssertEqual(
+            fixture.arguments(at: 2),
+            Self.videoInfoBaseArguments + Self.cookiesArguments + [Self.mediaOptionsURL]
+        )
+    }
+
+    func testNonLoginVideoInfoFailureIsNotRetriedWithCookies() async throws {
+        let fixture = try makeMetadataFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        try fixture.setCall(1, exitCode: 1, stderr: "ERROR: [youtube] abc123: Video unavailable")
+
+        let service = YouTubeMetadataService(ytdlpPathProvider: { fixture.executable.path })
+        await assertVideoInfoFetchFails(service, cookiesArguments: Self.cookiesArguments, messageContaining: "Video unavailable")
+        XCTAssertEqual(fixture.invocationCount, 1)
+    }
+
+    func testLoginRequiredVideoInfoFailureWithoutCookiesIsNotRetried() async throws {
+        let fixture = try makeMetadataFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        try fixture.setCall(1, exitCode: 1, stderr: "ERROR: [youtube] abc123: Sign in to confirm your age")
+
+        let service = YouTubeMetadataService(ytdlpPathProvider: { fixture.executable.path })
+        await assertVideoInfoFetchFails(service, cookiesArguments: [], messageContaining: "Sign in")
+        XCTAssertEqual(fixture.invocationCount, 1)
+    }
+
+    func testVideoInfoCookieRetryFailureReportsSecondMessage() async throws {
+        let fixture = try makeMetadataFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        try fixture.setCall(1, exitCode: 1, stderr: "ERROR: [youtube] abc123: Sign in to confirm your age")
+        try fixture.setCall(2, exitCode: 1, stderr: "ERROR: [youtube] abc123: Requested format is not available")
+
+        let service = YouTubeMetadataService(ytdlpPathProvider: { fixture.executable.path })
+        await assertVideoInfoFetchFails(
+            service,
+            cookiesArguments: Self.cookiesArguments,
+            messageContaining: "Requested format is not available"
+        )
+        XCTAssertEqual(fixture.invocationCount, 2)
+    }
+
+    private func assertVideoInfoFetchFails(
+        _ service: YouTubeMetadataService,
+        cookiesArguments: [String],
+        messageContaining expected: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        do {
+            _ = try await service.fetchVideoInfo(url: Self.mediaOptionsURL, cookiesArguments: cookiesArguments)
+            XCTFail("應拋出 fetchFailed", file: file, line: line)
+        } catch MetadataError.fetchFailed(let message) {
+            XCTAssertTrue(message.contains(expected), message, file: file, line: line)
+        } catch {
+            XCTFail("錯誤型別不符: \(error)", file: file, line: line)
+        }
+    }
+
     private func mediaOptionsSubtitles(json: String) async throws -> [SubtitleTrack] {
         let fixture = try makeMetadataFixture()
         defer { try? FileManager.default.removeItem(at: fixture.directory) }

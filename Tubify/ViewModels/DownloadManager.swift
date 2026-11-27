@@ -459,13 +459,8 @@ class DownloadManager {
     private func fetchMetadataForTask(_ task: DownloadTask, statusOnFailure: DownloadStatus? = nil) async {
         TubifyLogger.download.info("獲取影片元資料: \(task.url)")
 
-        // 獲取 cookies 參數（解決 Bot 驗證問題）
+        // cookies 只作為退路：影片資訊與媒體選項查詢都先不帶，遇到需登入的錯誤才帶 cookies 重試一次
         let cookiesArgs = getCookiesArguments()
-
-        // 注意：不使用 cookies 來獲取元資料，因為：
-        // 1. 公開影片不需要認證就可以獲取元資料
-        // 2. 使用 Safari cookies 需要 Full Disk Access 權限，沒有權限會導致 yt-dlp 無限期掛起
-        // 3. Cookies 只在下載時使用（下載私人影片時）
 
         // 決定新任務的狀態：如果全部暫停中，新任務也設為暫停
         let newStatus: DownloadStatus = isAllPaused ? .paused : .pending

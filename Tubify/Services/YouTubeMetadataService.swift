@@ -229,71 +229,25 @@ actor YouTubeMetadataService {
 
         TubifyLogger.ytdlp.info("獲取影片資訊: \(url)")
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: ytdlpPath)
         // 使用 --skip-download 避免 yt-dlp 嘗試驗證下載格式導致 403 錯誤
-        process.arguments = ["-J", "--skip-download", "--no-playlist"] + cookiesArguments + [url]
-        configureProcessEnvironment(process)
+        let baseArguments = ["-J", "--skip-download", "--no-playlist"]
 
-        let pipe = Pipe()
-        let errorPipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = errorPipe
+        // 第一次一律不帶 cookies：帶上帳號 cookies 時 YouTube 可能只給 SABR 串流，
+        // yt-dlp 只剩圖片格式而讓 -J 以「Requested format is not available」失敗，公開影片卻不需要登入
+        var result = try await runYTDLPProcess(ytdlpPath: ytdlpPath, arguments: baseArguments + [url])
+        if result.exitCode != 0,
+           YTDLPService.indicatesLoginRequired(message: result.errorMessage),
+           !cookiesArguments.isEmpty {
+            TubifyLogger.ytdlp.info("影片資訊查詢失敗（疑似需要登入），改帶 cookies 重試: \(url)")
+            result = try await runYTDLPProcess(ytdlpPath: ytdlpPath, arguments: baseArguments + cookiesArguments + [url])
+        }
+
+        if result.exitCode != 0 {
+            throw MetadataError.fetchFailed(result.errorMessage)
+        }
 
         do {
-            try process.run()
-        } catch {
-            throw MetadataError.fetchFailed(error.localizedDescription)
-        }
-
-        // 在背景讀取 stdout（避免管道緩衝區滿導致死鎖）
-        // 如果不先讀取數據，當 yt-dlp 輸出超過管道緩衝區（約 64KB）時會阻塞
-        let outputHandle = pipe.fileHandleForReading
-        let errorHandle = errorPipe.fileHandleForReading
-
-        // 使用異步方式讀取數據
-        let outputData = await withCheckedContinuation { (continuation: CheckedContinuation<Data, Never>) in
-            DispatchQueue.global().async {
-                let data = outputHandle.readDataToEndOfFile()
-                continuation.resume(returning: data)
-            }
-        }
-
-        let errorData = await withCheckedContinuation { (continuation: CheckedContinuation<Data, Never>) in
-            DispatchQueue.global().async {
-                let data = errorHandle.readDataToEndOfFile()
-                continuation.resume(returning: data)
-            }
-        }
-
-        // 等待程序結束
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            var resumed = false
-            let resumeOnce = {
-                guard !resumed else { return }
-                resumed = true
-                continuation.resume()
-            }
-
-            process.terminationHandler = { _ in
-                resumeOnce()
-            }
-
-            if !process.isRunning {
-                resumeOnce()
-            }
-        }
-
-        if process.terminationStatus != 0 {
-            let errorMessage = String(data: errorData, encoding: .utf8) ?? "未知錯誤"
-            throw MetadataError.fetchFailed(errorMessage)
-        }
-
-        let data = outputData
-
-        do {
-            let decoder = JSONDecoder()
-            let videoInfo = try decoder.decode(VideoInfo.self, from: data)
+            let videoInfo = try JSONDecoder().decode(VideoInfo.self, from: result.output)
             TubifyLogger.ytdlp.info("成功獲取影片資訊: \(videoInfo.title)")
             return videoInfo
         } catch {
@@ -310,64 +264,15 @@ actor YouTubeMetadataService {
 
         TubifyLogger.ytdlp.info("獲取播放清單資訊: \(url)")
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: ytdlpPath)
-        process.arguments = ["--flat-playlist", "-J"] + cookiesArguments + [url]
-        configureProcessEnvironment(process)
-
-        let pipe = Pipe()
-        let errorPipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = errorPipe
-
-        do {
-            try process.run()
-        } catch {
-            throw MetadataError.fetchFailed(error.localizedDescription)
+        let result = try await runYTDLPProcess(
+            ytdlpPath: ytdlpPath,
+            arguments: ["--flat-playlist", "-J"] + cookiesArguments + [url]
+        )
+        if result.exitCode != 0 {
+            throw MetadataError.fetchFailed(result.errorMessage)
         }
 
-        // 在背景讀取 stdout（避免管道緩衝區滿導致死鎖）
-        let outputHandle = pipe.fileHandleForReading
-        let errorHandle = errorPipe.fileHandleForReading
-
-        let outputData = await withCheckedContinuation { (continuation: CheckedContinuation<Data, Never>) in
-            DispatchQueue.global().async {
-                let data = outputHandle.readDataToEndOfFile()
-                continuation.resume(returning: data)
-            }
-        }
-
-        let errorData = await withCheckedContinuation { (continuation: CheckedContinuation<Data, Never>) in
-            DispatchQueue.global().async {
-                let data = errorHandle.readDataToEndOfFile()
-                continuation.resume(returning: data)
-            }
-        }
-
-        // 等待程序結束
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            var resumed = false
-            let resumeOnce = {
-                guard !resumed else { return }
-                resumed = true
-                continuation.resume()
-            }
-
-            process.terminationHandler = { _ in
-                resumeOnce()
-            }
-
-            if !process.isRunning {
-                resumeOnce()
-            }
-        }
-
-        if process.terminationStatus != 0 {
-            let errorMessage = String(data: errorData, encoding: .utf8) ?? "未知錯誤"
-            throw MetadataError.fetchFailed(errorMessage)
-        }
-
-        let data = outputData
+        let data = result.output
 
         do {
             let decoder = JSONDecoder()
@@ -773,6 +678,36 @@ actor YouTubeMetadataService {
         ytdlpPath: String,
         arguments: [String]
     ) async throws -> MediaOptionsInvocationOutcome {
+        let result = try await runYTDLPProcess(ytdlpPath: ytdlpPath, arguments: arguments)
+        if result.exitCode != 0 {
+            return .failed(message: result.errorMessage)
+        }
+
+        // 解析 JSON 並提取字幕和音軌資訊
+        do {
+            guard let json = try JSONSerialization.jsonObject(with: result.output) as? [String: Any] else {
+                return .succeeded(MediaOptions(subtitles: [], audioTracks: [], formats: [], liveStatus: nil, releaseTimestamp: nil))
+            }
+            return .succeeded(MediaOptions(
+                subtitles: parseSubtitles(from: json),
+                audioTracks: parseAudioTracks(from: json),
+                formats: parseFormats(from: json),
+                liveStatus: json["live_status"] as? String,
+                releaseTimestamp: json["release_timestamp"] as? Int,
+                duration: (json["duration"] as? NSNumber)?.intValue
+            ))
+        } catch {
+            TubifyLogger.ytdlp.error("解析媒體選項失敗: \(error.localizedDescription)")
+            return .succeeded(MediaOptions(subtitles: [], audioTracks: [], formats: [], liveStatus: nil, releaseTimestamp: nil))
+        }
+    }
+
+    /// 執行一次 yt-dlp process 並收集輸出。process 無法啟動時拋出 `MetadataError.fetchFailed`；
+    /// 非 0 exit code 不拋出，由呼叫端決定是否重試。
+    private func runYTDLPProcess(
+        ytdlpPath: String,
+        arguments: [String]
+    ) async throws -> (exitCode: Int32, output: Data, errorMessage: String) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: ytdlpPath)
         process.arguments = arguments
@@ -789,20 +724,19 @@ actor YouTubeMetadataService {
             throw MetadataError.fetchFailed(error.localizedDescription)
         }
 
+        // 在背景讀取輸出：不先讀走資料時，輸出超過管道緩衝區（約 64KB）會讓 yt-dlp 阻塞而死鎖
         let outputHandle = pipe.fileHandleForReading
         let errorHandle = errorPipe.fileHandleForReading
 
         let outputData = await withCheckedContinuation { (continuation: CheckedContinuation<Data, Never>) in
             DispatchQueue.global().async {
-                let data = outputHandle.readDataToEndOfFile()
-                continuation.resume(returning: data)
+                continuation.resume(returning: outputHandle.readDataToEndOfFile())
             }
         }
 
         let errorData = await withCheckedContinuation { (continuation: CheckedContinuation<Data, Never>) in
             DispatchQueue.global().async {
-                let data = errorHandle.readDataToEndOfFile()
-                continuation.resume(returning: data)
+                continuation.resume(returning: errorHandle.readDataToEndOfFile())
             }
         }
 
@@ -823,28 +757,7 @@ actor YouTubeMetadataService {
             }
         }
 
-        if process.terminationStatus != 0 {
-            let errorMessage = String(data: errorData, encoding: .utf8) ?? "未知錯誤"
-            return .failed(message: errorMessage)
-        }
-
-        // 解析 JSON 並提取字幕和音軌資訊
-        do {
-            guard let json = try JSONSerialization.jsonObject(with: outputData) as? [String: Any] else {
-                return .succeeded(MediaOptions(subtitles: [], audioTracks: [], formats: [], liveStatus: nil, releaseTimestamp: nil))
-            }
-            return .succeeded(MediaOptions(
-                subtitles: parseSubtitles(from: json),
-                audioTracks: parseAudioTracks(from: json),
-                formats: parseFormats(from: json),
-                liveStatus: json["live_status"] as? String,
-                releaseTimestamp: json["release_timestamp"] as? Int,
-                duration: (json["duration"] as? NSNumber)?.intValue
-            ))
-        } catch {
-            TubifyLogger.ytdlp.error("解析媒體選項失敗: \(error.localizedDescription)")
-            return .succeeded(MediaOptions(subtitles: [], audioTracks: [], formats: [], liveStatus: nil, releaseTimestamp: nil))
-        }
+        return (process.terminationStatus, outputData, String(data: errorData, encoding: .utf8) ?? "未知錯誤")
     }
 
     private func parseFormats(from json: [String: Any]) -> [YTDLPFormat] {

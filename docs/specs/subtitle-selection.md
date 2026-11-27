@@ -2,7 +2,7 @@
 
 ## Purpose
 
-媒體選擇視窗的字幕預設全選與「全部取消」、YouTube 自動字幕（繁體中文、英文）選項的偵測／呈現／下載與失敗退路，以及媒體選項查詢優先不帶 cookies 的兩階段策略。
+媒體選擇視窗的字幕預設全選與「全部取消」、YouTube 自動字幕（繁體中文、英文）選項的偵測／呈現／下載與失敗退路，以及媒體選項與影片資訊查詢優先不帶 cookies 的兩階段策略。
 
 ## Requirements
 
@@ -107,6 +107,29 @@ The system SHALL continue to select all supported uploaded subtitle languages wh
 - **WHEN** 媒體選項查詢因找不到 yt-dlp 執行檔或無法啟動 process 而失敗
 - **THEN** 系統 MUST NOT 執行帶 cookies 的重試
 - **AND** 系統 SHALL 沿用既有的錯誤回報方式
+
+### Requirement: 影片資訊查詢同樣優先不帶 cookies
+
+系統查詢單一影片的影片資訊（標題、縮圖、長度、直播狀態）時，SHALL 先以不帶 cookies 的 yt-dlp invocation 查詢，引數恰為 `-J`、`--skip-download`、`--no-playlist` 與目標 url。只有在該次以非 0 exit code 失敗、失敗訊息符合既有的「需登入」訊號（與媒體選項查詢共用同一入口），且呼叫端提供了非空的 cookies 參數時，系統才 SHALL 以第一次的引數加上 cookies 參數（置於 url 之前）重試一次。單次影片資訊查詢的 invocation 次數 MUST NOT 超過 2 次。不重試的失敗 SHALL 以第一次的訊息回報；帶 cookies 重試後仍失敗時 SHALL 以第二次的訊息回報。
+
+原因：帶上帳號 cookies 時，YouTube 可能只回傳 SABR 串流，yt-dlp 拿不到一般格式網址、只剩圖片格式，`-J` 會以 `Requested format is not available` 失敗；同一支公開影片不帶 cookies 即可查到。
+
+#### Scenario: 有可用 cookies 時第一次查詢仍不帶 cookies
+
+- **GIVEN** 呼叫端提供了非空的 cookies 參數
+- **WHEN** 系統查詢某個影片的影片資訊且第一次成功
+- **THEN** 系統 SHALL 只執行一次 invocation，且其引數 MUST NOT 包含 cookies 參數
+
+#### Scenario: 需登入錯誤且有 cookies 時帶 cookies 重試
+
+- **GIVEN** 不帶 cookies 的第一次 invocation 以需登入訊號失敗，且呼叫端提供了 cookies 參數
+- **WHEN** 系統處理該次失敗
+- **THEN** 系統 SHALL 帶 cookies 重試一次，並以第二次的結果作為查詢結果
+
+#### Scenario: 非需登入錯誤或沒有 cookies 時不重試
+
+- **WHEN** 第一次失敗訊息不符合需登入訊號，或呼叫端未提供 cookies 參數
+- **THEN** 系統 MUST NOT 執行第二次 invocation
 
 ### Requirement: 媒體選項查詢重用下載路徑的登入訊號定義
 
